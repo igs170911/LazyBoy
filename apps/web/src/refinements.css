@@ -1,5 +1,7 @@
+.memory-dialog{max-height:85vh;overflow:auto}.memory-dialog form{display:flex;gap:10px;align-items:end}.memory-dialog form label{flex:1}.memory-list{display:grid;gap:8px;margin:14px 0}.memory-row{display:grid;gap:5px;padding:10px;border:1px solid var(--border,#ddd);border-radius:10px}.memory-row small{opacity:.65}.memory-row>div{display:flex;gap:8px}
 .app-shell{grid-template-columns:clamp(220px,18vw,280px) minmax(0,1fr) clamp(320px,28vw,420px)}
 .sidebar,.chat-panel,.computer-panel,.topbar,.panel-head,.control-bar{min-width:0}
+.session-picker{display:flex;align-items:center;gap:4px;margin-left:10px;min-width:0}.session-picker select{max-width:190px;min-width:90px;padding:7px 28px 7px 10px;border:1px solid var(--border);border-radius:9px;color:var(--ink);background:var(--surface)}
 .avatar.robot,.avatar.robot.online{position:relative;display:inline-grid;place-items:center;flex:0 0 var(--avatar-size);width:var(--avatar-size);height:var(--avatar-size);overflow:visible;border:0;background:var(--bot-color);box-shadow:none}
 .avatar-blob{border-radius:58% 42% 52% 48%/43% 58% 42% 57%;transform:rotate(-3deg)}
 .avatar-round{border-radius:50%}.avatar-diamond{border-radius:26%;transform:rotate(45deg)}.avatar-diamond .robot-eyes{transform:rotate(-45deg)}.avatar-squircle{border-radius:28%}
@@ -49,3 +51,9 @@
 .avatar-hexagon{clip-path:polygon(25% 5%,75% 5%,100% 50%,75% 95%,25% 95%,0 50%)}
 .avatar-cloud .robot-eyes{transform:translateY(calc(var(--avatar-size) * .1))}.avatar-drop .robot-eyes{transform:translateY(calc(var(--avatar-size) * .12))}
 .shape-grid button{border-color:transparent;border-radius:50%}.shape-grid button:hover{background:rgba(255,255,255,.04)}.shape-grid button.selected{border-color:#626268;box-shadow:none;background:rgba(255,255,255,.025)}
+.bot-list{flex:1;min-height:0}
+.sidebar-bottom{display:flex;align-items:center;gap:4px}.sidebar-bottom .account{min-width:0;flex:1}.account>.avatar .avatar-shape{width:100%;height:100%;color:unset}.logout-button{flex:0 0 36px}
+.create-menu-wrap{position:relative;margin-left:auto}.brand .create-menu-wrap .icon-button{margin-left:0}.create-menu{position:absolute;z-index:40;top:42px;right:0;display:grid;width:180px;padding:6px;border:1px solid var(--border);border-radius:12px;background:#18181b;box-shadow:0 18px 50px rgba(0,0,0,.5)}.create-menu button{display:flex;align-items:center;gap:9px;height:38px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--text);cursor:pointer}.create-menu button:hover:not(:disabled){background:rgba(255,255,255,.07)}.create-menu button:disabled{opacity:.4;cursor:not-allowed}.create-menu svg{width:16px}
+.group-picker{display:grid;gap:5px;max-height:280px;margin:0;padding:0;overflow:auto;border:0}.group-picker legend{margin-bottom:8px;color:var(--muted)}.group-picker label{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:9px;background:var(--inset);cursor:pointer}.group-picker input{width:16px;height:16px;margin:0}.group-picker .avatar{--avatar-size:28px!important}
+.composer-plus:disabled{opacity:.35;cursor:not-allowed}
+.login-screen{display:grid;min-height:100%;place-items:center;padding:20px;background:radial-gradient(circle at 50% 20%,#18201e 0,#080809 55%)}.login-dialog{display:grid;justify-items:stretch}.login-dialog>.avatar{justify-self:center}.login-dialog h1,.login-dialog p{text-align:center}.login-dialog p{margin-top:-8px;color:var(--muted)}.login-error{color:#ff8585;font-size:13px}

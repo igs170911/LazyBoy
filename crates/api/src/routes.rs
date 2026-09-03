@@ -1,5 +1,6 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::middleware;
 use axum::routing::{any, delete, get, post};
 use axum::{Json, Router};
 use lazyboy_contracts::{Bot, ComputerMode, CreateBotInput, UpdateBotInput};
@@ -12,7 +13,8 @@ use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/api/health", get(|| async { Json(json!({"ok": true})) }))
+        .merge(crate::sessions::router())
+        .merge(crate::memory::router())
         .route("/api/bots", get(list_bots).post(create_bot))
         .route("/api/bots/{id}", get(get_bot).patch(update_bot).delete(delete_bot))
         .route("/api/bots/{id}/stop", post(stop_task))
@@ -30,6 +32,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/computer/{id}/input", post(input))
         .route("/view/{id}/", any(crate::screen_proxy::view_root))
         .route("/view/{id}/{*rest}", any(crate::screen_proxy::view_path))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_auth,
+        ))
         .with_state(state)
 }
 
@@ -62,6 +68,7 @@ async fn list_bots(State(state): State<AppState>) -> Result<Json<Vec<Bot>>, Stat
                 computer_mode: parse_mode(&computer.scope),
                 model_provider: bot.model_provider.and_then(|value| value.parse().ok()),
                 model_id: bot.model_id,
+                memory_enabled: bot.memory_enabled,
             })
             .collect(),
     ))
@@ -86,6 +93,7 @@ async fn create_bot(
             input.computer_mode,
             input.model_provider.map(|provider| provider.as_str()),
             input.model_id.as_deref(),
+            input.memory_enabled,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -100,9 +108,7 @@ async fn get_bot(State(state): State<AppState>, Path(id): Path<String>) -> Resul
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let thread_id = state
-        .db
-        .thread_id_for_bot(&id)
+    let thread_id = crate::sessions::default_session_for_bot(&state, &actor, &id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -135,6 +141,7 @@ async fn get_bot(State(state): State<AppState>, Path(id): Path<String>) -> Resul
             computer_mode: parse_mode(&computer.scope),
             model_provider: bot.model_provider.and_then(|value| value.parse().ok()),
             model_id: bot.model_id,
+            memory_enabled: bot.memory_enabled,
         },
         "computer": status,
     })))
@@ -185,12 +192,13 @@ async fn update_bot(
     let tags: Vec<String> = input.tags.into_iter().map(|tag| tag.trim().to_string())
         .filter(|tag| !tag.is_empty()).take(6).collect();
     let result = sqlx::query(
-        "UPDATE bots SET name=$1,title=$2,description=$3,avatar_color=$4,avatar_shape=$5,tags=$6,updated_at=now()
-         WHERE id=$7 AND space_id=$8 AND user_id=$9",
+        "UPDATE bots SET name=$1,title=$2,description=$3,avatar_color=$4,avatar_shape=$5,tags=$6,
+                         memory_enabled=COALESCE($7,memory_enabled),updated_at=now()
+         WHERE id=$8 AND space_id=$9 AND user_id=$10",
     )
     .bind(name).bind(input.title.trim()).bind(input.description.trim())
     .bind(input.avatar_color.to_uppercase()).bind(input.avatar_shape).bind(tags)
-    .bind(&id).bind(&actor.space_id).bind(&actor.user_id)
+    .bind(input.memory_enabled).bind(&id).bind(&actor.space_id).bind(&actor.user_id)
     .execute(state.pool()).await.map_err(internal_error)?;
     if result.rows_affected() != 1 {
         return Err((StatusCode::NOT_FOUND, Json(json!({"message":"bot not found"}))));
@@ -333,6 +341,10 @@ async fn remove_home(state: &AppState, home_key: &str) -> Result<(), (StatusCode
 #[derive(Deserialize)]
 struct SendBody {
     text: String,
+    #[serde(rename = "clientNonce")]
+    client_nonce: Option<String>,
+    #[serde(default)]
+    blocks: Vec<Value>,
 }
 
 async fn send_message(
@@ -340,7 +352,26 @@ async fn send_message(
     Path(id): Path<String>,
     Json(body): Json<SendBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    crate::runs::send(&state, &id, &body.text)
+    let actor = actor(&state).await?;
+    let _ = state
+        .db
+        .get_bot(&actor, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let thread_id = crate::sessions::default_session_for_bot(&state, &actor, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    crate::runs::send(
+        &state,
+        &actor,
+        &id,
+        &thread_id,
+        &body.text,
+        body.client_nonce.as_deref(),
+        &body.blocks,
+    )
         .await
         .map_err(|error| {
             tracing::error!("send: {error}");
@@ -360,28 +391,14 @@ async fn list_messages(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let thread_id = state
-        .db
-        .thread_id_for_bot(&id)
+    let thread_id = crate::sessions::default_session_for_bot(&state, &actor, &id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let rows: Vec<(String, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT id, role, body, created_at FROM messages WHERE thread_id = $1 ORDER BY created_at ASC",
-    )
-    .bind(thread_id)
-    .fetch_all(state.pool())
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(json!(rows
-        .into_iter()
-        .map(|(id, role, body, created_at)| json!({
-            "id": id,
-            "role": role,
-            "body": body,
-            "createdAt": created_at,
-        }))
-        .collect::<Vec<_>>())))
+    let rows = crate::sessions::messages_for_session(&state, &actor, &thread_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!(rows)))
 }
 
 async fn stop_task(
@@ -496,19 +513,18 @@ async fn screen_url(
             state.db.get_screen(&computer.id, &id).await.ok().flatten()
         }
     };
-    // Every bot has its own screen slot. The user may interact with that screen directly;
-    // execution leases still serialize agent-side GUI actions for the same screen.
+    let interactive = computer::user_has_screen_control(&computer, screen.as_ref(), &id);
     let _ = state
         .sandbox
         .connect_screen(
             &computer_ref,
-            true,
+            interactive,
             &computer::adapter_context_for(&actor, &id, "screen", screen.as_ref(), None),
         )
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(Json(json!({
-        "url": format!("/view/{id}/vnc.html?view_only=false")
+        "url": format!("/view/{id}/vnc.html?view_only={}", !interactive)
     })))
 }
 

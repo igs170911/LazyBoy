@@ -34,7 +34,12 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
-    let token = std::env::var("SANDBOX_SUPERVISOR_TOKEN").unwrap_or_else(|_| "dev-token".into());
+    let token = std::env::var("SANDBOX_SUPERVISOR_TOKEN")
+        .expect("SANDBOX_SUPERVISOR_TOKEN must be set");
+    assert!(
+        token.len() >= 32 && token != "dev-token",
+        "SANDBOX_SUPERVISOR_TOKEN must be a non-default value of at least 32 characters"
+    );
     let image = std::env::var("LAZYBOY_COMPUTER_IMAGE").unwrap_or_else(|_| "lazyboy/computer:local".into());
     let docker = DockerHost::connect(image, token.clone())
         .await
@@ -56,7 +61,7 @@ async fn main() {
         .route("/computers/{id}/stop", post(stop))
         .route("/computers/{id}", delete(destroy))
         .with_state(app);
-    let bind = std::env::var("SUPERVISOR_BIND").unwrap_or_else(|_| "0.0.0.0:7091".into());
+    let bind = std::env::var("SUPERVISOR_BIND").unwrap_or_else(|_| "127.0.0.1:7091".into());
     let listener = tokio::net::TcpListener::bind(&bind).await.expect("bind");
     tracing::info!("supervisor listening on {bind}");
     axum::serve(listener, router).await.expect("serve");

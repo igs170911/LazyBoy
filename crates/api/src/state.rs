@@ -6,12 +6,16 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
 use crate::db::{Actor, Db};
+use crate::auth::AuthConfig;
+use crate::memory::MemoryService;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
     pub sandbox: Arc<dyn SandboxProvider>,
     pub data_dir: String,
+    pub auth: AuthConfig,
+    pub memory: MemoryService,
 }
 
 impl AppState {
@@ -30,6 +34,8 @@ impl AppState {
             db: Db { pool },
             sandbox,
             data_dir: std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".into()),
+            auth: AuthConfig::from_env(),
+            memory: MemoryService::from_env(),
         })
     }
 
@@ -48,8 +54,12 @@ fn sandbox_from_env() -> Arc<dyn SandboxProvider> {
         _ => {
             let url = std::env::var("SANDBOX_SUPERVISOR_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:7091".into());
-            let token =
-                std::env::var("SANDBOX_SUPERVISOR_TOKEN").unwrap_or_else(|_| "dev-token".into());
+            let token = std::env::var("SANDBOX_SUPERVISOR_TOKEN")
+                .expect("SANDBOX_SUPERVISOR_TOKEN must be set");
+            assert!(
+                token.len() >= 32 && token != "dev-token",
+                "SANDBOX_SUPERVISOR_TOKEN must be a non-default value of at least 32 characters"
+            );
             Arc::new(DockerSandbox::new(url, token))
         }
     }

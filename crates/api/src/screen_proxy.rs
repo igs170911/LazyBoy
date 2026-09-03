@@ -110,7 +110,7 @@ async fn upstream_port(state: &AppState, bot_id: &str, ensure: bool) -> Result<u
         .sandbox
         .connect_screen(
             &computer_ref,
-            true,
+            computer::user_has_screen_control(&computer, screen.as_ref(), bot_id),
             &computer::adapter_context_for(&actor, bot_id, "view", screen.as_ref(), None),
         )
         .await

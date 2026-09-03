@@ -1,8 +1,11 @@
+mod auth;
 mod computer;
 mod db;
+mod memory;
 mod routes;
 mod runs;
 mod screen_proxy;
+mod sessions;
 mod state;
 mod tools;
 
@@ -11,7 +14,6 @@ use std::sync::Arc;
 
 use axum::Router;
 use state::AppState;
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
 
@@ -48,14 +50,19 @@ async fn main() {
         computer::idle_loop(idle_state).await;
     });
 
+    let bind = std::env::var("API_BIND").unwrap_or_else(|_| "127.0.0.1:3101".into());
+    let addr: SocketAddr = bind.parse().expect("API_BIND");
+    if !addr.ip().is_loopback() && !state.auth.strong_enough_for_network() {
+        panic!("LAZYBOY_APP_TOKEN must be set to at least 32 characters when API_BIND is not loopback");
+    }
+
     let web_dir = std::env::var("LAZYBOY_WEB_DIR").unwrap_or_else(|_| "apps/web".into());
     let app = Router::new()
+        .route("/api/health", axum::routing::get(|| async { axum::Json(serde_json::json!({"ok": true})) }))
+        .merge(auth::public_router(state.clone()))
         .merge(routes::router(state))
-        .fallback_service(ServeDir::new(web_dir))
-        .layer(CorsLayer::permissive());
+        .fallback_service(ServeDir::new(web_dir));
 
-    let bind = std::env::var("API_BIND").unwrap_or_else(|_| "0.0.0.0:3101".into());
-    let addr: SocketAddr = bind.parse().expect("API_BIND");
     tracing::info!("api listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     axum::serve(listener, app).await.expect("serve");

@@ -17,10 +17,16 @@ pub struct CreateBotInput {
     pub computer_mode: ComputerMode,
     pub model_provider: Option<ModelProvider>,
     pub model_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub memory_enabled: bool,
 }
 
 fn default_team() -> ComputerMode {
     ComputerMode::Team
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +51,7 @@ pub struct Bot {
     pub computer_mode: ComputerMode,
     pub model_provider: Option<ModelProvider>,
     pub model_id: Option<String>,
+    pub memory_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,4 +66,5 @@ pub struct UpdateBotInput {
     pub avatar_shape: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    pub memory_enabled: Option<bool>,
 }

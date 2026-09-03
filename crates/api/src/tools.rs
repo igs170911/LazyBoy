@@ -7,6 +7,11 @@ use lazyboy_control::{
 };
 use rig_core::completion::ToolDefinition;
 use serde_json::{json, Value};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::db::Actor;
+use crate::memory::{CreateMemoryInput, MemoryService};
 
 pub struct ToolCtx {
     pub sandbox: std::sync::Arc<dyn SandboxProvider>,
@@ -18,10 +23,16 @@ pub struct ToolCtx {
     pub gui_block: Option<String>,
     pub previous_frame: Mutex<Option<String>>,
     pub takeover_requested: Mutex<bool>,
+    pub pool: PgPool,
+    pub memory: MemoryService,
+    pub actor: Actor,
+    pub session_id: String,
+    pub run_id: String,
+    pub memory_enabled: bool,
 }
 
-pub fn tool_definitions() -> Vec<ToolDefinition> {
-    vec![
+pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
+    let mut definitions = vec![
         ToolDefinition {
             name: "computer_observe".into(),
             description: "Capture a fresh desktop screenshot. Frame metadata comes back as text; the image is attached to the next model turn.".into(),
@@ -112,7 +123,42 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             description: "Ask the user to take over for passwords, 2FA, CAPTCHA, or protected input. Never ask them to paste secrets in chat.".into(),
             parameters: json!({"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}),
         },
-    ]
+    ];
+    if memory_enabled {
+        definitions.extend([
+            ToolDefinition {
+                name: "remember".into(),
+                description: "Explicitly save a durable user preference or fact for this agent only. Never store passwords, tokens, private keys, or other secrets.".into(),
+                parameters: json!({
+                    "type":"object",
+                    "properties":{
+                        "content":{"type":"string"},
+                        "importance":{"type":"number","minimum":0,"maximum":1}
+                    },
+                    "required":["content"]
+                }),
+            },
+            ToolDefinition {
+                name: "recall_memory".into(),
+                description: "Search durable memories belonging only to this agent.".into(),
+                parameters: json!({
+                    "type":"object",
+                    "properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20}},
+                    "required":["query"]
+                }),
+            },
+            ToolDefinition {
+                name: "forget_memory".into(),
+                description: "Soft-delete one durable memory belonging to this agent by its ID.".into(),
+                parameters: json!({
+                    "type":"object",
+                    "properties":{"memory_id":{"type":"string","format":"uuid"}},
+                    "required":["memory_id"]
+                }),
+            },
+        ]);
+    }
+    definitions
 }
 
 pub struct ToolOutcome {
@@ -131,6 +177,9 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
         "write_file" => write_file(ctx, args).await,
         "open_path" => open_path(ctx, args).await,
         "launch_app" => launch_app(ctx, args).await,
+        "remember" => remember(ctx, args).await,
+        "recall_memory" => recall_memory(ctx, args).await,
+        "forget_memory" => forget_memory(ctx, args).await,
         "request_takeover" => {
             *ctx.takeover_requested.lock().unwrap() = true;
             ToolOutcome {
@@ -149,6 +198,52 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
             pause: false,
         },
     }
+}
+
+async fn remember(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    if !ctx.memory_enabled {
+        return text_outcome("memory is disabled for this agent");
+    }
+    let input = CreateMemoryInput {
+        content: args.get("content").and_then(Value::as_str).unwrap_or("").to_string(),
+        importance: args.get("importance").and_then(Value::as_f64).unwrap_or(0.5) as f32,
+        session_id: Some(ctx.session_id.clone()),
+        source_run_id: Some(ctx.run_id.clone()),
+        source_message_id: None,
+    };
+    match ctx.memory.remember(&ctx.pool, &ctx.actor, &ctx.bot_id, input).await {
+        Ok(item) => text_outcome(json!({"ok":true,"memory":item}).to_string()),
+        Err(error) => text_outcome(error),
+    }
+}
+
+async fn recall_memory(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    if !ctx.memory_enabled {
+        return text_outcome("memory is disabled for this agent");
+    }
+    let query = args.get("query").and_then(Value::as_str).unwrap_or("");
+    let limit = args.get("limit").and_then(Value::as_i64);
+    match ctx.memory.recall(&ctx.pool, &ctx.actor, &ctx.bot_id, query, limit).await {
+        Ok(items) => text_outcome(serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())),
+        Err(error) => text_outcome(error),
+    }
+}
+
+async fn forget_memory(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    if !ctx.memory_enabled {
+        return text_outcome("memory is disabled for this agent");
+    }
+    let Some(id) = args.get("memory_id").and_then(Value::as_str).and_then(|id| Uuid::parse_str(id).ok()) else {
+        return text_outcome("memory_id must be a UUID");
+    };
+    match ctx.memory.forget(&ctx.pool, &ctx.actor, &ctx.bot_id, id).await {
+        Ok(deleted) => text_outcome(json!({"ok":deleted}).to_string()),
+        Err(error) => text_outcome(error),
+    }
+}
+
+fn text_outcome(text: impl Into<String>) -> ToolOutcome {
+    ToolOutcome { text: text.into(), image: None, pause: false }
 }
 
 fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {

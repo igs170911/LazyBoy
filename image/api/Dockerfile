@@ -6,7 +6,7 @@ COPY apps/web/index.html apps/web/tsconfig.json apps/web/vite.config.ts ./
 COPY apps/web/src src
 RUN npm run build
 
-FROM rust:1-bookworm AS build
+FROM rust:1-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
@@ -14,7 +14,7 @@ COPY migrations migrations
 COPY apps/web apps/web
 RUN cargo build --release -p lazyboy-api
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/lazyboy-api /usr/local/bin/lazyboy-api
 COPY --from=web /src/apps/web/dist /web

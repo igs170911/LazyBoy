@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: lazyboy
       POSTGRES_PASSWORD: lazyboy
@@ -29,7 +29,7 @@ services:
       context: .
       dockerfile: image/supervisor/Dockerfile
     environment:
-      SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:-dev-token}
+      SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:?Set SANDBOX_SUPERVISOR_TOKEN in .env}
       LAZYBOY_COMPUTER_IMAGE: lazyboy/computer:local
       SUPERVISOR_BIND: 0.0.0.0:7091
       DATA_DIR: /data
@@ -37,8 +37,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/data
-    ports:
-      - "7092:7091"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -52,12 +50,18 @@ services:
     environment:
       DATABASE_URL: postgres://lazyboy:lazyboy@postgres:5432/lazyboy
       SANDBOX_SUPERVISOR_URL: http://supervisor:7091
-      SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:-dev-token}
+      SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:?Set SANDBOX_SUPERVISOR_TOKEN in .env}
+      LAZYBOY_APP_TOKEN: ${LAZYBOY_APP_TOKEN:-}
+      LAZYBOY_SECURE_COOKIE: ${LAZYBOY_SECURE_COOKIE:-false}
       SANDBOX_PROVIDER: docker
       DATA_DIR: /data
       HOST_DATA_DIR: ${PWD}/data
       API_BIND: 0.0.0.0:3100
       XAI_API_KEY: ${XAI_API_KEY:-}
+      LAZYBOY_MEMORY_ENABLED: ${LAZYBOY_MEMORY_ENABLED:-true}
+      LAZYBOY_MEMORY_MODEL_CACHE: /data/fastembed
+      LAZYBOY_MEMORY_TOP_K: ${LAZYBOY_MEMORY_TOP_K:-8}
+      LAZYBOY_MEMORY_BYTE_BUDGET: ${LAZYBOY_MEMORY_BYTE_BUDGET:-6000}
       LAZYBOY_WEB_DIR: /web
       LAZYBOY_SCREEN_UPSTREAM: host.docker.internal
     ports:

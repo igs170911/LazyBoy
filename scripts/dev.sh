@@ -17,13 +17,14 @@ if [[ -f "$root/.env" ]]; then
   set +a
 fi
 export DATABASE_URL="${DATABASE_URL:-postgres://lazyboy:lazyboy@127.0.0.1:5434/lazyboy}"
-export SANDBOX_SUPERVISOR_TOKEN="${SANDBOX_SUPERVISOR_TOKEN:-dev-token}"
-export SANDBOX_SUPERVISOR_URL="${SANDBOX_SUPERVISOR_URL:-http://127.0.0.1:7092}"
+: "${SANDBOX_SUPERVISOR_TOKEN:?Set a random SANDBOX_SUPERVISOR_TOKEN of at least 32 characters in .env}"
+: "${LAZYBOY_APP_TOKEN:?Set a random LAZYBOY_APP_TOKEN of at least 32 characters in .env}"
+export SANDBOX_SUPERVISOR_URL="${SANDBOX_SUPERVISOR_URL:-http://127.0.0.1:7091}"
 export SANDBOX_PROVIDER="${SANDBOX_PROVIDER:-docker}"
 export DATA_DIR="${DATA_DIR:-$root/data}"
 export API_BIND="${API_BIND:-0.0.0.0:3101}"
 export LAZYBOY_WEB_DIR="$root/apps/web"
 mkdir -p "$DATA_DIR"
-echo "start supervisor in another terminal: cargo run -p lazyboy-supervisor"
+echo "start supervisor in another terminal with the same .env: cargo run -p lazyboy-supervisor"
 echo "then: cargo run -p lazyboy-api"
 echo "listening on 0.0.0.0:3101"

@@ -82,6 +82,7 @@ pub struct BotRow {
     pub computer_id: Option<String>,
     pub model_provider: Option<String>,
     pub model_id: Option<String>,
+    pub memory_enabled: bool,
 }
 
 impl Db {
@@ -116,7 +117,7 @@ impl Db {
                     (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
                      WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
                     (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
-                    b.instructions, b.computer_id, b.model_provider, b.model_id
+                    b.instructions, b.computer_id, b.model_provider, b.model_id, b.memory_enabled
              FROM bots b WHERE b.space_id = $1 AND b.user_id = $2 ORDER BY b.pinned DESC, b.created_at DESC",
         )
         .bind(&actor.space_id)
@@ -126,8 +127,14 @@ impl Db {
         let mut out = Vec::new();
         for bot in bots {
             let thread_id: (String,) =
-                sqlx::query_as("SELECT id FROM threads WHERE bot_id = $1")
+                sqlx::query_as(
+                    "SELECT id FROM threads
+                     WHERE bot_id = $1 AND space_id = $2 AND user_id = $3
+                     ORDER BY updated_at DESC, created_at ASC LIMIT 1",
+                )
                     .bind(&bot.id)
+                    .bind(&actor.space_id)
+                    .bind(&actor.user_id)
                     .fetch_one(&self.pool)
                     .await?;
             let computer = self.get_computer(bot.computer_id.as_deref().unwrap_or("")).await?;
@@ -145,7 +152,7 @@ impl Db {
                     (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
                      WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
                     (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
-                    b.instructions, b.computer_id, b.model_provider, b.model_id
+                    b.instructions, b.computer_id, b.model_provider, b.model_id, b.memory_enabled
              FROM bots b WHERE b.id = $1 AND b.space_id = $2 AND b.user_id = $3",
         )
         .bind(bot_id)
@@ -168,14 +175,6 @@ impl Db {
         .await
     }
 
-    pub async fn thread_id_for_bot(&self, bot_id: &str) -> Result<Option<String>, sqlx::Error> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT id FROM threads WHERE bot_id = $1")
-            .bind(bot_id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|row| row.0))
-    }
-
     pub async fn create_bot(
         &self,
         actor: &Actor,
@@ -186,6 +185,7 @@ impl Db {
         mode: ComputerMode,
         model_provider: Option<&str>,
         model_id: Option<&str>,
+        memory_enabled: bool,
     ) -> Result<Bot, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         let bot_id = Uuid::new_v4().to_string();
@@ -198,8 +198,8 @@ impl Db {
         )
         .await?;
         sqlx::query(
-            "INSERT INTO bots (id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            "INSERT INTO bots (id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id, memory_enabled)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
         )
         .bind(&bot_id)
         .bind(&actor.space_id)
@@ -211,6 +211,7 @@ impl Db {
         .bind(&computer.id)
         .bind(model_provider)
         .bind(model_id)
+        .bind(memory_enabled)
         .execute(&mut *tx)
         .await?;
         sqlx::query("INSERT INTO threads (id, space_id, bot_id, user_id) VALUES ($1,$2,$3,$4)")
@@ -241,6 +242,7 @@ impl Db {
             computer_mode: mode,
             model_provider: model_provider.and_then(|value| value.parse().ok()),
             model_id: model_id.map(str::to_string),
+            memory_enabled,
         })
     }
 
