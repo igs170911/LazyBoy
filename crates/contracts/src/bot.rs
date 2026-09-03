@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
 
 use crate::{ComputerMode, ModelProvider};
 
@@ -30,10 +31,32 @@ pub struct Bot {
     pub name: String,
     pub title: String,
     pub description: String,
+    pub avatar_color: String,
+    pub avatar_shape: String,
+    pub tags: Vec<String>,
+    pub pinned: bool,
+    pub hidden: bool,
+    pub group_name: Option<String>,
+    pub unread_count: i64,
+    pub last_message_at: Option<DateTime<Utc>>,
     pub instructions: String,
     pub thread_id: String,
     pub computer_id: String,
     pub computer_mode: ComputerMode,
     pub model_provider: Option<ModelProvider>,
     pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBotInput {
+    pub name: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub avatar_color: String,
+    pub avatar_shape: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }

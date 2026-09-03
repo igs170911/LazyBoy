@@ -572,16 +572,14 @@ pub async fn takeover(state: &AppState, actor: &Actor, bot_id: &str) -> Result<(
     let bound = ensure_bot_screen(state, actor, bot_id, &computer, None).await?;
     let screen = bound.row.ok_or_else(|| bound.gui_block.unwrap_or_else(|| "screen unavailable".into()))?;
     let active = state.db.active_run(bot_id).await.map_err(|error| error.to_string())?;
-    let run_status = active
-        .as_ref()
-        .and_then(|(_, status)| parse_run_status(status));
+    let run_status = active.as_ref().and_then(|(_, status)| parse_run_status(status));
     if execution_blocks_user_takeover(
         screen.execution_run_id.is_some(),
         screen.execution_lease_expires_at,
         run_status,
         Utc::now(),
     ) {
-        return Err("Stop the bot first".into());
+        return Err("Stop the task first".into());
     }
     let lease_id = Uuid::new_v4().to_string();
     let expires = Utc::now() + TimeDelta::minutes(15);
@@ -635,6 +633,15 @@ pub async fn release(state: &AppState, actor: &Actor, bot_id: &str) -> Result<()
          WHERE id = $1 AND control_bot_id = $2",
     )
     .bind(computer_id)
+    .bind(bot_id)
+    .execute(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    // Releasing human control resumes work that was paused by either the bot or a forced takeover.
+    sqlx::query(
+        "UPDATE runs SET status = 'queued', updated_at = now()
+         WHERE bot_id = $1 AND status = 'waiting_takeover'",
+    )
     .bind(bot_id)
     .execute(state.pool())
     .await
@@ -785,15 +792,19 @@ pub async fn current_status(state: &AppState, actor: &Actor, bot_id: &str) -> Re
         .get_screen(&computer.id, bot_id)
         .await
         .map_err(|error| error.to_string())?;
-    let mut status = status_from(bot_id, &computer, screen.as_ref(), None);
-    status.takeover_requested = state
+    let run_status = state
         .db
         .active_run(bot_id)
         .await
         .ok()
         .flatten()
-        .and_then(|(_, run_status)| parse_run_status(&run_status))
-        == Some(lazyboy_contracts::RunStatus::WaitingTakeover);
+        .and_then(|(_, run_status)| parse_run_status(&run_status));
+    let waiting_for_takeover = run_status == Some(lazyboy_contracts::RunStatus::WaitingTakeover);
+    let busy_bot_name = run_status
+        .filter(|status| status.is_active() && *status != lazyboy_contracts::RunStatus::WaitingTakeover)
+        .map(|_| bot.name);
+    let mut status = status_from(bot_id, &computer, screen.as_ref(), busy_bot_name);
+    status.takeover_requested = waiting_for_takeover;
     Ok(status)
 }
 

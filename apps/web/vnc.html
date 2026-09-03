@@ -57,6 +57,21 @@
       let rfb = null;
       let reconnectTimer = null;
 
+      function pasteIntoDesktop(text) {
+        if (!rfb || rfb.viewOnly || !text) return;
+        try { rfb.clipboardPasteFrom(text); } catch (_) {}
+        // x11vnc applies ClientCutText asynchronously. Give X11 a moment before
+        // sending Ctrl+V so pastes are reliable for Chromium and terminals.
+        setTimeout(() => {
+          try {
+            rfb.sendKey(0xffe3, "ControlLeft", true);
+            rfb.sendKey(0x0076, "KeyV", true);
+            rfb.sendKey(0x0076, "KeyV", false);
+            rfb.sendKey(0xffe3, "ControlLeft", false);
+          } catch (_) {}
+        }, 100);
+      }
+
       function pinTaskbar() {
         // noVNC centers the scaled canvas (margin:auto), leaving a dead
         // strip under the panel. Stick the canvas to the bottom.
@@ -93,6 +108,12 @@
           if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = setTimeout(connect, 1500);
         });
+        rfb.addEventListener("clipboard", (event) => {
+          const text = event && event.detail ? event.detail.text : "";
+          if (typeof text === "string") {
+            window.parent.postMessage({ type: "lazyboy-desktop-clipboard", text }, "*");
+          }
+        });
       }
 
       connect();
@@ -108,8 +129,11 @@
         const text = event.clipboardData ? event.clipboardData.getData("text") : "";
         if (!text) return;
         event.preventDefault();
-        try { rfb.clipboardPasteFrom(text); } catch (_) {}
-        try { rfb.sendKey(0xffe3, "ControlLeft", true); rfb.sendKey(0x0076, "KeyV", true); rfb.sendKey(0x0076, "KeyV", false); rfb.sendKey(0xffe3, "ControlLeft", false); } catch (_) {}
+        pasteIntoDesktop(text);
+      });
+      window.addEventListener("message", (event) => {
+        if (!event.data || event.data.type !== "lazyboy-host-clipboard") return;
+        pasteIntoDesktop(String(event.data.text || ""));
       });
     </script>
   </head>

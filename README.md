@@ -22,4 +22,7 @@ cargo run -p lazyboy-api
 
 Open `http://<host>:3101`. The computer is a real Debian container: fluxbox toolbar, Chromium with tabs and URL bar, and xterm. Do not replace that with a kiosk or HTML landing page. The display is proxied through the API so you do not open extra ports.
 
+For frontend development, run `npm install && npm run dev` in `apps/web`, then open
+`http://127.0.0.1:5173`. Vite proxies API and computer-screen traffic to the Rust API on port 3101.
+
 Model providers: v1 talks to xAI (`XAI_API_KEY`). `openai` / `anthropic` / `openrouter` are reserved on the factory and return `unsupported_provider`.

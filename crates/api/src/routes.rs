@@ -1,8 +1,8 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{any, get, post};
+use axum::routing::{any, delete, get, post};
 use axum::{Json, Router};
-use lazyboy_contracts::{Bot, ComputerMode, CreateBotInput};
+use lazyboy_contracts::{Bot, ComputerMode, CreateBotInput, UpdateBotInput};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -14,7 +14,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(|| async { Json(json!({"ok": true})) }))
         .route("/api/bots", get(list_bots).post(create_bot))
-        .route("/api/bots/{id}", get(get_bot))
+        .route("/api/bots/{id}", get(get_bot).patch(update_bot).delete(delete_bot))
+        .route("/api/bots/{id}/stop", post(stop_task))
+        .route("/api/bots/{id}/inbox", post(update_inbox))
+        .route("/api/environments/{id}", delete(delete_environment))
         .route("/api/bots/{id}/messages", get(list_messages).post(send_message))
         .route("/api/computer/{id}/status", get(computer_status))
         .route("/api/computer/{id}/boot", post(boot))
@@ -45,6 +48,14 @@ async fn list_bots(State(state): State<AppState>) -> Result<Json<Vec<Bot>>, Stat
                 name: bot.name,
                 title: bot.title,
                 description: bot.description,
+                avatar_color: bot.avatar_color,
+                avatar_shape: bot.avatar_shape,
+                tags: bot.tags,
+                pinned: bot.pinned,
+                hidden: bot.hidden,
+                group_name: bot.group_name,
+                unread_count: bot.unread_count,
+                last_message_at: bot.last_message_at,
                 instructions: bot.instructions,
                 thread_id,
                 computer_id: computer.id,
@@ -110,6 +121,14 @@ async fn get_bot(State(state): State<AppState>, Path(id): Path<String>) -> Resul
             name: bot.name,
             title: bot.title,
             description: bot.description,
+            avatar_color: bot.avatar_color,
+            avatar_shape: bot.avatar_shape,
+            tags: bot.tags,
+            pinned: bot.pinned,
+            hidden: bot.hidden,
+            group_name: bot.group_name,
+            unread_count: bot.unread_count,
+            last_message_at: bot.last_message_at,
             instructions: bot.instructions,
             thread_id,
             computer_id: computer.id,
@@ -119,6 +138,196 @@ async fn get_bot(State(state): State<AppState>, Path(id): Path<String>) -> Resul
         },
         "computer": status,
     })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InboxInput { action: String, group_name: Option<String> }
+
+async fn update_inbox(State(state): State<AppState>, Path(id): Path<String>, Json(input): Json<InboxInput>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let actor = actor(&state).await.map_err(|status| (status, Json(json!({"message":"actor"}))))?;
+    let query = match input.action.as_str() {
+        "read" => "UPDATE bots SET last_read_at=now() WHERE id=$1 AND space_id=$2 AND user_id=$3",
+        "unread" => "UPDATE bots SET last_read_at='1970-01-01' WHERE id=$1 AND space_id=$2 AND user_id=$3",
+        "pin" => "UPDATE bots SET pinned=TRUE WHERE id=$1 AND space_id=$2 AND user_id=$3",
+        "unpin" => "UPDATE bots SET pinned=FALSE WHERE id=$1 AND space_id=$2 AND user_id=$3",
+        "hide" => "UPDATE bots SET hidden=TRUE WHERE id=$1 AND space_id=$2 AND user_id=$3",
+        "show" => "UPDATE bots SET hidden=FALSE WHERE id=$1 AND space_id=$2 AND user_id=$3",
+        "group" => "UPDATE bots SET group_name=$4 WHERE id=$1 AND space_id=$2 AND user_id=$3",
+        _ => return Err((StatusCode::BAD_REQUEST, Json(json!({"message":"未知操作"})))),
+    };
+    let mut statement = sqlx::query(query).bind(&id).bind(&actor.space_id).bind(&actor.user_id);
+    if input.action == "group" { statement = statement.bind(input.group_name.map(|v| v.trim().chars().take(30).collect::<String>()).filter(|v| !v.is_empty())); }
+    let result = statement.execute(state.pool()).await.map_err(internal_error)?;
+    if result.rows_affected()!=1 { return Err((StatusCode::NOT_FOUND, Json(json!({"message":"bot not found"})))); }
+    Ok(Json(json!({"ok":true})))
+}
+
+async fn update_bot(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<UpdateBotInput>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let actor = actor(&state).await.map_err(|status| (status, Json(json!({"message":"actor"}))))?;
+    let name = input.name.trim();
+    let color_ok = input.avatar_color.len() == 7
+        && input.avatar_color.starts_with('#')
+        && input.avatar_color[1..].bytes().all(|c| c.is_ascii_hexdigit());
+    let shape_ok = matches!(input.avatar_shape.as_str(),
+        "blob" | "round" | "diamond" | "squircle" | "capsule" |
+        "triangle" | "hexagon" | "cloud" | "drop" |
+        "organic-4" | "organic-5" | "organic-6" | "organic-7" |
+        "organic-8" | "organic-9" | "organic-10" | "organic-11"
+    );
+    if name.is_empty() || name.chars().count() > 80 || !color_ok || !shape_ok {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"message":"設定格式不正確"}))));
+    }
+    let tags: Vec<String> = input.tags.into_iter().map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty()).take(6).collect();
+    let result = sqlx::query(
+        "UPDATE bots SET name=$1,title=$2,description=$3,avatar_color=$4,avatar_shape=$5,tags=$6,updated_at=now()
+         WHERE id=$7 AND space_id=$8 AND user_id=$9",
+    )
+    .bind(name).bind(input.title.trim()).bind(input.description.trim())
+    .bind(input.avatar_color.to_uppercase()).bind(input.avatar_shape).bind(tags)
+    .bind(&id).bind(&actor.space_id).bind(&actor.user_id)
+    .execute(state.pool()).await.map_err(internal_error)?;
+    if result.rows_affected() != 1 {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"bot not found"}))));
+    }
+    Ok(Json(json!({"ok":true})))
+}
+
+async fn delete_bot(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let actor = actor(&state)
+        .await
+        .map_err(|status| (status, Json(json!({ "message": "actor" }))))?;
+    let bot = state
+        .db
+        .get_bot(&actor, &id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({ "message": "bot not found" }))))?;
+    let computer = match bot.computer_id.as_deref() {
+        Some(computer_id) => state.db.get_computer(computer_id).await.map_err(internal_error)?,
+        None => None,
+    };
+
+    // Dedicated computers belong to the bot. Team computers belong to the environment and survive.
+    if let Some(computer) = computer.as_ref().filter(|row| parse_mode(&row.scope) == ComputerMode::Dedicated) {
+        if let Some(computer_ref) = computer::computer_ref(computer) {
+            state
+                .sandbox
+                .destroy(&computer_ref, &computer::adapter_context(&actor, &id, "delete-bot"))
+                .await
+                .map_err(|error| bad_gateway(error.to_string()))?;
+        }
+    }
+
+    let mut tx = state.pool().begin().await.map_err(internal_error)?;
+    sqlx::query("DELETE FROM computer_screens WHERE bot_id = $1")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal_error)?;
+    sqlx::query("DELETE FROM computer_profile_locks WHERE bot_id = $1")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal_error)?;
+    sqlx::query("DELETE FROM computer_execution_leases WHERE bot_id = $1")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal_error)?;
+    sqlx::query("DELETE FROM bots WHERE id = $1 AND space_id = $2 AND user_id = $3")
+        .bind(&id)
+        .bind(&actor.space_id)
+        .bind(&actor.user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal_error)?;
+    if let Some(computer) = computer.as_ref().filter(|row| parse_mode(&row.scope) == ComputerMode::Dedicated) {
+        sqlx::query("DELETE FROM computers WHERE id = $1")
+            .bind(&computer.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(internal_error)?;
+    }
+    tx.commit().await.map_err(internal_error)?;
+
+    if let Some(computer) = computer.filter(|row| parse_mode(&row.scope) == ComputerMode::Dedicated) {
+        remove_home(&state, &computer.home_key).await?;
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_environment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let actor = actor(&state)
+        .await
+        .map_err(|status| (status, Json(json!({ "message": "actor" }))))?;
+    if id != actor.space_id {
+        return Err((StatusCode::NOT_FOUND, Json(json!({ "message": "environment not found" }))));
+    }
+    let computers: Vec<crate::db::ComputerRow> = sqlx::query_as(
+        "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
+                control_holder, control_lease_id, control_lease_expires_at, control_bot_id, control_run_id,
+                execution_run_id, execution_bot_id, execution_lease_expires_at, execution_fence,
+                browser_profile_mode FROM computers WHERE space_id = $1 AND user_id = $2",
+    )
+    .bind(&id)
+    .bind(&actor.user_id)
+    .fetch_all(state.pool())
+    .await
+    .map_err(internal_error)?;
+
+    for row in &computers {
+        if let Some(computer_ref) = computer::computer_ref(row) {
+            state
+                .sandbox
+                .destroy(&computer_ref, &computer::adapter_context(&actor, "environment", "delete-environment"))
+                .await
+                .map_err(|error| bad_gateway(error.to_string()))?;
+        }
+    }
+    let deleted = sqlx::query("DELETE FROM spaces WHERE id = $1 AND user_id = $2")
+        .bind(&id)
+        .bind(&actor.user_id)
+        .execute(state.pool())
+        .await
+        .map_err(internal_error)?;
+    if deleted.rows_affected() != 1 {
+        return Err((StatusCode::NOT_FOUND, Json(json!({ "message": "environment not found" }))));
+    }
+    for row in computers {
+        remove_home(&state, &row.home_key).await?;
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+fn internal_error(error: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
+    tracing::error!("delete: {error}");
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "message": "internal error" })))
+}
+
+fn bad_gateway(message: String) -> (StatusCode, Json<Value>) {
+    tracing::error!("delete sandbox: {message}");
+    (StatusCode::BAD_GATEWAY, Json(json!({ "message": message })))
+}
+
+async fn remove_home(state: &AppState, home_key: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    let path = computer::home_path(&state.data_dir, home_key);
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(internal_error(error)),
+    }
 }
 
 #[derive(Deserialize)]
@@ -173,6 +382,43 @@ async fn list_messages(
             "createdAt": created_at,
         }))
         .collect::<Vec<_>>())))
+}
+
+async fn stop_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let actor = actor(&state).await?;
+    let _ = state
+        .db
+        .get_bot(&actor, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let run_ids: Vec<String> = sqlx::query_scalar(
+        "UPDATE runs SET status = 'cancelled', completed_at = now(), updated_at = now()
+         WHERE bot_id = $1 AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
+         RETURNING id",
+    )
+    .bind(&id)
+    .fetch_all(state.pool())
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    for run_id in &run_ids {
+        computer::release_screen_execution(&state, run_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    sqlx::query(
+        "UPDATE computers SET execution_bot_id = NULL, execution_run_id = NULL,
+                execution_lease_expires_at = NULL, updated_at = now()
+         WHERE execution_bot_id = $1",
+    )
+    .bind(&id)
+    .execute(state.pool())
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn computer_status(
@@ -243,13 +489,6 @@ async fn screen_url(
     let Some(computer_ref) = computer::computer_ref(&computer) else {
         return Ok(Json(json!({ "url": null })));
     };
-    let waiting = state
-        .db
-        .active_run(&id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|(_, status)| crate::db::parse_run_status(&status));
     let screen = match computer::ensure_bot_screen(&state, &actor, &id, &computer, None).await {
         Ok(bound) => bound.row,
         Err(error) => {
@@ -257,28 +496,19 @@ async fn screen_url(
             state.db.get_screen(&computer.id, &id).await.ok().flatten()
         }
     };
-    let bot_driving = screen
-        .as_ref()
-        .and_then(|row| row.execution_run_id.as_ref())
-        .is_some()
-        && screen
-            .as_ref()
-            .and_then(|row| row.execution_lease_expires_at)
-            .is_some_and(|expires| expires > chrono::Utc::now())
-        && waiting != Some(lazyboy_contracts::RunStatus::WaitingTakeover);
-    // Idle screens are clickable. View-only only while this bot is driving the GUI.
-    let interactive = !bot_driving;
+    // Every bot has its own screen slot. The user may interact with that screen directly;
+    // execution leases still serialize agent-side GUI actions for the same screen.
     let _ = state
         .sandbox
         .connect_screen(
             &computer_ref,
-            interactive,
+            true,
             &computer::adapter_context_for(&actor, &id, "screen", screen.as_ref(), None),
         )
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(Json(json!({
-        "url": format!("/view/{id}/vnc.html?view_only={}", if interactive { "false" } else { "true" })
+        "url": format!("/view/{id}/vnc.html?view_only=false")
     })))
 }
 
@@ -291,9 +521,6 @@ async fn takeover(
         .map_err(|status| (status, Json(json!({"message": "actor"}))))?;
     match computer::takeover(&state, &actor, &id).await {
         Ok((lease_id, expires_at)) => Ok(Json(json!({ "leaseId": lease_id, "expiresAt": expires_at }))),
-        Err(error) if error.contains("Stop the bot") => {
-            Err((StatusCode::CONFLICT, Json(json!({ "message": error }))))
-        }
         Err(error) => Err((StatusCode::BAD_REQUEST, Json(json!({ "message": error })))),
     }
 }

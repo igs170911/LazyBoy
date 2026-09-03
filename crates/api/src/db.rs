@@ -70,6 +70,14 @@ pub struct BotRow {
     pub name: String,
     pub title: String,
     pub description: String,
+    pub avatar_color: String,
+    pub avatar_shape: String,
+    pub tags: Vec<String>,
+    pub pinned: bool,
+    pub hidden: bool,
+    pub group_name: Option<String>,
+    pub unread_count: i64,
+    pub last_message_at: Option<DateTime<Utc>>,
     pub instructions: String,
     pub computer_id: Option<String>,
     pub model_provider: Option<String>,
@@ -103,8 +111,13 @@ impl Db {
 
     pub async fn list_bots(&self, actor: &Actor) -> Result<Vec<(BotRow, String, ComputerRow)>, sqlx::Error> {
         let bots: Vec<BotRow> = sqlx::query_as(
-            "SELECT id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id
-             FROM bots WHERE space_id = $1 AND user_id = $2 ORDER BY created_at DESC",
+            "SELECT b.id, b.space_id, b.user_id, b.name, b.title, b.description, b.avatar_color, b.avatar_shape, b.tags,
+                    b.pinned, b.hidden, b.group_name,
+                    (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
+                     WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
+                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
+                    b.instructions, b.computer_id, b.model_provider, b.model_id
+             FROM bots b WHERE b.space_id = $1 AND b.user_id = $2 ORDER BY b.pinned DESC, b.created_at DESC",
         )
         .bind(&actor.space_id)
         .bind(&actor.user_id)
@@ -127,8 +140,13 @@ impl Db {
 
     pub async fn get_bot(&self, actor: &Actor, bot_id: &str) -> Result<Option<BotRow>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id
-             FROM bots WHERE id = $1 AND space_id = $2 AND user_id = $3",
+            "SELECT b.id, b.space_id, b.user_id, b.name, b.title, b.description, b.avatar_color, b.avatar_shape, b.tags,
+                    b.pinned, b.hidden, b.group_name,
+                    (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
+                     WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
+                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
+                    b.instructions, b.computer_id, b.model_provider, b.model_id
+             FROM bots b WHERE b.id = $1 AND b.space_id = $2 AND b.user_id = $3",
         )
         .bind(bot_id)
         .bind(&actor.space_id)
@@ -170,9 +188,15 @@ impl Db {
         model_id: Option<&str>,
     ) -> Result<Bot, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let team = ensure_computer(&mut tx, actor, ComputerMode::Team, None).await?;
         let bot_id = Uuid::new_v4().to_string();
         let thread_id = Uuid::new_v4().to_string();
+        let computer = ensure_computer(
+            &mut tx,
+            actor,
+            mode,
+            (mode == ComputerMode::Dedicated).then_some(bot_id.as_str()),
+        )
+        .await?;
         sqlx::query(
             "INSERT INTO bots (id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
@@ -184,7 +208,7 @@ impl Db {
         .bind(title)
         .bind(description)
         .bind(instructions)
-        .bind(&team.id)
+        .bind(&computer.id)
         .bind(model_provider)
         .bind(model_id)
         .execute(&mut *tx)
@@ -196,18 +220,6 @@ impl Db {
             .bind(&actor.user_id)
             .execute(&mut *tx)
             .await?;
-        let mut computer_id = team.id.clone();
-        let mut computer_mode = ComputerMode::Team;
-        if mode == ComputerMode::Dedicated {
-            let dedicated = ensure_computer(&mut tx, actor, ComputerMode::Dedicated, Some(&bot_id)).await?;
-            sqlx::query("UPDATE bots SET computer_id = $1 WHERE id = $2")
-                .bind(&dedicated.id)
-                .bind(&bot_id)
-                .execute(&mut *tx)
-                .await?;
-            computer_id = dedicated.id;
-            computer_mode = ComputerMode::Dedicated;
-        }
         tx.commit().await?;
         Ok(Bot {
             id: bot_id,
@@ -215,10 +227,18 @@ impl Db {
             name: name.into(),
             title: title.into(),
             description: description.into(),
+            avatar_color: "#8B5CF6".into(),
+            avatar_shape: "blob".into(),
+            tags: Vec::new(),
+            pinned: false,
+            hidden: false,
+            group_name: None,
+            unread_count: 0,
+            last_message_at: None,
             instructions: instructions.into(),
             thread_id,
-            computer_id,
-            computer_mode,
+            computer_id: computer.id,
+            computer_mode: mode,
             model_provider: model_provider.and_then(|value| value.parse().ok()),
             model_id: model_id.map(str::to_string),
         })

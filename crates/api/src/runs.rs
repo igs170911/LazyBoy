@@ -240,9 +240,9 @@ async fn execute_run(
             .messages(history.clone())
             .tools(defs.clone())
             .build();
-        let response = model
-            .completion(request)
+        let response = tokio::time::timeout(Duration::from_secs(120), model.completion(request))
             .await
+            .map_err(|_| "AI 回應逾時（120 秒）".to_string())?
             .map_err(|error| error.to_string())?;
         let content: Vec<AssistantContent> = response.choice.into_iter().collect();
         let assistant = Message::Assistant {
@@ -268,12 +268,32 @@ async fn execute_run(
         let mut screen: Option<Vec<u8>> = None;
         let mut used_desktop = false;
         for call in calls {
+            let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_optional(state.pool())
+                .await
+                .map_err(|error| error.to_string())?;
+            if status.as_deref() == Some("cancelled") {
+                return Ok(());
+            }
             let name = call.function.name.clone();
             used_desktop |= matches!(
                 name.as_str(),
                 "computer_observe" | "computer_act" | "open_path" | "launch_app"
             );
-            let outcome = dispatch(&ctx, &name, &call.function.arguments).await;
+            let outcome = match tokio::time::timeout(
+                Duration::from_secs(90),
+                dispatch(&ctx, &name, &call.function.arguments),
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(_) => crate::tools::ToolOutcome {
+                    text: format!("工具 {name} 執行逾時（90 秒），請稍後重試。"),
+                    image: None,
+                    pause: false,
+                },
+            };
             // xAI rejects images inside tool results. Attach the latest
             // screenshot as a following user image instead.
             if let Some(image) = outcome.image {
@@ -304,6 +324,14 @@ async fn execute_run(
         pending = Message::User { content: results };
     }
 
+    let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_optional(state.pool())
+        .await
+        .map_err(|error| error.to_string())?;
+    if status.as_deref() == Some("cancelled") {
+        return Ok(());
+    }
     append_bot_message(state, thread_id, run_id, &final_text).await?;
     sqlx::query(
         "UPDATE runs SET status = 'completed', completed_at = now(), updated_at = now() WHERE id = $1",
