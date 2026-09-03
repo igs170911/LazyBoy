@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=瀏覽器
+Name[zh_TW]=瀏覽器
+Comment=Chromium
+Exec=/usr/local/bin/lazyboy-browser https://duckduckgo.com
+Icon=web-browser
+Terminal=false
+Categories=Network;WebBrowser;GTK;
+StartupNotify=true

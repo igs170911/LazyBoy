@@ -1,0 +1,76 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: lazyboy
+      POSTGRES_PASSWORD: lazyboy
+      POSTGRES_DB: lazyboy
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lazyboy"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  computer:
+    image: lazyboy/computer:local
+    build:
+      context: .
+      dockerfile: image/computer/Dockerfile
+    command: ["true"]
+    restart: "no"
+    network_mode: none
+
+  supervisor:
+    build:
+      context: .
+      dockerfile: image/supervisor/Dockerfile
+    environment:
+      SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:-dev-token}
+      LAZYBOY_COMPUTER_IMAGE: lazyboy/computer:local
+      SUPERVISOR_BIND: 0.0.0.0:7091
+      DATA_DIR: /data
+      HOST_DATA_DIR: ${PWD}/data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+    ports:
+      - "7092:7091"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      computer:
+        condition: service_completed_successfully
+
+  api:
+    build:
+      context: .
+      dockerfile: image/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://lazyboy:lazyboy@postgres:5432/lazyboy
+      SANDBOX_SUPERVISOR_URL: http://supervisor:7091
+      SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:-dev-token}
+      SANDBOX_PROVIDER: docker
+      DATA_DIR: /data
+      HOST_DATA_DIR: ${PWD}/data
+      API_BIND: 0.0.0.0:3100
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      LAZYBOY_WEB_DIR: /web
+      LAZYBOY_SCREEN_UPSTREAM: host.docker.internal
+    ports:
+      - "3101:3100"
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      supervisor:
+        condition: service_started
+
+volumes:
+  pgdata:

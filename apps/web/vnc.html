@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>LazyBoy desktop</title>
+    <style>
+      html, body, #screen {
+        margin: 0;
+        height: 100%;
+        width: 100%;
+        background: #0f172a;
+        overflow: hidden;
+      }
+      #status {
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        z-index: 2;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.45);
+        color: #fff;
+        font: 12px/1.3 ui-sans-serif, system-ui, sans-serif;
+        pointer-events: none;
+      }
+      #screen canvas { cursor: default; }
+    </style>
+    <script type="module">
+      import RFB from "./core/rfb.js";
+
+      function query(name) {
+        const match = `${document.location.href}${window.location.hash}`.match(
+          new RegExp(`[?&#]${name}=([^&#]*)`)
+        );
+        return match ? decodeURIComponent(match[1]) : null;
+      }
+
+      function flag(name, fallback = false) {
+        const raw = query(name);
+        if (raw == null) return fallback;
+        const value = String(raw).toLowerCase();
+        return value === "1" || value === "true" || value === "yes";
+      }
+
+      const statusEl = document.getElementById("status");
+      const setStatus = (text) => {
+        statusEl.textContent = text;
+      };
+
+      const prefix = window.location.pathname.replace(/[^/]+$/, "");
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const path = (query("path") || "websockify").replace(/^\//, "");
+      const url = path.includes("/")
+        ? `${protocol}://${window.location.host}/${path}`
+        : `${protocol}://${window.location.host}${prefix}${path}`;
+
+      let rfb = null;
+      let reconnectTimer = null;
+
+      function pinTaskbar() {
+        // noVNC centers the scaled canvas (margin:auto), leaving a dead
+        // strip under the panel. Stick the canvas to the bottom.
+        const inner = document.querySelector("#screen > div");
+        const canvas = document.querySelector("#screen canvas");
+        if (inner) {
+          inner.style.alignItems = "flex-end";
+          inner.style.justifyContent = "center";
+        }
+        if (canvas) {
+          canvas.style.margin = "0 auto";
+        }
+      }
+
+      function connect() {
+        setStatus("Connecting to desktop…");
+        statusEl.style.display = "block";
+        rfb = new RFB(document.getElementById("screen"), url);
+        rfb.viewOnly = flag("view_only", false);
+        rfb.scaleViewport = true;
+        rfb.clipViewport = false;
+        rfb.background = "#0f172a";
+        pinTaskbar();
+        rfb.addEventListener("connect", () => {
+          pinTaskbar();
+          setStatus(rfb.viewOnly ? "View only — click to take control" : "Click the desktop");
+          try { rfb.focus(); } catch (_) {}
+          setTimeout(() => { statusEl.style.display = "none"; }, 2500);
+        });
+        rfb.addEventListener("disconnect", (event) => {
+          statusEl.style.display = "block";
+          const clean = event && event.detail && event.detail.clean;
+          setStatus(clean ? "Disconnected — retrying" : "Desktop connection lost — retrying");
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 1500);
+        });
+      }
+
+      connect();
+      window.addEventListener("resize", pinTaskbar);
+      window.addEventListener("pointerdown", () => {
+        try { if (rfb) rfb.focus(); } catch (_) {}
+        if (rfb && rfb.viewOnly) {
+          window.parent.postMessage({ type: "lazyboy-request-control" }, "*");
+        }
+      });
+      window.addEventListener("paste", (event) => {
+        if (!rfb || rfb.viewOnly) return;
+        const text = event.clipboardData ? event.clipboardData.getData("text") : "";
+        if (!text) return;
+        event.preventDefault();
+        try { rfb.clipboardPasteFrom(text); } catch (_) {}
+        try { rfb.sendKey(0xffe3, "ControlLeft", true); rfb.sendKey(0x0076, "KeyV", true); rfb.sendKey(0x0076, "KeyV", false); rfb.sendKey(0xffe3, "ControlLeft", false); } catch (_) {}
+      });
+    </script>
+  </head>
+  <body>
+    <div id="status">Loading desktop…</div>
+    <div id="screen"></div>
+  </body>
+</html>

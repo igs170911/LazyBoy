@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pretty UTF-8 terminal: zsh + Powerlevel10k. Never fall back to a bare xterm.
+export HOME="${HOME:-/home/lazyboy}"
+export LANG="${LANG:-zh_TW.UTF-8}"
+export LC_ALL="${LC_ALL:-zh_TW.UTF-8}"
+export LANGUAGE="${LANGUAGE:-zh_TW:zh:en}"
+export SHELL=/bin/zsh
+export TERM="${TERM:-xterm-256color}"
+export COLORTERM="${COLORTERM:-truecolor}"
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+cd "$HOME" || true
+if command -v xfce4-terminal >/dev/null 2>&1; then
+  exec xfce4-terminal \
+    --disable-server \
+    --geometry=92x28+48+48 \
+    --title=終端機 \
+    --command="/bin/zsh -l" \
+    "$@"
+fi
+exec /bin/zsh -l

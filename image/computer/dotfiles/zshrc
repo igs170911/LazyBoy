@@ -1,0 +1,31 @@
+# LazyBoy desktop zsh — same Powerlevel10k rainbow setup as the host.
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
+export LANG="${LANG:-zh_TW.UTF-8}"
+export LC_ALL="${LC_ALL:-zh_TW.UTF-8}"
+export LANGUAGE="${LANGUAGE:-zh_TW:zh:en}"
+export TERM="${TERM:-xterm-256color}"
+export SHELL=/bin/zsh
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+
+setopt AUTO_CD HIST_IGNORE_DUPS SHARE_HISTORY EXTENDED_HISTORY
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=50000
+SAVEHIST=50000
+
+if [[ -r /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]]; then
+  source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+  ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+fi
+if [[ -r /usr/share/zsh/plugins/zsh-z/zsh-z.plugin.zsh ]]; then
+  source /usr/share/zsh/plugins/zsh-z/zsh-z.plugin.zsh
+fi
+if [[ -r /usr/share/zsh-theme-powerlevel10k/powerlevel10k.zsh-theme ]]; then
+  source /usr/share/zsh-theme-powerlevel10k/powerlevel10k.zsh-theme
+fi
+[[ ! -f "$HOME/.p10k.zsh" ]] || source "$HOME/.p10k.zsh"
+if [[ -r /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]]; then
+  source /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+fi

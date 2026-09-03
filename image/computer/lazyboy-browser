@@ -1,0 +1,46 @@
+#!/bin/sh
+# Normal Chromium window. Do not add --kiosk or --app.
+# Profile is per-bot / per-screen so two Team desktops never share cookies
+# or Chromium's SingletonLock (that dialog is "Profile error occurred").
+HOME="${HOME:-/home/lazyboy}"
+display="${DISPLAY#:}"
+display="${display:-1}"
+if [ -n "${LAZYBOY_BROWSER_PROFILE:-}" ]; then
+  PROFILE="$LAZYBOY_BROWSER_PROFILE"
+elif [ -n "${LAZYBOY_BOT_ID:-}" ]; then
+  PROFILE="$HOME/.browser-profiles/bots/$LAZYBOY_BOT_ID"
+elif [ -r "/tmp/lazyboy/screen-${display}.profile" ]; then
+  PROFILE="$(cat "/tmp/lazyboy/screen-${display}.profile")"
+else
+  PROFILE="$HOME/.browser-profiles/displays/${display}"
+fi
+mkdir -p "$PROFILE"
+live=$(pgrep -f "chromium.*--user-data-dir=${PROFILE}" 2>/dev/null | head -1)
+lock="$(readlink "$PROFILE/SingletonLock" 2>/dev/null || true)"
+lock_pid="${lock##*-}"
+if [ -n "$live" ]; then
+  # A second Chromium on the same profile is the "Profile error occurred" dialog.
+  # Only hand the URL to the existing process when its singleton is still valid.
+  if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+    exec /usr/bin/chromium --no-sandbox --user-data-dir="$PROFILE" "$@"
+  fi
+  exit 0
+fi
+rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
+exec /usr/bin/chromium \
+  --no-sandbox \
+  --test-type \
+  --disable-gpu \
+  --disable-dev-shm-usage \
+  --disable-features=TranslateUI \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-session-crashed-bubble \
+  --hide-crash-restore-bubble \
+  --disable-infobars \
+  --password-store=basic \
+  --lang=zh-TW \
+  --accept-lang=zh-TW,zh,en-US,en \
+  --start-maximized \
+  --user-data-dir="$PROFILE" \
+  "$@"

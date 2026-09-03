@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LazyBoy</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #111113;
+        --panel: #1a1a1f;
+        --line: #2a2a32;
+        --text: #ececf1;
+        --muted: #9a9aa8;
+        --accent: #6ea8ff;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+      #app { display: grid; grid-template-columns: 240px 1fr 1.2fr; height: 100%; }
+      aside, main, section { border-right: 1px solid var(--line); min-width: 0; min-height: 0; }
+      section { border-right: none; display: flex; flex-direction: column; }
+      header { padding: 16px; border-bottom: 1px solid var(--line); }
+      h1, h2 { margin: 0; font-size: 15px; font-weight: 600; }
+      .list { padding: 8px; overflow: auto; }
+      button, input, textarea, select {
+        font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+      }
+      button { padding: 8px 10px; cursor: pointer; }
+      button.primary { background: var(--accent); color: #081018; border-color: transparent; font-weight: 600; }
+      input, textarea, select { padding: 8px; width: 100%; }
+      .bot { padding: 10px; border-radius: 8px; cursor: pointer; }
+      .bot.active, .bot:hover { background: var(--panel); }
+      .messages { padding: 16px; overflow: auto; height: calc(100% - 140px); }
+      .msg { margin: 0 0 12px; }
+      .msg .who { color: var(--muted); font-size: 12px; }
+      .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+      .composer textarea { min-height: 52px; resize: none; }
+      iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: #1d4ed8; pointer-events: auto; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .create { padding: 12px; display: grid; gap: 8px; }
+      .hint { color: var(--muted); padding: 12px; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <aside>
+        <header><h1>LazyBoy</h1></header>
+        <div class="create">
+          <input id="name" placeholder="Bot name" />
+          <select id="mode">
+            <option value="team">Team computer (shared)</option>
+            <option value="dedicated">Private computer (new Docker)</option>
+          </select>
+          <button class="primary" id="create">Create bot</button>
+          <div class="hint" style="padding:0">Team is one machine with a screen per bot. Private boots an isolated container.</div>
+        </div>
+        <div class="list" id="bots"></div>
+      </aside>
+      <main>
+        <header><h2 id="chatTitle">Chat</h2></header>
+        <div class="messages" id="messages"></div>
+        <div class="composer">
+          <textarea id="draft" placeholder="Message the bot"></textarea>
+          <button class="primary" id="send">Send</button>
+        </div>
+      </main>
+      <section>
+        <header>
+          <h2>Computer</h2>
+          <div class="row" style="margin-top:8px">
+            <button id="boot">Open desktop</button>
+            <button id="restart">Restart</button>
+            <button id="stop">Shut down</button>
+            <button id="takeover">Take control</button>
+            <button id="release">Release</button>
+          </div>
+          <div class="hint" id="status">No computer yet</div>
+        </header>
+        <iframe id="screen" title="Bot desktop" allow="fullscreen; clipboard-read; clipboard-write"></iframe>
+      </section>
+    </div>
+    <script>
+      const api = (path, opts = {}) =>
+        fetch(path, {
+          headers: { "content-type": "application/json", ...(opts.headers || {}) },
+          ...opts,
+        }).then(async (res) => {
+          const text = await res.text();
+          let body = null;
+          try { body = text ? JSON.parse(text) : null; } catch { body = { message: text }; }
+          if (!res.ok) throw new Error(body && body.message ? body.message : `${res.status} ${text}`);
+          return body;
+        });
+
+      let bots = [];
+      let active = null;
+      let poll = null;
+
+      async function refreshBots() {
+        bots = await api("/api/bots");
+        const root = document.getElementById("bots");
+        root.innerHTML = bots
+          .map(
+            (bot) =>
+              `<div class="bot ${active && active.id === bot.id ? "active" : ""}" data-id="${bot.id}">
+                <strong>${bot.name}</strong><div class="who">${bot.computerMode}</div>
+              </div>`
+          )
+          .join("");
+        root.querySelectorAll(".bot").forEach((el) =>
+          el.addEventListener("click", () => select(bots.find((b) => b.id === el.dataset.id)))
+        );
+      }
+
+      async function select(bot) {
+        active = bot;
+        document.getElementById("chatTitle").textContent = bot.name;
+        await refreshBots();
+        await refreshThread();
+        await refreshComputer();
+        if (poll) clearInterval(poll);
+        poll = setInterval(() => {
+          refreshThread().catch(() => {});
+          refreshComputer().catch(() => {});
+          ping().catch(() => {});
+        }, 2000);
+      }
+
+      async function refreshThread() {
+        if (!active) return;
+        const messages = await api(`/api/bots/${active.id}/messages`);
+        const root = document.getElementById("messages");
+        root.innerHTML = messages
+          .map((msg) => `<div class="msg"><div class="who">${msg.role}</div><div>${escapeHtml(msg.body || "")}</div></div>`)
+          .join("");
+        root.scrollTop = root.scrollHeight;
+      }
+
+      async function refreshComputer() {
+        if (!active) return;
+        const status = await api(`/api/computer/${active.id}/status`);
+        const busy = status.busyBotName ? ` · ${status.busyBotName}` : "";
+        const share = status.mode === "team" ? "Team computer" : "Private computer";
+        const display = status.display ? ` · ${status.display}` : "";
+        const profile = status.profileMode ? ` · profile ${status.profileMode}` : "";
+        const ask = status.takeoverRequested ? " · bot asked you to take control" : "";
+        document.getElementById("status").textContent = `${share}${display}${profile} · ${status.state} · control ${status.controlHolder}${busy}${ask}`;
+        const desktop = await api(`/api/computer/${active.id}/screen`).catch(() => ({ url: null }));
+        const frame = document.getElementById("screen");
+        if (desktop.url) {
+          const next = new URL(desktop.url, window.location.origin).href;
+          if (frame.src !== next) frame.src = next;
+        }
+      }
+
+      async function ping() {
+        if (!active) return;
+        await api(`/api/computer/${active.id}/heartbeat`, { method: "POST", body: "{}" }).catch(() => {});
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      document.getElementById("create").onclick = async () => {
+        const name = document.getElementById("name").value.trim();
+        if (!name) return;
+        const bot = await api("/api/bots", {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            computerMode: document.getElementById("mode").value,
+          }),
+        });
+        document.getElementById("name").value = "";
+        await refreshBots();
+        await select(bot);
+      };
+
+      document.getElementById("send").onclick = async () => {
+        if (!active) return;
+        const text = document.getElementById("draft").value.trim();
+        if (!text) return;
+        document.getElementById("draft").value = "";
+        await api(`/api/bots/${active.id}/messages`, { method: "POST", body: JSON.stringify({ text }) });
+        await refreshThread();
+      };
+
+      document.getElementById("boot").onclick = async () => {
+        if (!active) return;
+        await api(`/api/computer/${active.id}/boot`, { method: "POST", body: "{}" });
+        await api(`/api/computer/${active.id}/takeover`, { method: "POST", body: "{}" }).catch(() => {});
+        await refreshComputer();
+      };
+      document.getElementById("restart").onclick = async () => {
+        if (!active) return;
+        document.getElementById("status").textContent = "Restarting computer…";
+        document.getElementById("screen").src = "about:blank";
+        await api(`/api/computer/${active.id}/restart`, { method: "POST", body: "{}" });
+        await api(`/api/computer/${active.id}/takeover`, { method: "POST", body: "{}" }).catch(() => {});
+        await refreshComputer();
+      };
+      document.getElementById("takeover").onclick = async () => {
+        if (!active) return;
+        try {
+          await api(`/api/computer/${active.id}/takeover`, { method: "POST", body: "{}" });
+        } catch (error) {
+          document.getElementById("status").textContent = error.message;
+        }
+        await refreshComputer();
+      };
+      document.getElementById("release").onclick = async () => {
+        if (!active) return;
+        await api(`/api/computer/${active.id}/release`, { method: "POST", body: "{}" });
+        await refreshComputer();
+      };
+      document.getElementById("stop").onclick = async () => {
+        if (!active) return;
+        await api(`/api/computer/${active.id}/stop`, { method: "POST", body: "{}" });
+        document.getElementById("screen").src = "about:blank";
+        await refreshComputer();
+      };
+
+      window.addEventListener("message", (event) => {
+        if (!active || !event.data || event.data.type !== "lazyboy-request-control") return;
+        api(`/api/computer/${active.id}/takeover`, { method: "POST", body: "{}" })
+          .then(() => refreshComputer())
+          .catch((error) => {
+            document.getElementById("status").textContent = error.message;
+          });
+      });
+
+      refreshBots().catch((error) => {
+        document.getElementById("status").textContent = error.message;
+      });
+    </script>
+  </body>
+</html>

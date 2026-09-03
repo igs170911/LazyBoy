@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=終端機
+Name[zh_TW]=終端機
+Comment=Zsh + Powerlevel10k
+Exec=/usr/local/bin/lazyboy-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;GTK;
+StartupNotify=true

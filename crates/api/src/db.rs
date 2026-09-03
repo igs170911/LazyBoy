@@ -1,0 +1,348 @@
+use chrono::{DateTime, Utc};
+use lazyboy_contracts::{
+    computer_home_key, computer_scope_key, Bot, BrowserProfileMode, ComputerMode, ComputerState,
+    ControlHolder, RunStatus, SandboxKind,
+};
+use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct Db {
+    pub pool: PgPool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Actor {
+    pub user_id: String,
+    pub space_id: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct ComputerRow {
+    pub id: String,
+    pub space_id: String,
+    pub user_id: String,
+    pub scope: String,
+    pub scope_key: String,
+    pub home_key: String,
+    pub home_revision: String,
+    pub kind: String,
+    pub provider_ref: Option<String>,
+    pub state: String,
+    pub control_holder: String,
+    pub control_lease_id: Option<String>,
+    pub control_lease_expires_at: Option<DateTime<Utc>>,
+    pub control_bot_id: Option<String>,
+    pub control_run_id: Option<String>,
+    pub execution_run_id: Option<String>,
+    pub execution_bot_id: Option<String>,
+    pub execution_lease_expires_at: Option<DateTime<Utc>>,
+    pub execution_fence: i32,
+    pub browser_profile_mode: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct ScreenRow {
+    pub id: String,
+    pub computer_id: String,
+    pub bot_id: String,
+    pub slot: i32,
+    pub display: String,
+    pub view_port: i32,
+    pub profile_mode: String,
+    pub profile_path: String,
+    pub control_holder: String,
+    pub control_lease_id: Option<String>,
+    pub control_lease_expires_at: Option<DateTime<Utc>>,
+    pub execution_run_id: Option<String>,
+    pub execution_lease_expires_at: Option<DateTime<Utc>>,
+    pub execution_fence: i32,
+}
+
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct BotRow {
+    pub id: String,
+    pub space_id: String,
+    pub user_id: String,
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub instructions: String,
+    pub computer_id: Option<String>,
+    pub model_provider: Option<String>,
+    pub model_id: Option<String>,
+}
+
+impl Db {
+    pub async fn ensure_local_actor(&self) -> Result<Actor, sqlx::Error> {
+        let user_id = "local-user";
+        let space_id = "local-space";
+        sqlx::query("INSERT INTO users (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING")
+            .bind(user_id)
+            .bind("Local")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO spaces (id, user_id, name, is_default, default_model_provider, default_model_id)
+             VALUES ($1, $2, $3, TRUE, 'xai', 'grok-4.6')
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(space_id)
+        .bind(user_id)
+        .bind("Home")
+        .execute(&self.pool)
+        .await?;
+        Ok(Actor {
+            user_id: user_id.into(),
+            space_id: space_id.into(),
+        })
+    }
+
+    pub async fn list_bots(&self, actor: &Actor) -> Result<Vec<(BotRow, String, ComputerRow)>, sqlx::Error> {
+        let bots: Vec<BotRow> = sqlx::query_as(
+            "SELECT id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id
+             FROM bots WHERE space_id = $1 AND user_id = $2 ORDER BY created_at DESC",
+        )
+        .bind(&actor.space_id)
+        .bind(&actor.user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::new();
+        for bot in bots {
+            let thread_id: (String,) =
+                sqlx::query_as("SELECT id FROM threads WHERE bot_id = $1")
+                    .bind(&bot.id)
+                    .fetch_one(&self.pool)
+                    .await?;
+            let computer = self.get_computer(bot.computer_id.as_deref().unwrap_or("")).await?;
+            if let Some(computer) = computer {
+                out.push((bot, thread_id.0, computer));
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn get_bot(&self, actor: &Actor, bot_id: &str) -> Result<Option<BotRow>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id
+             FROM bots WHERE id = $1 AND space_id = $2 AND user_id = $3",
+        )
+        .bind(bot_id)
+        .bind(&actor.space_id)
+        .bind(&actor.user_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn get_computer(&self, computer_id: &str) -> Result<Option<ComputerRow>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
+                    control_holder, control_lease_id, control_lease_expires_at, control_bot_id, control_run_id,
+                    execution_run_id, execution_bot_id, execution_lease_expires_at, execution_fence,
+                    browser_profile_mode
+             FROM computers WHERE id = $1",
+        )
+        .bind(computer_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn thread_id_for_bot(&self, bot_id: &str) -> Result<Option<String>, sqlx::Error> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT id FROM threads WHERE bot_id = $1")
+            .bind(bot_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|row| row.0))
+    }
+
+    pub async fn create_bot(
+        &self,
+        actor: &Actor,
+        name: &str,
+        title: &str,
+        description: &str,
+        instructions: &str,
+        mode: ComputerMode,
+        model_provider: Option<&str>,
+        model_id: Option<&str>,
+    ) -> Result<Bot, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let team = ensure_computer(&mut tx, actor, ComputerMode::Team, None).await?;
+        let bot_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO bots (id, space_id, user_id, name, title, description, instructions, computer_id, model_provider, model_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        )
+        .bind(&bot_id)
+        .bind(&actor.space_id)
+        .bind(&actor.user_id)
+        .bind(name)
+        .bind(title)
+        .bind(description)
+        .bind(instructions)
+        .bind(&team.id)
+        .bind(model_provider)
+        .bind(model_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("INSERT INTO threads (id, space_id, bot_id, user_id) VALUES ($1,$2,$3,$4)")
+            .bind(&thread_id)
+            .bind(&actor.space_id)
+            .bind(&bot_id)
+            .bind(&actor.user_id)
+            .execute(&mut *tx)
+            .await?;
+        let mut computer_id = team.id.clone();
+        let mut computer_mode = ComputerMode::Team;
+        if mode == ComputerMode::Dedicated {
+            let dedicated = ensure_computer(&mut tx, actor, ComputerMode::Dedicated, Some(&bot_id)).await?;
+            sqlx::query("UPDATE bots SET computer_id = $1 WHERE id = $2")
+                .bind(&dedicated.id)
+                .bind(&bot_id)
+                .execute(&mut *tx)
+                .await?;
+            computer_id = dedicated.id;
+            computer_mode = ComputerMode::Dedicated;
+        }
+        tx.commit().await?;
+        Ok(Bot {
+            id: bot_id,
+            space_id: actor.space_id.clone(),
+            name: name.into(),
+            title: title.into(),
+            description: description.into(),
+            instructions: instructions.into(),
+            thread_id,
+            computer_id,
+            computer_mode,
+            model_provider: model_provider.and_then(|value| value.parse().ok()),
+            model_id: model_id.map(str::to_string),
+        })
+    }
+
+    pub async fn get_screen(&self, computer_id: &str, bot_id: &str) -> Result<Option<ScreenRow>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id, computer_id, bot_id, slot, display, view_port, profile_mode, profile_path,
+                    control_holder, control_lease_id, control_lease_expires_at, execution_run_id,
+                    execution_lease_expires_at, execution_fence
+             FROM computer_screens WHERE computer_id = $1 AND bot_id = $2",
+        )
+        .bind(computer_id)
+        .bind(bot_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn list_screen_slots(&self, computer_id: &str) -> Result<Vec<i32>, sqlx::Error> {
+        sqlx::query_scalar("SELECT slot FROM computer_screens WHERE computer_id = $1 ORDER BY slot")
+            .bind(computer_id)
+            .fetch_all(&self.pool)
+            .await
+    }
+
+    pub async fn list_screens(&self, computer_id: &str) -> Result<Vec<ScreenRow>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id, computer_id, bot_id, slot, display, view_port, profile_mode, profile_path,
+                    control_holder, control_lease_id, control_lease_expires_at, execution_run_id,
+                    execution_lease_expires_at, execution_fence
+             FROM computer_screens WHERE computer_id = $1 ORDER BY slot",
+        )
+        .bind(computer_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn active_run(&self, bot_id: &str) -> Result<Option<(String, String)>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id, status FROM runs
+             WHERE bot_id = $1
+               AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(bot_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+}
+
+async fn ensure_computer(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &Actor,
+    mode: ComputerMode,
+    bot_id: Option<&str>,
+) -> Result<ComputerRow, sqlx::Error> {
+    let scope_key = computer_scope_key(mode, &actor.space_id, bot_id).expect("scope key");
+    let home_key = computer_home_key(mode, &actor.space_id, bot_id).expect("home key");
+    sqlx::query(
+        "INSERT INTO computers (id, space_id, user_id, scope, scope_key, home_key, kind, state)
+         VALUES ($1,$2,$3,$4,$5,$6,'docker','stopped')
+         ON CONFLICT (scope_key) DO NOTHING",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&actor.space_id)
+    .bind(&actor.user_id)
+    .bind(mode.as_str())
+    .bind(&scope_key)
+    .bind(&home_key)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query_as(
+        "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
+                control_holder, control_lease_id, control_lease_expires_at, control_bot_id, control_run_id,
+                execution_run_id, execution_bot_id, execution_lease_expires_at, execution_fence,
+                browser_profile_mode
+         FROM computers WHERE scope_key = $1",
+    )
+    .bind(scope_key)
+    .fetch_one(&mut **tx)
+    .await
+}
+
+pub fn parse_mode(scope: &str) -> ComputerMode {
+    scope.parse().unwrap_or(ComputerMode::Team)
+}
+
+pub fn parse_state(state: &str) -> ComputerState {
+    match state {
+        "booting" => ComputerState::Booting,
+        "running" => ComputerState::Running,
+        "suspended" => ComputerState::Suspended,
+        "error" => ComputerState::Error,
+        _ => ComputerState::Stopped,
+    }
+}
+
+pub fn parse_holder(holder: &str) -> ControlHolder {
+    match holder {
+        "bot" => ControlHolder::Bot,
+        "user" => ControlHolder::User,
+        _ => ControlHolder::None,
+    }
+}
+
+pub fn parse_kind(kind: &str) -> SandboxKind {
+    let _ = kind;
+    SandboxKind::Docker
+}
+
+pub fn parse_profile_mode(value: &str) -> BrowserProfileMode {
+    value.parse().unwrap_or(BrowserProfileMode::PerBot)
+}
+
+pub fn parse_run_status(status: &str) -> Option<RunStatus> {
+    match status {
+        "queued" => Some(RunStatus::Queued),
+        "leased" => Some(RunStatus::Leased),
+        "running" => Some(RunStatus::Running),
+        "waiting_input" => Some(RunStatus::WaitingInput),
+        "waiting_takeover" => Some(RunStatus::WaitingTakeover),
+        "completed" => Some(RunStatus::Completed),
+        "failed" => Some(RunStatus::Failed),
+        "cancelled" => Some(RunStatus::Cancelled),
+        _ => None,
+    }
+}
