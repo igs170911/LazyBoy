@@ -1,7 +1,9 @@
 mod auth;
 mod computer;
 mod db;
+mod mcp;
 mod memory;
+mod rooms;
 mod routes;
 mod runs;
 mod screen_proxy;
@@ -39,7 +41,11 @@ async fn main() {
     let state = AppState::connect(&database_url)
         .await
         .expect("database");
-    state.bootstrap().await.expect("bootstrap");
+    let actor = state.bootstrap().await.expect("bootstrap");
+    let mcp_state = state.clone();
+    tokio::spawn(async move {
+        mcp_state.mcp.reconnect_all(mcp_state.pool(), &actor).await;
+    });
 
     let worker_state = state.clone();
     tokio::spawn(async move {

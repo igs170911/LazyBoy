@@ -7,6 +7,7 @@ use sqlx::PgPool;
 
 use crate::db::{Actor, Db};
 use crate::auth::AuthConfig;
+use crate::mcp::McpHub;
 use crate::memory::MemoryService;
 
 #[derive(Clone)]
@@ -16,6 +17,7 @@ pub struct AppState {
     pub data_dir: String,
     pub auth: AuthConfig,
     pub memory: MemoryService,
+    pub mcp: McpHub,
 }
 
 impl AppState {
@@ -36,6 +38,7 @@ impl AppState {
             data_dir: std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".into()),
             auth: AuthConfig::from_env(),
             memory: MemoryService::from_env(),
+            mcp: McpHub::new(),
         })
     }
 

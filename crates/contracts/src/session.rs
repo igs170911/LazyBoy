@@ -42,6 +42,10 @@ pub struct SessionMessage {
     pub run_id: Option<String>,
     pub client_nonce: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub speaker_bot_id: Option<String>,
+    pub speaker_name: Option<String>,
+    pub speaker_color: Option<String>,
+    pub speaker_shape: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

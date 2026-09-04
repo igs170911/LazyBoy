@@ -53,8 +53,8 @@ pub async fn send(
     blocks: &[Value],
 ) -> Result<Value, String> {
     let mut tx = state.pool().begin().await.map_err(|error| error.to_string())?;
-    let scoped: Option<i32> = sqlx::query_scalar(
-        "SELECT 1 FROM threads t JOIN bots b ON b.id=t.bot_id
+    let scoped: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT t.title, t.room_id FROM threads t JOIN bots b ON b.id=t.bot_id
          WHERE t.id=$1 AND t.bot_id=$2 AND t.space_id=$3 AND t.user_id=$4
            AND b.space_id=$3 AND b.user_id=$4 AND t.status='active'
          FOR UPDATE OF t",
@@ -66,9 +66,9 @@ pub async fn send(
     .fetch_optional(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
-    if scoped.is_none() {
+    let Some((current_title, room_id)) = scoped else {
         return Err("session not found".into());
-    }
+    };
     if let Some(nonce) = client_nonce {
         let existing: Option<(String, Option<String>)> = sqlx::query_as(
             "SELECT id, run_id FROM messages WHERE thread_id=$1 AND client_nonce=$2",
@@ -113,20 +113,47 @@ pub async fn send(
     .execute(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
-    sqlx::query(
-        "INSERT INTO runs (id,space_id,bot_id,thread_id,user_id,status,prompt,checkpoint)
-         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7)",
-    )
-    .bind(&run_id)
-    .bind(&actor.space_id)
-    .bind(bot_id)
-    .bind(&thread_id)
-    .bind(&actor.user_id)
-    .bind(text)
-    .bind(json!({"messageSeq":seq}))
-    .execute(&mut *tx)
-    .await
-    .map_err(|error| error.to_string())?;
+    if crate::sessions::is_default_session_title(&current_title) {
+        sqlx::query("UPDATE threads SET title=$2 WHERE id=$1")
+            .bind(thread_id)
+            .bind(crate::sessions::title_from_first_message(text))
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let mut member_ids: Vec<String> = if let Some(room_id) = room_id.as_deref() {
+        sqlx::query_scalar("SELECT bot_id FROM room_members WHERE room_id=$1 ORDER BY created_at")
+            .bind(room_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?
+    } else {
+        vec![bot_id.to_string()]
+    };
+    if member_ids.is_empty() {
+        member_ids.push(bot_id.to_string());
+    }
+    for (index, member_id) in member_ids.iter().enumerate() {
+        let member_run = if index == 0 {
+            run_id.clone()
+        } else {
+            Uuid::new_v4().to_string()
+        };
+        sqlx::query(
+            "INSERT INTO runs (id,space_id,bot_id,thread_id,user_id,status,prompt,checkpoint)
+             VALUES ($1,$2,$3,$4,$5,'queued',$6,$7)",
+        )
+        .bind(&member_run)
+        .bind(&actor.space_id)
+        .bind(member_id)
+        .bind(&thread_id)
+        .bind(&actor.user_id)
+        .bind(text)
+        .bind(json!({"messageSeq":seq}))
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    }
     let event_seq: i32 = sqlx::query_scalar(
         "UPDATE threads SET next_event_seq=next_event_seq+1 WHERE id=$1 RETURNING next_event_seq",
     )
@@ -151,6 +178,13 @@ pub async fn send(
     .fetch_one(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
+    if let Some(room_id) = room_id.as_deref() {
+        sqlx::query("UPDATE rooms SET updated_at=now() WHERE id=$1")
+            .bind(room_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     tx.commit().await.map_err(|error| error.to_string())?;
     Ok(json!({
         "messageId": message_id,
@@ -234,6 +268,7 @@ pub async fn worker_loop(state: AppState) {
                         &state,
                         &thread_id,
                         &run_id,
+                        &bot_id,
                         &format!("Run failed after retries: {error}"),
                     )
                     .await;
@@ -348,9 +383,14 @@ async fn execute_run(
         session_id: thread_id.to_string(),
         run_id: run_id.to_string(),
         memory_enabled: bot.memory_enabled && state.memory.globally_enabled(),
+        mcp: state.mcp.clone(),
     });
 
-    let defs = tool_definitions(ctx.memory_enabled);
+    let mut defs = tool_definitions(ctx.memory_enabled);
+    let mcp_defs = state.mcp.definitions().await;
+    if !mcp_defs.is_empty() {
+        defs.extend(mcp_defs);
+    }
     let (summary, summary_seq): (String, i32) = sqlx::query_as(
         "SELECT history_summary, history_summary_seq FROM threads
          WHERE id=$1 AND space_id=$2 AND user_id=$3",
@@ -369,11 +409,13 @@ async fn execute_run(
     .fetch_one(state.pool())
     .await
     .map_err(|error| error.to_string())?;
-    let recent: Vec<(String, String)> = sqlx::query_as(
-        "SELECT role,body FROM (
-           SELECT role,body,seq FROM messages
-           WHERE thread_id=$1 AND seq>$2 AND seq<$3
-           ORDER BY seq DESC LIMIT 30
+    let recent: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT role, body, speaker_bot_id, speaker_name FROM (
+           SELECT m.role, m.body, m.seq, m.speaker_bot_id, b.name AS speaker_name
+           FROM messages m
+           LEFT JOIN bots b ON b.id=m.speaker_bot_id
+           WHERE m.thread_id=$1 AND m.seq>$2 AND m.seq<$3
+           ORDER BY m.seq DESC LIMIT 30
          ) history ORDER BY seq ASC",
     )
     .bind(thread_id)
@@ -390,15 +432,20 @@ async fn execute_run(
             ))],
         });
     }
-    for (role, body) in recent {
+    for (role, body, speaker_id, speaker_name) in recent {
         if role == "user" {
             history.push(Message::User {
                 content: vec![UserContent::text(body)],
             });
-        } else {
+        } else if speaker_id.as_deref() == Some(bot_id) || speaker_id.is_none() {
             history.push(Message::Assistant {
                 id: None,
                 content: vec![AssistantContent::text(body)],
+            });
+        } else {
+            let name = speaker_name.unwrap_or_else(|| "agent".into());
+            history.push(Message::User {
+                content: vec![UserContent::text(format!("[{name}]: {body}"))],
             });
         }
     }
@@ -426,6 +473,36 @@ async fn execute_run(
     } else {
         format!("{SYSTEM}\n\nBot-specific instructions:\n{}", bot.instructions.trim())
     };
+    let room_mates: Vec<String> = sqlx::query_scalar(
+        "SELECT b.name FROM threads t
+         JOIN room_members m ON m.room_id=t.room_id
+         JOIN bots b ON b.id=m.bot_id
+         WHERE t.id=$1 AND b.id<>$2
+         ORDER BY b.name",
+    )
+    .bind(thread_id)
+    .bind(bot_id)
+    .fetch_all(state.pool())
+    .await
+    .unwrap_or_default();
+    if !room_mates.is_empty() {
+        preamble.push_str(&format!(
+            "\n\nYou are {} in a group chat with: {}. Reply as yourself only. Other agents' lines are prefixed with [Name]. Do not speak for them.",
+            bot.name,
+            room_mates.join("、")
+        ));
+    }
+    let mcp_names: Vec<String> = defs
+        .iter()
+        .filter(|tool| tool.name.starts_with("mcp_"))
+        .map(|tool| tool.name.clone())
+        .collect();
+    if !mcp_names.is_empty() {
+        preamble.push_str(&format!(
+            "\n\nMCP tools available: {}. Use them when they help complete the user's request.",
+            mcp_names.join(", ")
+        ));
+    }
     if !memory.is_empty() {
         preamble.push_str("\n\n");
         preamble.push_str(&memory);
@@ -512,7 +589,7 @@ async fn execute_run(
                     .execute(state.pool())
                     .await
                     .map_err(|error| error.to_string())?;
-                append_bot_message(state, thread_id, run_id, &outcome.text).await?;
+                append_bot_message(state, thread_id, run_id, bot_id, &outcome.text).await?;
                 return Ok(());
             }
         }
@@ -533,7 +610,7 @@ async fn execute_run(
     if status.as_deref() == Some("cancelled") {
         return Ok(());
     }
-    append_bot_message(state, thread_id, run_id, &final_text).await?;
+    append_bot_message(state, thread_id, run_id, bot_id, &final_text).await?;
     let completed = sqlx::query(
         "UPDATE runs
          SET status='completed', completed_at=now(), updated_at=now(),
@@ -604,7 +681,7 @@ async fn latest_screenshot(ctx: &ToolCtx) -> Option<Vec<u8>> {
     }
 }
 
-async fn append_bot_message(state: &AppState, thread_id: &str, run_id: &str, body: &str) -> Result<(), String> {
+async fn append_bot_message(state: &AppState, thread_id: &str, run_id: &str, bot_id: &str, body: &str) -> Result<(), String> {
     let mut tx = state.pool().begin().await.map_err(|error| error.to_string())?;
     let seq: i32 = sqlx::query_scalar(
         "UPDATE threads SET next_message_seq=next_message_seq+1,updated_at=now()
@@ -616,14 +693,15 @@ async fn append_bot_message(state: &AppState, thread_id: &str, run_id: &str, bod
     .map_err(|error| error.to_string())?;
     let message_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO messages (id,thread_id,seq,role,body,run_id)
-         VALUES ($1,$2,$3,'assistant',$4,$5)",
+        "INSERT INTO messages (id,thread_id,seq,role,body,run_id,speaker_bot_id)
+         VALUES ($1,$2,$3,'assistant',$4,$5,$6)",
     )
         .bind(&message_id)
         .bind(thread_id)
         .bind(seq)
         .bind(body)
         .bind(run_id)
+        .bind(bot_id)
         .execute(&mut *tx)
         .await
         .map_err(|error| error.to_string())?;

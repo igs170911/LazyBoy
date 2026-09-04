@@ -15,6 +15,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(crate::sessions::router())
         .merge(crate::memory::router())
+        .merge(crate::rooms::router())
+        .merge(crate::mcp::router())
         .route("/api/bots", get(list_bots).post(create_bot))
         .route("/api/bots/{id}", get(get_bot).patch(update_bot).delete(delete_bot))
         .route("/api/bots/{id}/stop", post(stop_task))
@@ -184,7 +186,9 @@ async fn update_bot(
         "blob" | "round" | "diamond" | "squircle" | "capsule" |
         "triangle" | "hexagon" | "cloud" | "drop" |
         "organic-4" | "organic-5" | "organic-6" | "organic-7" |
-        "organic-8" | "organic-9" | "organic-10" | "organic-11"
+        "organic-8" | "organic-9" | "organic-10" | "organic-11" |
+        "cat" | "bunny" | "star" | "heart" | "egg" |
+        "ghost" | "sprout" | "cactus" | "mushroom" | "paw"
     );
     if name.is_empty() || name.chars().count() > 80 || !color_ok || !shape_ok {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"message":"設定格式不正確"}))));

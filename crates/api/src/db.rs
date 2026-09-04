@@ -115,8 +115,8 @@ impl Db {
             "SELECT b.id, b.space_id, b.user_id, b.name, b.title, b.description, b.avatar_color, b.avatar_shape, b.tags,
                     b.pinned, b.hidden, b.group_name,
                     (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
-                     WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
-                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
+                     WHERE t.bot_id=b.id AND t.room_id IS NULL AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
+                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id AND t.room_id IS NULL) AS last_message_at,
                     b.instructions, b.computer_id, b.model_provider, b.model_id, b.memory_enabled
              FROM bots b WHERE b.space_id = $1 AND b.user_id = $2 ORDER BY b.pinned DESC, b.created_at DESC",
         )
@@ -129,7 +129,7 @@ impl Db {
             let thread_id: (String,) =
                 sqlx::query_as(
                     "SELECT id FROM threads
-                     WHERE bot_id = $1 AND space_id = $2 AND user_id = $3
+                     WHERE bot_id = $1 AND space_id = $2 AND user_id = $3 AND room_id IS NULL
                      ORDER BY updated_at DESC, created_at ASC LIMIT 1",
                 )
                     .bind(&bot.id)
@@ -150,8 +150,8 @@ impl Db {
             "SELECT b.id, b.space_id, b.user_id, b.name, b.title, b.description, b.avatar_color, b.avatar_shape, b.tags,
                     b.pinned, b.hidden, b.group_name,
                     (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
-                     WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
-                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
+                     WHERE t.bot_id=b.id AND t.room_id IS NULL AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
+                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id AND t.room_id IS NULL) AS last_message_at,
                     b.instructions, b.computer_id, b.model_provider, b.model_id, b.memory_enabled
              FROM bots b WHERE b.id = $1 AND b.space_id = $2 AND b.user_id = $3",
         )
@@ -214,7 +214,7 @@ impl Db {
         .bind(memory_enabled)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("INSERT INTO threads (id, space_id, bot_id, user_id) VALUES ($1,$2,$3,$4)")
+        sqlx::query("INSERT INTO threads (id, space_id, bot_id, user_id, title) VALUES ($1,$2,$3,$4,'新對話')")
             .bind(&thread_id)
             .bind(&actor.space_id)
             .bind(&bot_id)
@@ -278,9 +278,9 @@ impl Db {
         .await
     }
 
-    pub async fn active_run(&self, bot_id: &str) -> Result<Option<(String, String)>, sqlx::Error> {
+    pub async fn active_run(&self, bot_id: &str) -> Result<Option<(String, String, String)>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT id, status FROM runs
+            "SELECT id, status, thread_id FROM runs
              WHERE bot_id = $1
                AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
              ORDER BY created_at DESC LIMIT 1",

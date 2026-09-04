@@ -4,7 +4,7 @@ use std::time::Duration;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream;
 use lazyboy_contracts::{
@@ -27,9 +27,10 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/sessions/{id}/messages",
-            get(list_messages).post(send_message),
+            get(list_messages).post(send_message).delete(clear_messages),
         )
         .route("/api/sessions/{id}/events", get(events))
+        .route("/api/sessions/{id}/stop", post(stop_session))
 }
 
 async fn actor(state: &AppState) -> Result<Actor, ApiError> {
@@ -47,7 +48,7 @@ fn internal(message: String) -> ApiError {
     )
 }
 
-fn session_from_row(
+pub(crate) fn session_from_row(
     row: (
         String,
         String,
@@ -94,7 +95,7 @@ async fn list_sessions(
         "SELECT id, bot_id, title, status, created_at, updated_at, next_message_seq,
                 history_summary, history_summary_seq
          FROM threads
-         WHERE bot_id=$1 AND space_id=$2 AND user_id=$3
+         WHERE bot_id=$1 AND space_id=$2 AND user_id=$3 AND status='active' AND room_id IS NULL
          ORDER BY updated_at DESC, created_at DESC",
     )
     .bind(bot_id)
@@ -191,6 +192,12 @@ async fn delete_session(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let actor = actor(&state).await?;
+    if scoped_session_row(&state, &actor, &id).await?.is_none() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+    }
+    cancel_session_runs(&state, &id)
+        .await
+        .map_err(|error| internal(error))?;
     let mut tx = state.pool().begin().await.map_err(|error| internal(error.to_string()))?;
     let bot_id: Option<String> = sqlx::query_scalar(
         "DELETE FROM threads WHERE id=$1 AND space_id=$2 AND user_id=$3 RETURNING bot_id",
@@ -212,7 +219,7 @@ async fn delete_session(
             .map_err(|error| internal(error.to_string()))?;
     if !remaining {
         sqlx::query(
-            "INSERT INTO threads (id,space_id,bot_id,user_id,title) VALUES ($1,$2,$3,$4,'New session')",
+            "INSERT INTO threads (id,space_id,bot_id,user_id,title) VALUES ($1,$2,$3,$4,'新對話')",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&actor.space_id)
@@ -232,6 +239,40 @@ async fn list_messages(
 ) -> Result<Json<Vec<SessionMessage>>, ApiError> {
     let actor = actor(&state).await?;
     Ok(Json(messages_for_session(&state, &actor, &id).await?))
+}
+
+async fn clear_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = actor(&state).await?;
+    if scoped_session_row(&state, &actor, &id).await?.is_none() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+    }
+    cancel_session_runs(&state, &id)
+        .await
+        .map_err(|error| internal(error))?;
+    let mut tx = state.pool().begin().await.map_err(|error| internal(error.to_string()))?;
+    sqlx::query("DELETE FROM messages WHERE thread_id=$1")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| internal(error.to_string()))?;
+    sqlx::query(
+        "UPDATE threads
+         SET next_message_seq=1, history_summary='', history_summary_seq=0,
+             history_compacted_at=NULL, updated_at=now()
+         WHERE id=$1 AND space_id=$2 AND user_id=$3",
+    )
+    .bind(&id)
+    .bind(&actor.space_id)
+    .bind(&actor.user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|error| internal(error.to_string()))?;
+    tx.commit().await.map_err(|error| internal(error.to_string()))?;
+    let _ = append_event(&state, &id, "session.cleared", json!({"sessionId":id})).await;
+    Ok(Json(json!({"ok":true})))
 }
 
 async fn send_message(
@@ -258,6 +299,20 @@ async fn send_message(
     .await
     .map_err(|message| (StatusCode::BAD_REQUEST, Json(json!({"message":message}))))?;
     Ok((StatusCode::ACCEPTED, Json(result)))
+}
+
+async fn stop_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = actor(&state).await?;
+    if scoped_session_row(&state, &actor, &id).await?.is_none() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+    }
+    cancel_session_runs(&state, &id)
+        .await
+        .map_err(|error| internal(error))?;
+    Ok(Json(json!({"ok":true})))
 }
 
 async fn events(
@@ -327,7 +382,7 @@ pub async fn default_session_for_bot(
 ) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM threads
-         WHERE bot_id=$1 AND space_id=$2 AND user_id=$3 AND status='active'
+         WHERE bot_id=$1 AND space_id=$2 AND user_id=$3 AND status='active' AND room_id IS NULL
          ORDER BY updated_at DESC, created_at ASC LIMIT 1",
     )
     .bind(bot_id)
@@ -352,10 +407,16 @@ pub async fn messages_for_session(
         Option<String>,
         Option<String>,
         chrono::DateTime<chrono::Utc>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
     )> = sqlx::query_as(
         "SELECT m.id, m.thread_id, m.seq, m.role, m.body, m.blocks, m.run_id,
-                m.client_nonce, m.created_at
-         FROM messages m JOIN threads t ON t.id=m.thread_id
+                m.client_nonce, m.created_at, m.speaker_bot_id, b.name, b.avatar_color, b.avatar_shape
+         FROM messages m
+         JOIN threads t ON t.id=m.thread_id
+         LEFT JOIN bots b ON b.id=m.speaker_bot_id
          WHERE t.id=$1 AND t.space_id=$2 AND t.user_id=$3
          ORDER BY m.seq ASC",
     )
@@ -377,6 +438,10 @@ pub async fn messages_for_session(
             run_id: row.6,
             client_nonce: row.7,
             created_at: row.8,
+            speaker_bot_id: row.9,
+            speaker_name: row.10,
+            speaker_color: row.11,
+            speaker_shape: row.12,
         })
         .collect())
 }
@@ -438,23 +503,96 @@ pub async fn append_event(
     Ok(seq)
 }
 
-fn normalized_title(title: &str) -> String {
+pub(crate) fn normalized_title(title: &str) -> String {
     let value: String = title.trim().chars().take(120).collect();
     if value.is_empty() {
-        "New session".to_string()
+        "新對話".to_string()
     } else {
         value
     }
 }
 
+pub(crate) fn is_default_session_title(title: &str) -> bool {
+    let value = title.trim();
+    value.is_empty()
+        || value == "New session"
+        || value == "新對話"
+        || value
+            .strip_prefix("對話 ")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+pub(crate) fn title_from_first_message(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let truncated: String = line.chars().take(40).collect();
+    if truncated.is_empty() {
+        "新對話".to_string()
+    } else if line.chars().count() > 40 {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
+pub(crate) async fn cancel_session_runs(state: &AppState, thread_id: &str) -> Result<Vec<String>, String> {
+    let run_ids: Vec<String> = sqlx::query_scalar(
+        "UPDATE runs SET status='cancelled', completed_at=now(), updated_at=now()
+         WHERE thread_id=$1 AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
+         RETURNING id",
+    )
+    .bind(thread_id)
+    .fetch_all(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    for run_id in &run_ids {
+        crate::computer::release_screen_execution(state, run_id).await?;
+        sqlx::query(
+            "UPDATE computers SET execution_bot_id=NULL, execution_run_id=NULL,
+                    execution_lease_expires_at=NULL, updated_at=now()
+             WHERE execution_run_id=$1",
+        )
+        .bind(run_id)
+        .execute(state.pool())
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(run_ids)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalized_title;
+    use super::{is_default_session_title, normalized_title, title_from_first_message};
 
     #[test]
     fn session_titles_are_bounded_and_have_a_default() {
-        assert_eq!(normalized_title("   "), "New session");
+        assert_eq!(normalized_title("   "), "新對話");
         assert_eq!(normalized_title("  Research  "), "Research");
         assert_eq!(normalized_title(&"x".repeat(150)).chars().count(), 120);
+    }
+
+    #[test]
+    fn default_titles_include_legacy_and_numbered_names() {
+        assert!(is_default_session_title("New session"));
+        assert!(is_default_session_title("新對話"));
+        assert!(is_default_session_title("對話 1"));
+        assert!(is_default_session_title("對話 12"));
+        assert!(!is_default_session_title("幫我查網站"));
+        assert!(!is_default_session_title("對話"));
+        assert!(!is_default_session_title("對話 一"));
+    }
+
+    #[test]
+    fn first_message_title_uses_first_line_and_truncates() {
+        assert_eq!(title_from_first_message("幫我查天氣"), "幫我查天氣");
+        assert_eq!(title_from_first_message("\n  第一行\n第二行"), "第一行");
+        assert_eq!(
+            title_from_first_message(&"字".repeat(45)),
+            format!("{}…", "字".repeat(40))
+        );
+        assert_eq!(title_from_first_message("   \n"), "新對話");
     }
 }

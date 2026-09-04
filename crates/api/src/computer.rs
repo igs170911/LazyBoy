@@ -52,6 +52,8 @@ pub fn status_from(
         screen_height: DEFAULT_SCREEN_HEIGHT,
         home_revision: Some(computer.home_revision.clone()),
         busy_bot_name,
+        busy_session_id: None,
+        busy_run_id: None,
         multi_screen: true,
         screen_id: screen.map(|row| row.id.clone()),
         display: screen.map(|row| row.display.clone()),
@@ -572,7 +574,7 @@ pub async fn takeover(state: &AppState, actor: &Actor, bot_id: &str) -> Result<(
     let bound = ensure_bot_screen(state, actor, bot_id, &computer, None).await?;
     let screen = bound.row.ok_or_else(|| bound.gui_block.unwrap_or_else(|| "screen unavailable".into()))?;
     let active = state.db.active_run(bot_id).await.map_err(|error| error.to_string())?;
-    let run_status = active.as_ref().and_then(|(_, status)| parse_run_status(status));
+    let run_status = active.as_ref().and_then(|(_, status, _)| parse_run_status(status));
     if execution_blocks_user_takeover(
         screen.execution_run_id.is_some(),
         screen.execution_lease_expires_at,
@@ -792,19 +794,22 @@ pub async fn current_status(state: &AppState, actor: &Actor, bot_id: &str) -> Re
         .get_screen(&computer.id, bot_id)
         .await
         .map_err(|error| error.to_string())?;
-    let run_status = state
-        .db
-        .active_run(bot_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|(_, run_status)| parse_run_status(&run_status));
+    let active = state.db.active_run(bot_id).await.ok().flatten();
+    let run_status = active
+        .as_ref()
+        .and_then(|(_, run_status, _)| parse_run_status(run_status));
     let waiting_for_takeover = run_status == Some(lazyboy_contracts::RunStatus::WaitingTakeover);
-    let busy_bot_name = run_status
-        .filter(|status| status.is_active() && *status != lazyboy_contracts::RunStatus::WaitingTakeover)
-        .map(|_| bot.name);
+    let busy = run_status
+        .filter(|status| status.is_active() && *status != lazyboy_contracts::RunStatus::WaitingTakeover);
+    let busy_bot_name = busy.map(|_| bot.name.clone());
     let mut status = status_from(bot_id, &computer, screen.as_ref(), busy_bot_name);
     status.takeover_requested = waiting_for_takeover;
+    if busy.is_some() {
+        if let Some((run_id, _, thread_id)) = active {
+            status.busy_run_id = Some(run_id);
+            status.busy_session_id = Some(thread_id);
+        }
+    }
     Ok(status)
 }
 

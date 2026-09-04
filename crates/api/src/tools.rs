@@ -11,6 +11,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::db::Actor;
+use crate::mcp::McpHub;
 use crate::memory::{CreateMemoryInput, MemoryService};
 
 pub struct ToolCtx {
@@ -29,6 +30,7 @@ pub struct ToolCtx {
     pub session_id: String,
     pub run_id: String,
     pub memory_enabled: bool,
+    pub mcp: McpHub,
 }
 
 pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
@@ -192,6 +194,10 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
                 pause: true,
             }
         }
+        other if other.starts_with("mcp_") => match ctx.mcp.call(other, args).await {
+            Ok(text) => text_outcome(text),
+            Err(error) => text_outcome(format!("MCP 工具失敗：{error}")),
+        },
         other => ToolOutcome {
             text: format!("unknown tool {other}"),
             image: None,

@@ -184,6 +184,8 @@ pub struct ComputerStatus {
     pub screen_height: u32,
     pub home_revision: Option<String>,
     pub busy_bot_name: Option<String>,
+    pub busy_session_id: Option<String>,
+    pub busy_run_id: Option<String>,
     pub multi_screen: bool,
     pub screen_id: Option<String>,
     pub display: Option<String>,
