@@ -5,7 +5,8 @@ use lazyboy_contracts::{
 };
 use lazyboy_control::{
     ActionError, ActionRequest, AdapterContext, CdpPage, CommandRequest, ComputerRef,
-    SandboxProvider, apply_element_targets, cdp_command_on, format_ui_elements, frames_match,
+    SandboxProvider, apply_element_targets, cdp_command_on, element_id, format_ui_elements,
+    frames_match,
     merge_page_elements, overlay_elements, parse_cdp_page, parse_computer_actions,
     resolve_bot_workspace_cwd, resolve_bot_workspace_path,
 };
@@ -146,9 +147,23 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "wait".into(),
+            description: "Wait for the screen to change on its own (video playing, page loading, a button that enables later), then return a fresh observation. seconds: 1-60.".into(),
+            parameters: json!({
+                "type":"object",
+                "properties":{"seconds":{"type":"number","minimum":1,"maximum":60},"reason":{"type":"string"}},
+                "required":["seconds"]
+            }),
+        },
+        ToolDefinition {
             name: "request_takeover".into(),
             description: "Ask the user to take over for passwords, 2FA, CAPTCHA, login walls, or when the right on-screen control cannot be found. Never ask them to paste secrets in chat.".into(),
             parameters: json!({"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}),
+        },
+        ToolDefinition {
+            name: "use_skill".into(),
+            description: "Load the playbook of a skill the human taught this bot by demonstration (see 'Taught skills' in your instructions). Returns intent, inputs and semantic steps to follow with the normal tools.".into(),
+            parameters: json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
         },
     ];
     if memory_enabled {
@@ -198,6 +213,7 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
     match name {
         "computer_observe" => observe(ctx).await,
         "computer_act" => act(ctx, args).await,
+        "wait" => wait_then_observe(ctx, args).await,
         "browser" => browser(ctx, args).await,
         "shell" => shell(ctx, args).await,
         "list_files" => list_files(ctx, args).await,
@@ -218,6 +234,25 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
                     .to_string(),
                 image: None,
                 pause: true,
+            }
+        }
+        "use_skill" => {
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("");
+            let skills = crate::skills::saved_skills(&ctx.pool, &ctx.bot_id).await;
+            match crate::skills::find_skill(&skills, name) {
+                Some(skill) => text_outcome(crate::skills::format_playbook_for_run(skill)),
+                None => text_outcome(format!(
+                    "no taught skill named {name:?}. Available: {}",
+                    if skills.is_empty() {
+                        "none".to_string()
+                    } else {
+                        skills
+                            .iter()
+                            .map(|skill| skill.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                )),
             }
         }
         other if other.starts_with("mcp_") => match ctx.mcp.call(other, args).await {
@@ -368,6 +403,29 @@ async fn observe(ctx: &ToolCtx) -> ToolOutcome {
     }
 }
 
+/// Bounded so it always fits inside the 90s per-tool budget with an observe.
+const MAX_WAIT_SECS: f64 = 60.0;
+
+async fn wait_then_observe(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    let seconds = args
+        .get("seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(5.0)
+        .clamp(1.0, MAX_WAIT_SECS);
+    tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
+    if vision_guard(ctx).is_some() {
+        return text_outcome(format!("waited {seconds:.0}s"));
+    }
+    match ctx.sandbox.observe(&ctx.computer, &ctx.context).await {
+        Ok(observation) => {
+            let note = format!("waited {seconds:.0}s");
+            let (observation, note) = attach_page_elements(ctx, observation, &note).await;
+            pack_observation(ctx, &note, observation)
+        }
+        Err(error) => text_outcome(format!("waited {seconds:.0}s; observe failed: {error}")),
+    }
+}
+
 async fn attach_page_elements(
     ctx: &ToolCtx,
     mut observation: ComputerObservation,
@@ -443,7 +501,7 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         }
     }
     if request.get("selector").and_then(Value::as_str).is_none() {
-        if let Some(id) = args.get("element").and_then(Value::as_u64) {
+        if let Some(id) = element_id(args.get("element").or_else(|| args.get("id"))) {
             let elements = ctx.elements.lock().unwrap().clone();
             match elements
                 .iter()
@@ -459,9 +517,24 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         }
     }
     if matches!(action, "click") && request.get("selector").and_then(Value::as_str).is_none() {
-        return text_outcome(
-            "browser click needs element id or selector. Call browser snapshot first.",
-        );
+        let known: Vec<String> = ctx
+            .elements
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|element| element.selector.is_some())
+            .map(|element| format!("[{}] {}", element.id, element.title))
+            .take(12)
+            .collect();
+        return text_outcome(format!(
+            "browser click needs {{\"action\":\"click\",\"element\":N}} with a number from the last snapshot, or a CSS selector. You sent: {}. Known elements: {}",
+            serde_json::to_string(args).unwrap_or_default(),
+            if known.is_empty() {
+                "none yet, call browser snapshot first".to_string()
+            } else {
+                known.join(", ")
+            }
+        ));
     }
     let page = cdp_call(ctx, request).await;
     if !page.ok {
@@ -526,7 +599,7 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                 if kind != "click" {
                     continue;
                 }
-                let Some(id) = item.get("element").and_then(Value::as_u64) else {
+                let Some(id) = element_id(item.get("element")) else {
                     continue;
                 };
                 let Some(selector) = elements
@@ -568,7 +641,7 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             ActionRequest {
                 actions,
                 observe: args.get("observe").and_then(Value::as_bool) != Some(false),
-                settle_ms: args.get("settle_ms").and_then(Value::as_u64).unwrap_or(120) as u32,
+                settle_ms: args.get("settle_ms").and_then(Value::as_u64).unwrap_or(350) as u32,
                 display: ctx.context.display.clone(),
                 profile_path: ctx.context.profile_path.clone(),
             },
@@ -613,18 +686,22 @@ fn action_is_click(action: &ComputerAction) -> bool {
     )
 }
 
-fn pause_unknown_element(ctx: &ToolCtx, id: u32, elements: &[UiElement]) -> ToolOutcome {
-    *ctx.takeover_requested.lock().unwrap() = true;
+/// A stale element id is the model's mistake, not a reason to park the run
+/// on the human: tell it what is visible now and let it re-observe.
+fn pause_unknown_element(_ctx: &ToolCtx, id: u32, elements: &[UiElement]) -> ToolOutcome {
     ToolOutcome {
         text: format!(
-            "找不到畫面上的元素 {id}。目前可見：{}。請接手操作，完成後釋放控制權，我會從目前畫面繼續。",
+            "element {id} is not on screen any more. Visible now: {}. Call browser snapshot or computer_observe to get fresh ids, then retry.",
             format_ui_elements(elements)
         ),
         image: None,
-        pause: true,
+        pause: false,
     }
 }
 
+/// Clicks that change nothing are common and usually recoverable (disabled
+/// button, video still playing, slightly off target). Coach the model instead
+/// of pausing; it can still call request_takeover when it is truly stuck.
 fn note_click_result(ctx: &ToolCtx, had_click: bool, unchanged: bool, outcome: &mut ToolOutcome) {
     if !had_click {
         return;
@@ -634,10 +711,8 @@ fn note_click_result(ctx: &ToolCtx, had_click: bool, unchanged: bool, outcome: &
         *streak += 1;
         *ctx.click_misses.lock().unwrap() += 1;
         if *streak >= 2 {
-            *ctx.takeover_requested.lock().unwrap() = true;
-            outcome.pause = true;
             outcome.text.push_str(
-                "\n連續兩次點擊後畫面沒有變化。請接手確認，完成後釋放控制權，我會從目前畫面繼續。",
+                "\nThe last clicks changed nothing. Do not repeat the same click. Options: the control may be disabled until a video/loading finishes (use wait, then re-observe); the target may be off (use browser snapshot and click by element id, or pick coordinates from a fresh computer_observe); if the page needs login, CAPTCHA or a human decision, call request_takeover.",
             );
         }
     } else {

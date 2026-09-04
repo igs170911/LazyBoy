@@ -126,15 +126,26 @@ async fn update_settings(
     if provider.requires_base_url() && base_url.is_none() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let api_key = if input.clear_api_key {
+    let current = state
+        .db
+        .get_space(&actor)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let provider_changed = current
+        .as_ref()
+        .is_some_and(|space| space.default_model_provider != provider.as_str());
+    let supplied = input
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    // A stored key belongs to the provider it was entered for. Carrying it
+    // over to a new provider shadows the env key and every run fails with
+    // "Incorrect API key", so drop it unless a new one is supplied.
+    let api_key = if input.clear_api_key || (provider_changed && supplied.is_none()) {
         Some(None)
     } else {
-        input
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(Some)
+        supplied.map(Some)
     };
     state
         .db

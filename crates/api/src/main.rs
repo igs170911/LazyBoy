@@ -9,6 +9,7 @@ mod routes;
 mod runs;
 mod screen_proxy;
 mod sessions;
+mod skills;
 mod state;
 mod tools;
 mod workspace;

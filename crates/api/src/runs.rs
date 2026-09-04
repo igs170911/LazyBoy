@@ -20,7 +20,7 @@ use crate::tools::{ToolCtx, dispatch, tool_definitions};
 
 const SCREENSHOT_CAPTION: &str = "Desktop screenshot (1280x800) with yellow numbered marks. Click by those element ids. The live VNC view has no marks.";
 
-const SYSTEM: &str = "You operate this bot's Linux desktop. The human always sees the live screen. You do not need a screenshot for every step.
+const SYSTEM: &str = "You operate this bot's Linux desktop. The human watches the same live screen you act on. Only the latest screenshot you received is current; the human may have interacted with the screen since, so call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
 
 Prefer the fast path, in this order:
 1) shell, list_files, read_file, write_file
@@ -32,7 +32,11 @@ Prefer the fast path, in this order:
 When you use the browser tool:
 - snapshot first; click {\"action\":\"click\",\"element\":N}; type {\"action\":\"type\",\"element\":N,\"text\":\"...\"}; open a URL with navigate.
 - Yellow numbered marks on the screenshot match the element list. Click the number, not guessed pixels.
-- If the control is not in the element list, login/2FA/CAPTCHA, or clicks do nothing, call request_takeover and stop. Do not guess-click.
+- If the control is not in the element list, take a fresh snapshot or scroll; it may be off-screen or not rendered yet.
+
+When a click changes nothing: do not repeat it. A button is often disabled until a video, timer or page load finishes; call wait (up to 60s) and re-observe, then click by element id. Pages that need patience (training videos, quizzes, slow forms) are normal: keep working through them step by step and report progress in one short sentence when done.
+
+Call request_takeover only for passwords, 2FA, CAPTCHA, payment, or a decision only the human can make. Never call it just because a click missed. When you do call it, say exactly what the human must do.
 
 computer_act examples (native windows only):
 - {\"kind\":\"click\",\"element\":1}
@@ -40,6 +44,7 @@ computer_act examples (native windows only):
 - {\"kind\":\"type\",\"text\":\"...\"}
 - {\"kind\":\"key\",\"key\":\"Return\"}
 - {\"kind\":\"focus\",\"title\":\"Open File\"}
+- wait: {\"seconds\":30,\"reason\":\"video playing\"}
 
 On a Team Computer, relative files live in your bot folder; use shared/ for shared work. Finish the user's task.";
 
@@ -52,6 +57,12 @@ pub async fn send(
     client_nonce: Option<&str>,
     blocks: &[Value],
 ) -> Result<Value, String> {
+    if crate::skills::recording_skill(state.pool(), bot_id)
+        .await
+        .is_some()
+    {
+        return Err("示範進行中：先按「完成示範」或「取消」，再送訊息。".into());
+    }
     let mut tx = state
         .pool()
         .begin()
@@ -365,36 +376,8 @@ async fn execute_run(
         None
     };
 
-    let space = state
-        .db
-        .get_space(actor)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "workspace not found".to_string())?;
-    let provider = bot
-        .model_provider
-        .as_deref()
-        .or(Some(space.default_model_provider.as_str()))
-        .unwrap_or("xai")
-        .parse::<ModelProvider>()
-        .map_err(|error| error.to_string())?;
-    let model_id = bot
-        .model_id
-        .clone()
-        .filter(|value| !value.is_empty())
-        .or_else(|| Some(space.default_model_id.clone()).filter(|value| !value.is_empty()));
-    let backend = resolve_backend(ResolveModelRequest {
-        provider,
-        model_id,
-        base_url: space.default_model_base_url.clone(),
-        credentials: CredentialChain {
-            bot: None,
-            space: space.default_model_api_key.clone(),
-            env: lazyboy_harness::credential_from_env(provider),
-        },
-    })
-    .map_err(|error| error.to_string())?;
-    let model = connect_model(&backend).map_err(|error| error.to_string())?;
+    let (model, vision) = bot_model(state, actor, &bot).await?;
+    let skills = crate::skills::saved_skills(state.pool(), bot_id).await;
 
     let ctx = Arc::new(ToolCtx {
         sandbox: state.sandbox.clone(),
@@ -402,7 +385,7 @@ async fn execute_run(
         context: adapter_context_for(actor, bot_id, "run", screen.as_ref(), Some(run_id)),
         mode: parse_mode(&computer.scope),
         bot_id: bot_id.to_string(),
-        vision: backend.capabilities.vision,
+        vision,
         gui_block,
         previous_frame: std::sync::Mutex::new(None),
         elements: std::sync::Mutex::new(Vec::new()),
@@ -507,6 +490,13 @@ async fn execute_run(
     } else {
         vec![UserContent::text(prompt)]
     };
+    if !resume_after_takeover {
+        // The user named a taught skill: hand the model the full playbook up
+        // front so it does not have to guess or call use_skill first.
+        if let Some(skill) = crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await {
+            first.push(UserContent::text(crate::skills::format_playbook_for_run(&skill)));
+        }
+    }
     let mut screenshots: u32 = 0;
     let mut screenshot_bytes: u64 = 0;
     if resume_after_takeover && ctx.gui_block.is_none() {
@@ -579,8 +569,12 @@ async fn execute_run(
         preamble.push_str("\n\n");
         preamble.push_str(&memory);
     }
+    if let Some(index) = crate::skills::skills_preamble(&skills) {
+        preamble.push_str("\n\n");
+        preamble.push_str(&index);
+    }
 
-    for _ in 0..24 {
+    for _ in 0..40 {
         turns += 1;
         if let Some(halt) = renew_or_halt(state, run_id, lease_owner).await? {
             return finish_halt(
@@ -596,7 +590,9 @@ async fn execute_run(
             )
             .await;
         }
-        drop_history_screenshots(&mut history);
+        drop_history_screenshots(&mut history, &pending);
+        set_run_step(state, run_id, MODEL_STEP).await;
+        let model_started = std::time::Instant::now();
         let content = tokio::select! {
             halt = wait_for_halt(state, run_id) => {
                 return finish_halt(
@@ -629,6 +625,13 @@ async fn execute_run(
                 _ => {}
             }
         }
+        tracing::info!(
+            run_id,
+            turn = turns,
+            elapsed_ms = model_started.elapsed().as_millis() as u64,
+            tool_calls = calls.len(),
+            "model turn"
+        );
         if calls.is_empty() {
             break;
         }
@@ -653,8 +656,11 @@ async fn execute_run(
             let name = call.function.name.clone();
             used_gui |= matches!(
                 name.as_str(),
-                "computer_observe" | "computer_act" | "open_path" | "launch_app" | "browser"
+                "computer_observe" | "computer_act" | "open_path" | "launch_app" | "browser" | "wait"
             );
+            let step = describe_step(&name, &call.function.arguments);
+            set_run_step(state, run_id, &step).await;
+            let tool_started = std::time::Instant::now();
             let outcome = tokio::select! {
                 halt = wait_for_halt(state, run_id) => {
                     return finish_halt(
@@ -682,6 +688,17 @@ async fn execute_run(
                     },
                 }
             };
+            tracing::info!(
+                run_id,
+                turn = turns,
+                step = %step,
+                elapsed_ms = tool_started.elapsed().as_millis() as u64,
+                result_chars = outcome.text.chars().count(),
+                screenshot = outcome.image.is_some(),
+                pause = outcome.pause,
+                result = %outcome.text.chars().take(160).collect::<String>().replace('\n', " "),
+                "tool call"
+            );
             // xAI rejects images inside tool results. Attach a changed
             // screenshot as a following user image instead.
             if let Some(image) = outcome.image {
@@ -792,7 +809,47 @@ async fn execute_run(
     Ok(())
 }
 
-async fn complete_once(
+/// Resolve the model a bot runs on (bot override → workspace default → env
+/// credentials). Returns the connected model and whether it accepts images.
+pub(crate) async fn bot_model(
+    state: &AppState,
+    actor: &Actor,
+    bot: &crate::db::BotRow,
+) -> Result<(DynModel, bool), String> {
+    let space = state
+        .db
+        .get_space(actor)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "workspace not found".to_string())?;
+    let provider = bot
+        .model_provider
+        .as_deref()
+        .or(Some(space.default_model_provider.as_str()))
+        .unwrap_or("xai")
+        .parse::<ModelProvider>()
+        .map_err(|error| error.to_string())?;
+    let model_id = bot
+        .model_id
+        .clone()
+        .filter(|value| !value.is_empty())
+        .or_else(|| Some(space.default_model_id.clone()).filter(|value| !value.is_empty()));
+    let backend = resolve_backend(ResolveModelRequest {
+        provider,
+        model_id,
+        base_url: space.default_model_base_url.clone(),
+        credentials: CredentialChain {
+            bot: None,
+            space: space.default_model_api_key.clone(),
+            env: lazyboy_harness::credential_from_env(provider),
+        },
+    })
+    .map_err(|error| error.to_string())?;
+    let model = connect_model(&backend).map_err(|error| error.to_string())?;
+    Ok((model, backend.capabilities.vision))
+}
+
+pub(crate) async fn complete_once(
     model: &DynModel,
     pending: Message,
     preamble: &str,
@@ -848,14 +905,38 @@ fn screenshot_parts(image: Vec<u8>) -> Vec<UserContent> {
         ImageMediaType::PNG
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(image);
+    // `Low` makes OpenAI-compatible backends downscale the 1280x800 frame to
+    // ~512px before the model sees it: small text vanishes and coordinate
+    // clicks land 2-3x off. Coordinates only work at native resolution.
     vec![
         UserContent::text(SCREENSHOT_CAPTION),
-        UserContent::image_base64(encoded, Some(media), Some(ImageDetail::Low)),
+        UserContent::image_base64(encoded, Some(media), Some(ImageDetail::High)),
     ]
 }
 
-fn drop_history_screenshots(history: &mut [Message]) {
-    for message in history.iter_mut() {
+fn has_screenshot(message: &Message) -> bool {
+    match message {
+        Message::User { content } => content
+            .iter()
+            .any(|part| matches!(part, UserContent::Image(_))),
+        _ => false,
+    }
+}
+
+/// Keep exactly one screenshot in the model's context: the one in `pending`
+/// if it carries a fresh frame, otherwise the most recent one already in
+/// history. Without the fallback a "(screen unchanged)" turn would leave the
+/// model with no picture of the desktop at all.
+fn drop_history_screenshots(history: &mut [Message], pending: &Message) {
+    let keep = if has_screenshot(pending) {
+        None
+    } else {
+        history.iter().rposition(has_screenshot)
+    };
+    for (index, message) in history.iter_mut().enumerate() {
+        if keep == Some(index) {
+            continue;
+        }
         let Message::User { content } = message else {
             continue;
         };
@@ -865,6 +946,33 @@ fn drop_history_screenshots(history: &mut [Message]) {
             _ => true,
         });
     }
+}
+
+/// Cancel every unfinished run of a bot and free the screen/execution leases
+/// it held, so the desktop is available to a human immediately.
+pub(crate) async fn cancel_active_runs(state: &AppState, bot_id: &str) -> Result<Vec<String>, String> {
+    let run_ids: Vec<String> = sqlx::query_scalar(
+        "UPDATE runs SET status = 'cancelled', completed_at = now(), updated_at = now()
+         WHERE bot_id = $1 AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
+         RETURNING id",
+    )
+    .bind(bot_id)
+    .fetch_all(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    for run_id in &run_ids {
+        computer::release_screen_execution(state, run_id).await?;
+    }
+    sqlx::query(
+        "UPDATE computers SET execution_bot_id = NULL, execution_run_id = NULL,
+                execution_lease_expires_at = NULL, updated_at = now()
+         WHERE execution_bot_id = $1",
+    )
+    .bind(bot_id)
+    .execute(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(run_ids)
 }
 
 pub(crate) async fn append_bot_message(
@@ -1025,6 +1133,94 @@ fn history_window_start(summary_seq: i32, current_seq: i32) -> i32 {
     summary_seq.min(current_seq.saturating_sub(1)).max(0)
 }
 
+const MODEL_STEP: &str = "思考中";
+
+/// Human-readable label for what the run is doing right now. Surfaced through
+/// `computer.status` so the chat can show "working: browser click" instead of a
+/// bare spinner while a tool runs.
+fn describe_step(name: &str, args: &Value) -> String {
+    fn short(value: Option<&str>, max: usize) -> String {
+        let text = value.unwrap_or("").replace('\n', " ");
+        if text.chars().count() > max {
+            format!("{}…", text.chars().take(max).collect::<String>())
+        } else {
+            text
+        }
+    }
+    let get = |key: &str| args.get(key).and_then(Value::as_str);
+    let detail = match name {
+        "computer_observe" => "看畫面".to_string(),
+        "computer_act" => args
+            .get("actions")
+            .and_then(Value::as_array)
+            .map(|actions| {
+                actions
+                    .iter()
+                    .take(4)
+                    .map(|action| {
+                        let field = |key: &str| action.get(key).and_then(Value::as_str);
+                        let kind = field("kind").or(field("type")).unwrap_or("?");
+                        let target = if let Some(text) = field("text").or(field("keys")) {
+                            short(Some(text), 24)
+                        } else if let Some(id) = lazyboy_control::element_id(action.get("element")) {
+                            format!("#{id}")
+                        } else if let (Some(x), Some(y)) = (
+                            action.get("x").and_then(Value::as_i64),
+                            action.get("y").and_then(Value::as_i64),
+                        ) {
+                            format!("({x},{y})")
+                        } else {
+                            String::new()
+                        };
+                        format!("{kind} {target}").trim().to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default(),
+        "browser" => {
+            let target = get("url").or(get("text")).or(get("selector")).map(|s| short(Some(s), 40));
+            let target = target.or_else(|| lazyboy_control::element_id(args.get("element")).map(|id| format!("#{id}")));
+            format!("{} {}", get("action").unwrap_or("snapshot"), target.unwrap_or_default())
+                .trim()
+                .to_string()
+        }
+        "shell" => short(get("command").or(get("cmd")), 60),
+        "wait" => format!(
+            "{}s {}",
+            args.get("seconds").and_then(Value::as_f64).unwrap_or(0.0).round(),
+            short(get("reason"), 30)
+        )
+        .trim()
+        .to_string(),
+        "launch_app" | "open_path" => short(get("app").or(get("path")), 40),
+        "read_file" | "write_file" | "list_dir" => short(get("path"), 40),
+        "use_skill" => format!("讀取技能 {}", short(get("name"), 30)),
+        _ => String::new(),
+    };
+    if detail.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}: {detail}")
+    }
+}
+
+async fn set_run_step(state: &AppState, run_id: &str, step: &str) {
+    let result = sqlx::query(
+        "UPDATE runs SET checkpoint = COALESCE(checkpoint, '{}'::jsonb)
+                || jsonb_build_object('step', $2::text, 'stepAt', now()),
+                updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(step)
+    .execute(state.pool())
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(run_id, "failed to record run step: {error}");
+    }
+}
+
 async fn record_run_metrics(
     state: &AppState,
     thread_id: &str,
@@ -1062,9 +1258,32 @@ async fn record_run_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        RunHalt, halt_from_status, history_window_start, retryable_run_error, screenshot_parts,
+        RunHalt, SCREENSHOT_CAPTION, describe_step, drop_history_screenshots, halt_from_status,
+        history_window_start, retryable_run_error, screenshot_parts,
     };
-    use rig_core::completion::message::UserContent;
+    use rig_core::completion::message::{Message, UserContent};
+    use serde_json::json;
+
+    #[test]
+    fn step_labels_summarize_tool_arguments() {
+        assert_eq!(describe_step("computer_observe", &json!({})), "computer_observe: 看畫面");
+        assert_eq!(
+            describe_step(
+                "computer_act",
+                &json!({"actions":[{"kind":"click","x":10,"y":20},{"kind":"type","text":"hello world"}]})
+            ),
+            "computer_act: click (10,20), type hello world"
+        );
+        assert_eq!(
+            describe_step("browser", &json!({"action":"click","element":12})),
+            "browser: click #12"
+        );
+        assert_eq!(
+            describe_step("shell", &json!({"command":"ls\n-la"})),
+            "shell: ls -la"
+        );
+        assert_eq!(describe_step("mcp_search", &json!({"query":"x"})), "mcp_search");
+    }
 
     #[test]
     fn history_never_reads_past_the_current_prompt() {
@@ -1079,6 +1298,60 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert!(matches!(parts[0], UserContent::Text(_)));
         assert!(matches!(parts[1], UserContent::Image(_)));
+    }
+
+    fn user_with_shot(label: &str, byte: u8) -> Message {
+        let mut content = vec![UserContent::text(label)];
+        content.extend(screenshot_parts(vec![0xFF, 0xD8, 0xFF, byte]));
+        Message::User { content }
+    }
+
+    fn image_count(history: &[Message]) -> usize {
+        history
+            .iter()
+            .filter_map(|message| match message {
+                Message::User { content } => Some(content),
+                _ => None,
+            })
+            .flatten()
+            .filter(|part| matches!(part, UserContent::Image(_)))
+            .count()
+    }
+
+    #[test]
+    fn history_keeps_latest_screenshot_when_new_turn_has_none() {
+        let mut history = vec![
+            user_with_shot("a", 1),
+            Message::Assistant {
+                id: None,
+                content: vec![],
+            },
+            user_with_shot("b", 2),
+        ];
+        let pending = Message::User {
+            content: vec![UserContent::text("(screen unchanged)")],
+        };
+        drop_history_screenshots(&mut history, &pending);
+        assert_eq!(image_count(&history), 1);
+        let Message::User { content } = &history[2] else {
+            panic!("expected user message");
+        };
+        assert!(content.iter().any(|part| matches!(part, UserContent::Image(_))));
+    }
+
+    #[test]
+    fn history_drops_every_screenshot_when_new_turn_has_one() {
+        let mut history = vec![user_with_shot("a", 1), user_with_shot("b", 2)];
+        let pending = user_with_shot("c", 3);
+        drop_history_screenshots(&mut history, &pending);
+        assert_eq!(image_count(&history), 0);
+        assert!(history.iter().all(|message| match message {
+            Message::User { content } => !content.iter().any(|part| matches!(
+                part,
+                UserContent::Text(text) if text.text == SCREENSHOT_CAPTION
+            )),
+            _ => true,
+        }));
     }
 
     #[test]

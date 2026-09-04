@@ -111,20 +111,28 @@ class Ws:
 def probe(port):
     return http_json("http://127.0.0.1:%s/json/version" % port) is not None
 
-def kill_profile(profile):
+def profile_alive(profile):
     if not profile:
-        return
+        return False
     try:
         out = subprocess.check_output(["pgrep", "-af", "chromium"], text=True, stderr=subprocess.DEVNULL)
     except Exception:
-        return
+        return False
     for line in out.splitlines():
-        if profile not in line or "--type=" in line:
-            continue
-        try:
-            os.kill(int(line.split()[0]), 15)
-        except Exception:
-            pass
+        if ("--user-data-dir=%s" % profile) in line and "--type=" not in line:
+            return True
+    return False
+
+def active_port(profile):
+    # Chromium writes the DevTools port it actually bound here. Trust it over
+    # our expected port so we attach to the window the human already sees.
+    if not profile:
+        return None
+    try:
+        with open(os.path.join(profile, "DevToolsActivePort")) as f:
+            return int(f.readline().strip())
+    except Exception:
+        return None
 
 def spawn_browser(display, profile, port):
     env = os.environ.copy()
@@ -144,8 +152,14 @@ def connect(port):
     pages = [t for t in tabs if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
     if not pages:
         fail("no browser tab")
+    # /json/list is ordered by last activity, so pages[0] is the tab the human
+    # is looking at. Bring it to the front anyway so what the model reads and
+    # clicks is always the tab shown on the live screen.
     pages.sort(key=lambda t: (t.get("url") or "").startswith("chrome://"), reverse=False)
-    ws = Ws(pages[0]["webSocketDebuggerUrl"])
+    page = pages[0]
+    if page.get("id"):
+        http_json("http://127.0.0.1:%s/json/activate/%s" % (port, page["id"]))
+    ws = Ws(page["webSocketDebuggerUrl"])
     ws.call("Runtime.enable")
     ws.call("Page.enable")
     return ws
@@ -279,6 +293,187 @@ def press(ws, key):
     ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "text": key[:1]})
     ws.call("Input.dispatchKeyEvent", {"type": "keyUp", "text": key[:1]})
 
+# Injected into every page while a human demonstrates a task. It reports what
+# the person did in terms of page semantics (which control, what text, which
+# URL) rather than pixels, so the distilled skill can generalise. Secrets are
+# masked before they leave the page.
+RECORD_JS = r"""
+(() => {
+  if (window.__lbTeachInstalled) return;
+  window.__lbTeachInstalled = true;
+  const send = (ev) => { try { ev.at = Date.now(); ev.url = location.href; window.__lbTeach(JSON.stringify(ev)); } catch (e) {} };
+  const clean = (s) => (s || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  const secretRe = /pass|pwd|secret|token|otp|cvv|card|pin\b/i;
+  const isSecret = (el) => !el ? false : (el.type === "password" || secretRe.test(el.name || "") || secretRe.test(el.id || "") || secretRe.test(el.autocomplete || "") || secretRe.test(el.getAttribute && el.getAttribute("aria-label") || ""));
+  const labelFor = (el) => {
+    if (!el) return "";
+    if (el.labels && el.labels.length) return clean(el.labels[0].innerText);
+    const id = el.id && document.querySelector('label[for="' + el.id + '"]');
+    if (id) return clean(id.innerText);
+    return clean(el.getAttribute("aria-label") || el.placeholder || el.title || el.name || "");
+  };
+  const describe = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    const tag = el.tagName.toLowerCase();
+    const d = { tag, role: el.getAttribute("role") || "", text: clean(el.innerText || el.value || el.alt || el.getAttribute("aria-label") || el.title || el.placeholder || ""), label: labelFor(el) };
+    if (el.id) d.id = el.id;
+    if (el.name) d.name = el.name;
+    if (tag === "a" && el.href) d.href = el.href.slice(0, 200);
+    if (tag === "input") d.type = el.type || "text";
+    return d;
+  };
+  const actionable = (node) => {
+    let el = node;
+    for (let i = 0; el && i < 6; i++) {
+      if (el.nodeType === 1) {
+        const t = el.tagName.toLowerCase();
+        if (["a","button","input","select","textarea","summary","label","option"].includes(t) || el.getAttribute("role") || el.onclick || el.getAttribute("tabindex") !== null || el.isContentEditable) return el;
+      }
+      el = el.parentNode;
+    }
+    return node && node.nodeType === 1 ? node : null;
+  };
+  send({ t: "page", title: document.title });
+  document.addEventListener("click", (e) => {
+    const el = actionable(e.target);
+    const d = describe(el);
+    if (d) send({ t: "click", el: d, x: Math.round(e.clientX), y: Math.round(e.clientY) });
+  }, true);
+  const pending = new Map();
+  const flush = (el) => {
+    pending.delete(el);
+    const d = describe(el);
+    if (!d) return;
+    let value = el.isContentEditable ? el.innerText : (el.value || "");
+    if (el.tagName === "SELECT" && el.selectedOptions && el.selectedOptions[0]) value = el.selectedOptions[0].text;
+    if (el.type === "checkbox" || el.type === "radio") value = el.checked ? "checked" : "unchecked";
+    send({ t: "input", el: d, value: isSecret(el) ? "[redacted]" : clean(value) });
+  };
+  document.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!el || !(el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    clearTimeout(pending.get(el));
+    pending.set(el, setTimeout(() => flush(el), 900));
+  }, true);
+  document.addEventListener("change", (e) => { const el = e.target; if (el && el.nodeType === 1) { clearTimeout(pending.get(el)); flush(el); } }, true);
+  document.addEventListener("keydown", (e) => {
+    const special = ["Enter","Escape","Tab"].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey;
+    if (!special || e.key === "Control" || e.key === "Meta" || e.key === "Alt" || e.key === "Shift") return;
+    const el = document.activeElement;
+    if (el && pending.has(el)) { clearTimeout(pending.get(el)); flush(el); }
+    const combo = [e.ctrlKey ? "Ctrl" : "", e.metaKey ? "Meta" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.key].filter(Boolean).join("+");
+    send({ t: "key", key: combo, el: describe(el) });
+  }, true);
+  document.addEventListener("submit", (e) => { const f = e.target; send({ t: "submit", form: { action: (f && f.action || "").slice(0, 200), name: f && (f.name || f.id) || "" } }); }, true);
+  let lastScroll = 0;
+  window.addEventListener("scroll", () => { const now = Date.now(); if (now - lastScroll > 2000) { lastScroll = now; send({ t: "scroll", y: Math.round(window.scrollY) }); } }, true);
+})()
+"""
+
+class Recorder:
+    """Browser-level CDP session with flattened page sessions. Events from
+    every tab are appended to a JSONL file until the process is killed."""
+
+    def __init__(self, port, out):
+        info = http_json("http://127.0.0.1:%s/json/version" % port) or {}
+        url = info.get("webSocketDebuggerUrl")
+        if not url:
+            raise RuntimeError("browser has no DevTools endpoint")
+        self.ws = Ws(url)
+        self.out = open(out, "a", buffering=1)
+        self.sessions = {}
+        self.pending = []
+        self.last = (None, 0)
+
+    def emit(self, ev):
+        ev.setdefault("at", int(time.time() * 1000))
+        # Two sessions on one page (auto-attach + explicit) deliver the same
+        # binding call twice; a key repeat is never that fast either.
+        key = json.dumps({k: v for k, v in ev.items() if k != "at"}, sort_keys=True)
+        if key == self.last[0] and ev["at"] - self.last[1] < 800:
+            return
+        self.last = (key, ev["at"])
+        self.out.write(json.dumps(ev, ensure_ascii=False) + "\n")
+
+    def call(self, method, params=None, session=None):
+        self.ws.n += 1
+        msg = {"id": self.ws.n, "method": method}
+        if params:
+            msg["params"] = params
+        if session:
+            msg["sessionId"] = session
+        self.ws.sock.sendall(self.ws._frame(json.dumps(msg).encode()))
+        while True:
+            obj = self.ws.recv_json()
+            if obj.get("id") == self.ws.n:
+                if "error" in obj:
+                    raise RuntimeError(str(obj["error"]))
+                return obj.get("result") or {}
+            self.pending.append(obj)
+
+    def attach(self, session, target):
+        if target.get("type") != "page" or not session:
+            return
+        target_id = target.get("targetId")
+        if session in self.sessions:
+            return
+        if target_id in self.sessions.values():
+            try:
+                self.call("Target.detachFromTarget", {"sessionId": session})
+            except Exception:
+                pass
+            return
+        self.sessions[session] = target_id
+        for method, params in (
+            ("Runtime.enable", None),
+            ("Page.enable", None),
+            ("Runtime.addBinding", {"name": "__lbTeach"}),
+            ("Page.addScriptToEvaluateOnNewDocument", {"source": RECORD_JS}),
+            ("Runtime.evaluate", {"expression": RECORD_JS}),
+        ):
+            try:
+                self.call(method, params, session)
+            except Exception:
+                pass
+
+    def handle(self, obj):
+        method = obj.get("method")
+        params = obj.get("params") or {}
+        if method == "Target.attachedToTarget":
+            self.attach(params.get("sessionId"), params.get("targetInfo") or {})
+        elif method == "Target.detachedFromTarget":
+            self.sessions.pop(params.get("sessionId"), None)
+        elif method == "Runtime.bindingCalled" and params.get("name") == "__lbTeach":
+            try:
+                self.emit(json.loads(params.get("payload") or "{}"))
+            except Exception:
+                pass
+        elif method == "Page.frameNavigated":
+            frame = params.get("frame") or {}
+            if not frame.get("parentId"):
+                self.emit({"t": "navigate", "url": frame.get("url") or ""})
+        elif method == "Target.targetInfoChanged":
+            info = params.get("targetInfo") or {}
+            if info.get("type") == "page" and info.get("title"):
+                self.emit({"t": "title", "url": info.get("url") or "", "title": info.get("title")})
+
+    def run(self):
+        self.ws.sock.settimeout(None)
+        self.call("Target.setDiscoverTargets", {"discover": True})
+        self.call("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
+        for target in (self.call("Target.getTargets") or {}).get("targetInfos", []):
+            if target.get("type") == "page":
+                try:
+                    result = self.call("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})
+                    self.attach(result.get("sessionId"), target)
+                except Exception:
+                    pass
+        self.emit({"t": "recorder", "state": "started"})
+        while True:
+            while self.pending:
+                self.handle(self.pending.pop(0))
+            self.handle(self.ws.recv_json())
+
 def main():
     req = json.loads(sys.argv[1])
     action = req.get("action") or "snapshot"
@@ -291,11 +486,32 @@ def main():
         print(json.dumps({"ok": probe(port)}))
         return
 
-    if not probe(port):
+    def bound_port():
+        if probe(port):
+            return port
+        bound = active_port(profile)
+        if bound and bound != port and probe(bound):
+            return bound
+        return None
+
+    restarted = False
+    ready_port = bound_port()
+    if ready_port is None and profile_alive(profile):
+        # The window may still be booting (lazyboy-screen just spawned it).
+        for _ in range(12):
+            time.sleep(0.25)
+            ready_port = bound_port()
+            if ready_port is not None:
+                break
+    if ready_port is not None:
+        port = ready_port
+    else:
+        if profile_alive(profile):
+            # Never kill the window the human is watching. Fall back to the
+            # screenshot tools, which see exactly what the live screen shows.
+            fail("browser is open but has no DevTools; use computer_observe/computer_act on it instead. Do not restart the browser.")
         if not ensure:
             fail("cdp unavailable")
-        kill_profile(profile)
-        time.sleep(0.4)
         spawn_browser(display, profile, port)
         ready = False
         for _ in range(24):
@@ -306,11 +522,15 @@ def main():
         if not ready:
             fail("cdp unavailable")
         restarted = True
-    else:
-        restarted = False
 
     if action == "ensure":
         print(json.dumps({"ok": True, "restarted": restarted}))
+        return
+
+    if action == "record":
+        # Long-running: the API starts this detached and kills it on stop.
+        out = req.get("out") or "/tmp/lazyboy-teach.jsonl"
+        Recorder(port, out).run()
         return
 
     ws = connect(port)

@@ -22,6 +22,23 @@ pub enum ActionError {
     UnknownElement(u32),
 }
 
+/// Models write element ids as `3`, `3.0`, `"3"` or `"[3]"`; accept them all
+/// instead of failing the click.
+pub fn element_id(value: Option<&Value>) -> Option<u64> {
+    match value? {
+        Value::Number(number) => number
+            .as_u64()
+            .or_else(|| number.as_f64().filter(|f| *f >= 0.0).map(|f| f.round() as u64)),
+        Value::String(text) => text
+            .trim()
+            .trim_start_matches(['#', '['])
+            .trim_end_matches(']')
+            .parse()
+            .ok(),
+        _ => None,
+    }
+}
+
 /// Fill x/y from a numbered on-screen element so the model can click by id.
 pub fn apply_element_targets(value: &mut Value, elements: &[UiElement]) -> Result<(), ActionError> {
     let Some(items) = value.as_array_mut() else {
@@ -31,7 +48,7 @@ pub fn apply_element_targets(value: &mut Value, elements: &[UiElement]) -> Resul
         let Some(action) = raw.as_object_mut() else {
             continue;
         };
-        let Some(id) = action.get("element").and_then(Value::as_u64) else {
+        let Some(id) = element_id(action.get("element")) else {
             continue;
         };
         let Some(element) = elements.iter().find(|element| u64::from(element.id) == id) else {
@@ -245,6 +262,18 @@ fn bounded(value: Option<&Value>, min: u32, max: u32, fallback: u32) -> u32 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn element_ids_accept_common_model_spellings() {
+        assert_eq!(element_id(Some(&json!(3))), Some(3));
+        assert_eq!(element_id(Some(&json!(3.0))), Some(3));
+        assert_eq!(element_id(Some(&json!("3"))), Some(3));
+        assert_eq!(element_id(Some(&json!("#12"))), Some(12));
+        assert_eq!(element_id(Some(&json!("[7]"))), Some(7));
+        assert_eq!(element_id(Some(&json!("Learn more"))), None);
+        assert_eq!(element_id(Some(&json!(-1))), None);
+        assert_eq!(element_id(None), None);
+    }
 
     #[test]
     fn parses_click_and_double_click() {

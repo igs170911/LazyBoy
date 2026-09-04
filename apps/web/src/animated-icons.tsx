@@ -1,6 +1,8 @@
 import UseAnimations from "react-useanimations";
 import type { Animation } from "react-useanimations/utils";
 import activity from "react-useanimations/lib/activity";
+import archive from "react-useanimations/lib/archive";
+import star from "react-useanimations/lib/star";
 import airplay from "react-useanimations/lib/airplay";
 import arrowDown from "react-useanimations/lib/arrowDown";
 import arrowRightCircle from "react-useanimations/lib/arrowRightCircle";
@@ -45,7 +47,9 @@ export const Ellipsis=animatedIcon(menu3,18);
 export const Info=animatedIcon(info,16);
 export const LogOut=animatedIcon(arrowRightCircle,16);
 export const Megaphone=animatedIcon(notification,16);
+export const Paperclip=animatedIcon(archive,16);
 export const Pin=animatedIcon(pocket,14);
+export const Sparkle=animatedIcon(star,16);
 export const Plug=animatedIcon(toggle,16);
 export const Plus=animatedIcon(plusToX,17);
 export const RefreshCw=animatedIcon(skipBack,14);

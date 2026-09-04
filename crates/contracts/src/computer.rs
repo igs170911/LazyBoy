@@ -186,6 +186,17 @@ pub struct ComputerStatus {
     pub busy_bot_name: Option<String>,
     pub busy_session_id: Option<String>,
     pub busy_run_id: Option<String>,
+    /// What the active run is doing right now ("思考中", "browser: click #12"…).
+    #[serde(default)]
+    pub busy_step: Option<String>,
+    /// Run paused in `waiting_takeover` (bot asked for, or user forced, control).
+    #[serde(default)]
+    pub waiting_run_id: Option<String>,
+    #[serde(default)]
+    pub waiting_session_id: Option<String>,
+    /// Messages queued behind the active/paused run for this bot.
+    #[serde(default)]
+    pub queued_runs: u32,
     pub multi_screen: bool,
     pub screen_id: Option<String>,
     pub display: Option<String>,

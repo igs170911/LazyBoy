@@ -8,7 +8,12 @@ export interface Session { id:string; botId:string; title:string; status:"active
 export interface Message { id:string; sessionId?:string; seq?:number; role:string; body:string; blocks?:unknown[]; runId?:string|null; clientNonce?:string|null; createdAt:string; speakerBotId?:string|null; speakerName?:string|null; speakerColor?:string|null; speakerShape?:AvatarShape|null }
 export interface RoomMember { id:string; name:string; avatarColor:string; avatarShape:AvatarShape }
 export interface Room { id:string; name:string; members:RoomMember[]; lastMessageAt:string|null; lastPreview:string|null; unreadCount:number }
-export interface ComputerStatus { botId:string; mode:ComputerMode; state:ComputerState; controlHolder:"none"|"bot"|"user"; takeoverRequested:boolean; busyBotName:string|null; busySessionId:string|null; busyRunId:string|null; display:string|null; profileMode:string; screenAvailable:boolean }
+export interface ComputerStatus { botId:string; mode:ComputerMode; state:ComputerState; controlHolder:"none"|"bot"|"user"; takeoverRequested:boolean; busyBotName:string|null; busySessionId:string|null; busyRunId:string|null; busyStep?:string|null; waitingRunId?:string|null; waitingSessionId?:string|null; queuedRuns?:number; display:string|null; profileMode:string; screenAvailable:boolean }
+export interface PlaybookStep { do:string; expect?:string; note?:string }
+export interface PlaybookInput { name:string; description?:string; example?:string }
+export interface Playbook { name?:string; whenToUse?:string; intent?:string; inputs?:PlaybookInput[]; preconditions?:string[]; steps?:(PlaybookStep|string)[]; howToCheck?:string; whatToReturn?:string; cautions?:string[] }
+export type TaughtSkillStatus = "recording"|"drafting"|"draft"|"saved"|"failed"|"cancelled";
+export interface TaughtSkill { id:string; botId:string; threadId:string|null; name:string; goal:string; status:TaughtSkillStatus; playbook:Playbook; error:string|null; startedAt:string|null; expiresAt:string|null; stoppedAt:string|null; createdAt:string; updatedAt:string; eventCount:number; frameCount:number }
 export interface MemoryItem { id:string; sessionId:string|null; sourceRunId:string|null; sourceMessageId:string|null; content:string; importance:number; revision:number; createdAt:string; updatedAt:string }
 export type McpTransport = "stdio" | "http" | "sse";
 export interface McpTool { name:string; exposedName:string; description:string }

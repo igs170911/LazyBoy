@@ -42,6 +42,44 @@ pub fn cdp_command(request: &Value) -> Vec<String> {
     cdp_command_on(PRIMARY_DISPLAY, None, request)
 }
 
+/// Marker embedded in the recorder's argv so `pkill -f` can find exactly one
+/// teaching session without touching other python processes.
+pub fn teach_recorder_tag(skill_id: &str) -> String {
+    format!("lazyboy-teach-{skill_id}")
+}
+
+pub fn teach_recorder_output(skill_id: &str) -> String {
+    format!("/tmp/{}.jsonl", teach_recorder_tag(skill_id))
+}
+
+/// Detached, long-running CDP recorder for a human demonstration. The script
+/// is handed to `sh` as a positional argument so no shell quoting touches it.
+pub fn cdp_record_command_on(display: &str, profile: Option<&str>, skill_id: &str) -> Vec<String> {
+    let mut request = json!({
+        "action": "record",
+        "ensure": true,
+        "out": teach_recorder_output(skill_id),
+        "tag": teach_recorder_tag(skill_id),
+        "display": normalize_display(display),
+        "port": devtools_port(display),
+    });
+    if let Some(profile) = profile.filter(|value| !value.is_empty()) {
+        request["profile"] = json!(profile);
+    }
+    vec![
+        "sh".into(),
+        "-c".into(),
+        "setsid nohup env DISPLAY=\"$0\" python3 -c \"$1\" \"$2\" >/dev/null 2>&1 </dev/null &".into(),
+        normalize_display(display).to_string(),
+        CDP_PY.into(),
+        request.to_string(),
+    ]
+}
+
+pub fn cdp_record_stop_command(skill_id: &str) -> Vec<String> {
+    vec!["pkill".into(), "-f".into(), teach_recorder_tag(skill_id)]
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CdpPage {
     pub ok: bool,

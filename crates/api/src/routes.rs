@@ -18,6 +18,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::rooms::router())
         .merge(crate::mcp::router())
         .merge(crate::workspace::router())
+        .merge(crate::skills::router())
         .route("/api/bots", get(list_bots).post(create_bot))
         .route(
             "/api/bots/{id}",
@@ -544,29 +545,9 @@ async fn stop_task(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let run_ids: Vec<String> = sqlx::query_scalar(
-        "UPDATE runs SET status = 'cancelled', completed_at = now(), updated_at = now()
-         WHERE bot_id = $1 AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
-         RETURNING id",
-    )
-    .bind(&id)
-    .fetch_all(state.pool())
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    for run_id in &run_ids {
-        computer::release_screen_execution(&state, run_id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    sqlx::query(
-        "UPDATE computers SET execution_bot_id = NULL, execution_run_id = NULL,
-                execution_lease_expires_at = NULL, updated_at = now()
-         WHERE execution_bot_id = $1",
-    )
-    .bind(&id)
-    .execute(state.pool())
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::runs::cancel_active_runs(&state, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(json!({ "ok": true })))
 }
 

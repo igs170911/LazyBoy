@@ -54,6 +54,10 @@ pub fn status_from(
         busy_bot_name,
         busy_session_id: None,
         busy_run_id: None,
+        busy_step: None,
+        waiting_run_id: None,
+        waiting_session_id: None,
+        queued_runs: 0,
         multi_screen: true,
         screen_id: screen.map(|row| row.id.clone()),
         display: screen.map(|row| row.display.clone()),
@@ -1024,24 +1028,62 @@ pub async fn current_status(
         .get_screen(&computer.id, bot_id)
         .await
         .map_err(|error| error.to_string())?;
-    let active = state.db.active_run(bot_id).await.ok().flatten();
-    let run_status = active
-        .as_ref()
-        .and_then(|(_, run_status, _)| parse_run_status(run_status));
-    let waiting_for_takeover = run_status == Some(lazyboy_contracts::RunStatus::WaitingTakeover);
-    let busy = run_status.filter(|status| {
-        status.is_active() && *status != lazyboy_contracts::RunStatus::WaitingTakeover
+    // Newest-first is wrong here: a message queued behind a paused run must not
+    // hide the pause. Rank by what the user needs to know about.
+    let active: Vec<ActiveRunRow> = sqlx::query_as(
+        "SELECT id, status, thread_id, checkpoint->>'step' AS step FROM runs
+         WHERE bot_id = $1
+           AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
+         ORDER BY CASE status
+                    WHEN 'running' THEN 0 WHEN 'leased' THEN 1
+                    WHEN 'waiting_takeover' THEN 2 WHEN 'waiting_input' THEN 3
+                    ELSE 4 END,
+                  created_at ASC",
+    )
+    .bind(bot_id)
+    .fetch_all(state.pool())
+    .await
+    .unwrap_or_default();
+    let waiting = active
+        .iter()
+        .find(|run| run.status == "waiting_takeover");
+    let busy = active.iter().find(|run| {
+        parse_run_status(&run.status).is_some_and(|status| {
+            status.is_active() && status != lazyboy_contracts::RunStatus::WaitingTakeover
+        })
     });
+    // While the bot is paused for the human, later messages just queue up; the
+    // spinner would lie, so report them as queued instead of busy.
+    let busy = if waiting.is_some() {
+        busy.filter(|run| run.status != "queued")
+    } else {
+        busy
+    };
     let busy_bot_name = busy.map(|_| bot.name.clone());
     let mut status = status_from(bot_id, &computer, screen.as_ref(), busy_bot_name);
-    status.takeover_requested = waiting_for_takeover;
-    if busy.is_some() {
-        if let Some((run_id, _, thread_id)) = active {
-            status.busy_run_id = Some(run_id);
-            status.busy_session_id = Some(thread_id);
-        }
+    status.takeover_requested = waiting.is_some();
+    if let Some(run) = busy {
+        status.busy_run_id = Some(run.id.clone());
+        status.busy_session_id = Some(run.thread_id.clone());
+        status.busy_step = run.step.clone();
     }
+    if let Some(run) = waiting {
+        status.waiting_run_id = Some(run.id.clone());
+        status.waiting_session_id = Some(run.thread_id.clone());
+    }
+    status.queued_runs = active
+        .iter()
+        .filter(|run| run.status == "queued" && Some(run.id.as_str()) != busy.map(|b| b.id.as_str()))
+        .count() as u32;
     Ok(status)
+}
+
+#[derive(sqlx::FromRow)]
+struct ActiveRunRow {
+    id: String,
+    status: String,
+    thread_id: String,
+    step: Option<String>,
 }
 
 pub fn _keep_state(state: ComputerState, holder: ControlHolder, mode: BrowserProfileMode) {

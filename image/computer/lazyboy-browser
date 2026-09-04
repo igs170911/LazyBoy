@@ -15,20 +15,36 @@ else
   PROFILE="$HOME/.browser-profiles/displays/${display}"
 fi
 mkdir -p "$PROFILE"
+# The bot drives this same window over DevTools (port 9221 + display number,
+# see crates/control/src/cdp.rs). Every launch path (boot, panel launcher,
+# xdg-open, launch_app) must open it, otherwise the model cannot attach to the
+# browser the human is looking at and would have to restart it.
+DEVTOOLS_PORT=$((9221 + display))
 live=$(pgrep -f "chromium.*--user-data-dir=${PROFILE}" 2>/dev/null | head -1)
 lock="$(readlink "$PROFILE/SingletonLock" 2>/dev/null || true)"
 lock_pid="${lock##*-}"
 if [ -n "$live" ]; then
   # A second Chromium on the same profile is the "Profile error occurred" dialog.
-  # Only hand the URL to the existing process when its singleton is still valid.
-  if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
-    exec /usr/bin/chromium --no-sandbox --user-data-dir="$PROFILE" "$@"
+  # Only hand URLs to the existing process (flags are meaningless to it and an
+  # empty argument list would open a stray New Tab in the user's window).
+  urls=""
+  for arg in "$@"; do
+    case "$arg" in
+      -*) ;;
+      *) urls="$urls $arg" ;;
+    esac
+  done
+  if [ -n "$urls" ] && [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+    # shellcheck disable=SC2086
+    exec /usr/bin/chromium --no-sandbox --user-data-dir="$PROFILE" $urls
   fi
   exit 0
 fi
 rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
 exec /usr/bin/chromium \
   --no-sandbox \
+  --remote-debugging-port="$DEVTOOLS_PORT" \
+  --remote-allow-origins='*' \
   --test-type \
   --disable-gpu \
   --disable-dev-shm-usage \

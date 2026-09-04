@@ -140,12 +140,32 @@ pub fn model_capabilities(provider: ModelProvider, model_id: &str) -> ModelCapab
                 || id.starts_with("grok-3")
         }
         ModelProvider::OpencodeGo => id.contains("vision") || id.contains("omni"),
+        // OpenAI-compatible is also how OpenRouter / LiteLLM / vLLM gateways
+        // are reached, so the id may be any vendor's multimodal model.
         ModelProvider::OpenaiCompatible | ModelProvider::Openai => {
             id.contains("gpt-4o")
+                || id.contains("gpt-4.1")
                 || id.contains("gpt-5")
+                || id.starts_with("o3")
+                || id.starts_with("o4")
                 || id.contains("vision")
                 || id.contains("llava")
                 || id.contains("omni")
+                || id.contains("claude")
+                || id.contains("gemini")
+                || id.contains("grok-4")
+                || (id.contains("qwen") && (id.contains("vl") || id.contains("qwen3")))
+                || id.contains("glm-4v")
+                || id.contains("glm-4.5v")
+                || id.contains("glm-5v")
+                || id.contains("ui-tars")
+                || id.contains("pixtral")
+                || id.contains("internvl")
+                || id.contains("llama-4")
+                || id.contains("kimi-k2.5")
+                || id.contains("kimi-k2.6")
+                || id.contains("kimi-k2.7")
+                || id.contains("computer-use")
         }
         ModelProvider::Anthropic => id.contains("claude"),
         ModelProvider::Openrouter => {
