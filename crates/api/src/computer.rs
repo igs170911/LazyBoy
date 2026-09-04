@@ -947,7 +947,11 @@ pub async fn idle_loop(state: AppState) {
         for computer in rows {
             let active: Result<Option<(i64,)>, _> = sqlx::query_as(
                 "SELECT 1 FROM runs WHERE status IN ('queued','leased','running','waiting_input','waiting_takeover')
-                 AND bot_id IN (SELECT id FROM bots WHERE computer_id = $1) LIMIT 1",
+                 AND bot_id IN (SELECT id FROM bots WHERE computer_id = $1)
+                 UNION ALL
+                 SELECT 1 FROM taught_skills WHERE status IN ('recording','drafting')
+                 AND bot_id IN (SELECT id FROM bots WHERE computer_id = $1)
+                 LIMIT 1",
             )
             .bind(&computer.id)
             .fetch_optional(state.pool())

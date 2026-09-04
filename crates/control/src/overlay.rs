@@ -56,7 +56,11 @@ pub fn overlay_elements(bytes: &[u8], elements: &[UiElement]) -> Vec<u8> {
     if width == 0 || height == 0 {
         return bytes.to_vec();
     }
-    for element in elements.iter().take(50) {
+    for element in elements
+        .iter()
+        .filter(|element| !element.is_offscreen())
+        .take(50)
+    {
         paint_element(&mut img, element, width, height);
     }
     encode_jpeg(&img).unwrap_or_else(|| bytes.to_vec())

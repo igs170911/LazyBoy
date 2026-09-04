@@ -101,6 +101,12 @@ impl UiElement {
             self.y.saturating_add(self.h / 2),
         )
     }
+
+    /// Page controls outside the viewport are reported with zero size: they
+    /// can be clicked through the DOM but have no pixel position.
+    pub fn is_offscreen(&self) -> bool {
+        self.w == 0 && self.h == 0 && self.selector.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

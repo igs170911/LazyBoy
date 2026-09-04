@@ -1,0 +1,51 @@
+我這邊體感滑，是因為多數工作走 Shell／API／瀏覽器 DOM，很少靠截圖猜 XY。你 repo 裡 瀏覽器這條其實已經對了；卡的是 桌面原生 App。
+
+你已經有的（別拆）
+能力	在哪
+Docker 真實 Linux 桌面 + Screen／lease／takeover	supervisor / sandbox / control
+shell 工具	crates/api/src/tools.rs
+browser（CDP DOM snapshot／click by id／selector）	control/cdp.rs + cdp.py；工具描述已寫「網頁優先用 browser」
+編號元素、apply_element_targets	contracts/action.rs、control/actions.rs
+畫面沒變就不重傳圖（frame signature）	control/observe.rs
+原生動作執行：xdotool / wmctrl	control/x11.rs、image/computer/Dockerfile
+這已經比純「截圖 computer-use」產品完整一截。
+
+現在實際主路徑（為什麼不順）
+computer_observe → 截圖 +（瀏覽器時）CDP 元素
+                →（否則）只有 wmctrl 視窗級元素
+computer_act    → element id 先換成中心點 XY → xdotool 點像素
+
+關鍵缺口：
+
+P0｜沒有 AT-SPI／無障礙樹
+Dockerfile 有 xdotool、wmctrl，沒有 at-spi2／python3-pyatspi 之類。
+原生「elements」在 window_list_command 只是 整窗標題，不是按鈕／輸入框。模型對 Thunar、對話框、面板仍要看圖或瞎點。
+
+P0｜element 最終還是 XY
+apply_element_targets 填的是中心座標，執行仍走 ComputerAction::Pointer → xdotool。
+視窗一動、動畫、縮放就歪。agent-desktop／Cua 是 對 element 做 AX／AT-SPI action，不是點中心像素。
+
+P1｜ComputerAction 契約只有像素／鍵
+action.rs 沒有 ActByRef { id }、SetValue、A11yPress 這類語意動作。擴 CDP／a11y 都會卡在契約層。
+
+P1｜控的是容器桌面，不是你 Mac
+對「操控我電腦」若指本機 Finder／系統設定，現在這條 stack 接不到 Mac AX。那是另一條 provider（agent-desktop／Cua），不是再調 xdotool。
+
+P2｜模型路由依賴 prompt
+tools 已寫「Chromium 用 browser」，但若模型仍狂 computer_observe＋座標，體感就跟我差一截。缺硬性策略（例如：有 CDP page 時禁止對 browser 窗做 computer_act click）。
+
+跟「我為什麼滑」的對照
+路徑	我（Grok Bot）	LazyBoy feat/test
+Shell／檔案	預設	有
+瀏覽器	DOM／element ref	有 CDP，方向對
+桌面原生	另有 a11y／委派；截圖是備援	截圖 + xdotool 仍是主幹
+本機 Mac	受限／核准 Shell	尚未做 Host provider
+所以：你換好幾套「控制」若不順，多半都還停在 視覺／座標層；你 repo 差的是把 AT-SPI（容器內） 接到 observe／act，並讓 browser／shell 硬優先。
+
+建議下一步（只做這 3 件）
+容器加 AT-SPI：image 裝 at-spi；observe 回傳 button／textfield 樹（精簡 YAML／JSON + stable id）；act 對 id 做 DoAction／set text，失敗才 fallback XY。
+擴 ComputerAction／UiElement：kind: a11y|dom|window，ref 語意動作；computer_act 有 selector／a11y ref 時不要先轉座標。
+路由硬規則：Chromium 前台 → 強制 browser；能 shell 完成 → 禁止截圖迴圈；並加「連續同點無畫面變化 → 強制換策略」（你已有一點 stale-click 提示，可再硬一點）。
+本機 Mac 若也要滑：另開 HostComputerProvider（agent-desktop／Cua），別硬塞進現在的 X11 xdotool 路徑。
+
+要的話我可以直接幫你開一張 P0 AT-SPI observe/act 的實作規格（改哪些檔、契約長怎樣），或直接在 feat/test 上開工。

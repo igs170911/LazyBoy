@@ -305,3 +305,20 @@
 .skill-error{color:#fca5a5;font-size:12.5px}
 .skill-actions{display:flex;align-items:center;gap:8px}
 .skill-actions .grow{flex:1}
+.skill-actions .link{display:inline-flex;align-items:center;gap:5px}
+.skill-actions .link svg{width:13px;height:13px}
+/* Saved-skill rows in the composer menu: run on the left, pencil on the right */
+.plus-menu-skill{display:flex;align-items:center;gap:2px}
+.plus-menu-skill>button:first-child{flex:1;min-width:0}
+.plus-menu-skill .skill-edit{flex:0 0 30px;width:30px;height:30px;padding:0;justify-content:center;color:var(--muted)}
+.plus-menu-skill .skill-edit:hover{color:var(--ink)}
+.plus-menu-skill .skill-edit svg{width:14px;height:14px;flex-basis:14px}
+/* Full skill editor */
+.dialog.skill-edit{width:min(600px,calc(100vw - 28px));max-height:calc(100dvh - 28px);overflow:auto}
+.dialog.skill-edit h2{display:flex;align-items:center;gap:9px}
+.dialog.skill-edit h2 svg{width:17px;height:17px;color:var(--accent)}
+.dialog.skill-edit label{display:grid;gap:6px;color:var(--muted);font-size:12.5px}
+.dialog.skill-edit input,.dialog.skill-edit textarea{width:100%;border:1px solid var(--border);border-radius:10px;background:#0c0c0d;color:var(--ink);padding:9px 12px;outline:0;font:inherit;font-size:13.5px;line-height:1.5;resize:vertical}
+.dialog.skill-edit input:focus,.dialog.skill-edit textarea:focus{border-color:#4b4b50}
+.dialog.skill-edit .dialog-actions{align-items:center;gap:8px}
+.dialog.skill-edit .dialog-actions .grow{flex:1}

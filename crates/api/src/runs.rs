@@ -32,9 +32,17 @@ Prefer the fast path, in this order:
 When you use the browser tool:
 - snapshot first; click {\"action\":\"click\",\"element\":N}; type {\"action\":\"type\",\"element\":N,\"text\":\"...\"}; open a URL with navigate.
 - Yellow numbered marks on the screenshot match the element list. Click the number, not guessed pixels.
-- If the control is not in the element list, take a fresh snapshot or scroll; it may be off-screen or not rendered yet.
+- Elements tagged [below viewport ...] / [above viewport ...] are outside the visible area but still clickable by id; the click scrolls to them. Do not scroll manually just to reach them.
+- A control is disabled only when its entry says [disabled]. Never claim a button is disabled, counting down or loading unless the element list or the screenshot shows that.
+- Clicking a [disabled] control is fine: the click waits up to 45s for it to become enabled (stay timers, short videos) and then clicks. So when Next is disabled, just click Next. Only if the click reports it is still disabled, call wait with a longer time and click again.
+- Element ids are renumbered whenever the page changes; after navigation use the ids from the newest result, not older ones.
+- If the control is not in the element list at all, take a fresh snapshot; it may not be rendered yet.
 
-When a click changes nothing: do not repeat it. A button is often disabled until a video, timer or page load finishes; call wait (up to 60s) and re-observe, then click by element id. Pages that need patience (training videos, quizzes, slow forms) are normal: keep working through them step by step and report progress in one short sentence when done.
+When a click changes nothing: do not repeat it blindly. Take a fresh snapshot, read the [disabled] tags and the page text, then act. Pages that need patience (training videos, quizzes, slow forms) are normal: keep working through them step by step and report progress in one short sentence when done.
+
+Waiting is a tool call, never a reply. Ending your turn with \"waiting for X\" stops the whole run; nobody resumes it. If something must finish first, call wait (or click, which waits) and continue.
+
+Multi-step tasks and taught skills: you are done only when the playbook's check passes (for example the course shows completed, the form shows a confirmation). Do not stop with a status sentence in the middle; keep calling tools until the check passes or you are truly blocked, then say exactly why. Never repeat an earlier reply word for word; describe the current screen.
 
 Call request_takeover only for passwords, 2FA, CAPTCHA, payment, or a decision only the human can make. Never call it just because a click missed. When you do call it, say exactly what the human must do.
 
@@ -490,13 +498,29 @@ async fn execute_run(
     } else {
         vec![UserContent::text(prompt)]
     };
+    let mut skill_check: Option<String> = None;
     if !resume_after_takeover {
         // The user named a taught skill: hand the model the full playbook up
         // front so it does not have to guess or call use_skill first.
         if let Some(skill) = crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await {
             first.push(UserContent::text(crate::skills::format_playbook_for_run(&skill)));
+            skill_check = Some(crate::skills::skill_check_hint(&skill));
         }
     }
+    let mut earlier_replies: Vec<String> = assistant_texts(&history);
+    if skill_check.is_some() {
+        // A skill run is self-contained. Old chat turns about the same site
+        // ("Next is still counting down" x6) otherwise anchor the model into
+        // repeating its past conclusions instead of reading the screen.
+        history.clear();
+        first.push(UserContent::text(
+            "Earlier chat history is intentionally omitted for this skill run. Work only from the playbook above and the current screen.",
+        ));
+    }
+    // Taught skills run long (a 24-page course is 24 clicks); plain chats stay
+    // bounded tighter so a confused model cannot burn budget for as long.
+    let max_turns = if skill_check.is_some() { 80 } else { 40 };
+    let mut nudges: u8 = 0;
     let mut screenshots: u32 = 0;
     let mut screenshot_bytes: u64 = 0;
     if resume_after_takeover && ctx.gui_block.is_none() {
@@ -574,7 +598,7 @@ async fn execute_run(
         preamble.push_str(&index);
     }
 
-    for _ in 0..40 {
+    for _ in 0..max_turns {
         turns += 1;
         if let Some(halt) = renew_or_halt(state, run_id, lease_owner).await? {
             return finish_halt(
@@ -633,7 +657,45 @@ async fn execute_run(
             "model turn"
         );
         if calls.is_empty() {
-            break;
+            // A model that quits a playbook early, or parrots an earlier reply
+            // instead of describing the current screen, gets pushed back to
+            // the tools a couple of times before we accept the text.
+            let parroted = earlier_replies
+                .iter()
+                .any(|earlier| earlier == final_text.trim());
+            let nudge = if parroted {
+                Some(
+                    "Your reply repeats an earlier message word for word, so it cannot describe the current screen. Below is what the screen shows RIGHT NOW. Act on it with a tool call. Waiting is done by calling wait or by clicking the control (the click waits for it to enable), never by replying. Reply in text only once the task is finished or you are truly blocked (say why).".to_string(),
+                )
+            } else {
+                skill_check.as_ref().map(|check| {
+                    format!(
+                        "The run is not finished; your text reply ended nothing but your own turn. Check: {check}\nBelow is the current screen. If the next control is [disabled], click it anyway — the click waits up to 45s for it to enable — or call wait. Ids marked [below viewport] scroll automatically. Only reply in text when the check passes or you are truly blocked, and then say exactly what blocks you."
+                    )
+                })
+            };
+            match nudge {
+                Some(text) if nudges < 6 && turns + 2 < max_turns => {
+                    nudges += 1;
+                    tracing::info!(run_id, turn = turns, parroted, "nudging model back to tools");
+                    earlier_replies.push(final_text.trim().to_string());
+                    final_text.clear();
+                    let mut content = vec![UserContent::text(text)];
+                    if ctx.gui_block.is_none() {
+                        set_run_step(state, run_id, "computer_observe: 重新確認畫面").await;
+                        let outcome = dispatch(&ctx, "computer_observe", &json!({})).await;
+                        content.push(UserContent::text(outcome.text));
+                        if let Some(image) = outcome.image {
+                            screenshot_bytes += image.len() as u64;
+                            screenshots += 1;
+                            content.extend(screenshot_parts(image));
+                        }
+                    }
+                    pending = Message::User { content };
+                    continue;
+                }
+                _ => break,
+            }
         }
         final_text.clear();
         let mut results = Vec::new();
@@ -677,12 +739,12 @@ async fn execute_run(
                     .await;
                 }
                 outcome = tokio::time::timeout(
-                    Duration::from_secs(90),
+                    Duration::from_secs(150),
                     dispatch(&ctx, &name, &call.function.arguments),
                 ) => match outcome {
                     Ok(outcome) => outcome,
                     Err(_) => crate::tools::ToolOutcome {
-                        text: format!("工具 {name} 執行逾時（90 秒），請稍後重試。"),
+                        text: format!("工具 {name} 執行逾時（150 秒），請稍後重試。"),
                         image: None,
                         pause: false,
                     },
@@ -927,6 +989,27 @@ fn has_screenshot(message: &Message) -> bool {
 /// if it carries a fresh frame, otherwise the most recent one already in
 /// history. Without the fallback a "(screen unchanged)" turn would leave the
 /// model with no picture of the desktop at all.
+/// Plain-text bodies of the assistant turns in a history, used to catch a model
+/// that answers by repeating an earlier reply instead of reading the screen.
+fn assistant_texts(history: &[Message]) -> Vec<String> {
+    history
+        .iter()
+        .filter_map(|message| match message {
+            Message::Assistant { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|item| match item {
+                        AssistantContent::Text(text) => Some(text.text.trim().to_string()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
 fn drop_history_screenshots(history: &mut [Message], pending: &Message) {
     let keep = if has_screenshot(pending) {
         None

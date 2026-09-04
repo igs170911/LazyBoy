@@ -20,6 +20,10 @@ pub enum ActionError {
     BadCoordinate(&'static str),
     #[error("computer action element {0} is not on the current screen")]
     UnknownElement(u32),
+    #[error(
+        "element {0} is outside the browser viewport, so it has no screen position. Use browser {{\"action\":\"click\",\"element\":{0}}} (it scrolls into view) or scroll the page first."
+    )]
+    OffscreenElement(u32),
 }
 
 /// Models write element ids as `3`, `3.0`, `"3"` or `"[3]"`; accept them all
@@ -54,6 +58,9 @@ pub fn apply_element_targets(value: &mut Value, elements: &[UiElement]) -> Resul
         let Some(element) = elements.iter().find(|element| u64::from(element.id) == id) else {
             return Err(ActionError::UnknownElement(id as u32));
         };
+        if element.is_offscreen() {
+            return Err(ActionError::OffscreenElement(id as u32));
+        }
         let (x, y) = element.center();
         action.insert("x".into(), json!(x));
         action.insert("y".into(), json!(y));
@@ -367,6 +374,22 @@ mod tests {
         assert_eq!(
             apply_element_targets(&mut actions, &[]).unwrap_err(),
             ActionError::UnknownElement(9)
+        );
+    }
+
+    #[test]
+    fn offscreen_page_elements_cannot_be_pixel_clicked() {
+        let below_fold = UiElement {
+            id: 3,
+            title: "Next [below viewport]".into(),
+            selector: Some("[data-lazyboy=\"3\"]".into()),
+            kind: Some("dom".into()),
+            ..UiElement::default()
+        };
+        let mut actions = json!([{"kind": "click", "element": 3}]);
+        assert_eq!(
+            apply_element_targets(&mut actions, &[below_fold]).unwrap_err(),
+            ActionError::OffscreenElement(3)
         );
     }
 }

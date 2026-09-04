@@ -1368,8 +1368,26 @@ pub fn format_playbook_for_run(skill: &SavedSkill) -> String {
     if !cautions.is_empty() {
         out.push_str(&format!("\nCautions: {}", cautions.join("; ")));
     }
-    out.push_str("\nExecution rules: observe or snapshot before each step; find controls by their label/text/role on the current page and click by element id; if a step's expectation is not met, wait and re-observe once, then try the equivalent control; never replay coordinates from memory; if login, 2FA, CAPTCHA or payment appears, request_takeover and say what the human must do. When finished, report in one or two sentences what was done and what you saw.");
+    out.push_str("\nExecution rules: observe or snapshot before each step; find controls by their label/text/role on the current page and click by element id (controls tagged [below viewport] are clickable too); if a step's expectation is not met, wait and re-observe once, then try the equivalent control; never replay coordinates from memory; if login, 2FA, CAPTCHA or payment appears, request_takeover and say what the human must do. Keep going until \"How to check\" is satisfied — a course with 24 pages means 24 Next clicks. When finished, report in one or two sentences what was done and what you saw.");
     out
+}
+
+/// The completion criterion the run loop uses to push a model that stops
+/// early back to work.
+pub(crate) fn skill_check_hint(skill: &SavedSkill) -> String {
+    skill
+        .playbook
+        .get("howToCheck")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|check| !check.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "the goal of「{}」is visibly achieved on the current screen",
+                skill.name
+            )
+        })
 }
 
 #[cfg(test)]

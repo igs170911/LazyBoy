@@ -172,34 +172,61 @@ SNAP_JS = r"""
   const sx0 = (window.screenX || 0) + Math.floor(chromeW / 2);
   const sy0 = (window.screenY || 0) + chromeH;
   const seen = new Set();
-  const out = [];
-  let n = 1;
+  const inView = [];
+  const offView = [];
   for (const el of document.querySelectorAll(sels)) {
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) continue;
-    if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
     const st = getComputedStyle(el);
     if (st.visibility === "hidden" || st.display === "none" || Number(st.opacity) === 0) continue;
-    const text = (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("name") || el.tagName)
-      .replace(/\s+/g, " ").trim().slice(0, 80);
-    if (!text) continue;
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    let text;
+    if (el.tagName === "INPUT" && (type === "radio" || type === "checkbox")) {
+      // Quiz answers: the value is usually "on"; the label next to it is what
+      // the model must read to pick the right option.
+      const owner = (el.labels && el.labels[0]) || el.closest("label") || el.parentElement;
+      const label = (owner && owner.innerText || el.getAttribute("aria-label") || el.value || "").replace(/\s+/g, " ").trim().slice(0, 70);
+      text = type + " " + label + (el.checked ? " (checked)" : "");
+    } else {
+      text = (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("name") || el.tagName)
+        .replace(/\s+/g, " ").trim().slice(0, 80);
+    }
+    if (!text.trim()) continue;
     const key = [el.tagName, text, Math.round(r.x), Math.round(r.y)].join("|");
     if (seen.has(key)) continue;
     seen.add(key);
-    el.setAttribute("data-lazyboy", String(n));
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") text += " [disabled]";
+    const visible = !(r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth);
+    if (visible) {
+      inView.push({el, text, x: Math.max(0, Math.round(sx0 + r.x)), y: Math.max(0, Math.round(sy0 + r.y)), w: Math.round(r.width), h: Math.round(r.height)});
+    } else {
+      // Controls outside the viewport are still clickable by id: the click
+      // handler scrolls them into view. Zero size tells the desktop side not
+      // to paint or pixel-click them.
+      const where = r.top > innerHeight ? "below" : r.bottom < 0 ? "above" : "beside";
+      // Buttons and form controls (Next, Submit, radios) matter more than the
+      // hundredth body link, so they win the limited off-screen slots.
+      const link = el.tagName === "A" || el.getAttribute("role") === "link";
+      offView.push({el, text: text + " [" + where + " viewport]", x: 0, y: 0, w: 0, h: 0, rank: (link ? 1 : 0), dist: Math.abs(r.top > innerHeight ? r.top - innerHeight : r.bottom)});
+    }
+  }
+  offView.sort((a, b) => a.rank - b.rank || a.dist - b.dist);
+  const out = [];
+  let n = 1;
+  for (const item of inView.slice(0, 50).concat(offView.slice(0, 20))) {
+    item.el.setAttribute("data-lazyboy", String(n));
     out.push({
       id: n,
-      title: text,
-      tag: el.tagName.toLowerCase(),
+      title: item.text,
+      tag: item.el.tagName.toLowerCase(),
       selector: '[data-lazyboy="' + n + '"]',
       kind: "dom",
-      x: Math.max(0, Math.round(sx0 + r.x)),
-      y: Math.max(0, Math.round(sy0 + r.y)),
-      w: Math.round(r.width),
-      h: Math.round(r.height)
+      x: item.x,
+      y: item.y,
+      w: item.w,
+      h: item.h
     });
     n += 1;
-    if (out.length >= 50) break;
   }
   const body = (document.body && document.body.innerText || "").replace(/\s+/g, " ").trim().slice(0, 3000);
   return {url: location.href, title: document.title || "", text: body, elements: out};
@@ -221,6 +248,39 @@ CLICK_JS = r"""
   return {ok: true, x: Math.round(sx), y: Math.round(sy)};
 }
 """
+
+STATE_JS = r"""
+(sel) => {
+  const el = document.querySelector(sel);
+  if (!el) return {found: false};
+  const disabled = !!el.disabled || el.getAttribute("aria-disabled") === "true";
+  // Training sites explain the lock next to the button ("Please watch the
+  // video", a countdown); surface that text so the model can decide how
+  // long to wait.
+  let hint = "";
+  const near = el.parentElement && el.parentElement.parentElement;
+  if (disabled && near) hint = (near.innerText || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  return {found: true, disabled, hint};
+}
+"""
+
+# Pages often lock Next for a few seconds (stay timers) or until a video ends.
+# A human just waits and clicks; do the same instead of making the model plan
+# a wait/observe/click loop it tends to abandon.
+CLICK_WAIT_MS = 45000
+
+def wait_until_enabled(ws, sel, wait_ms=None):
+    budget = CLICK_WAIT_MS if wait_ms is None else max(0, min(int(wait_ms), 120000))
+    started = time.time()
+    while True:
+        state = evaluate(ws, STATE_JS, sel) or {}
+        if not state.get("found"):
+            return None
+        if not state.get("disabled"):
+            return time.time() - started
+        if (time.time() - started) * 1000 >= budget:
+            return None
+        time.sleep(0.5)
 
 def evaluate(ws, expression, args=None):
     params = {"expression": expression, "returnByValue": True, "awaitPromise": True}
@@ -554,12 +614,27 @@ def main():
             sel = req.get("selector") or ""
             if not sel:
                 fail("selector required")
+            waited = wait_until_enabled(ws, sel, req.get("waitMs"))
+            if waited is None:
+                state = evaluate(ws, STATE_JS, sel) or {}
+                if not state.get("found"):
+                    # Ids are renumbered whenever the page changes; hand back
+                    # the fresh numbering so the model does not have to ask.
+                    body = snapshot(ws)
+                    body.update({"ok": False, "error": "element gone: the page changed and ids were renumbered. Use the fresh element list in this result."})
+                    print(json.dumps(body))
+                    return
+                fail("control %s is still disabled after waiting %ss (page says: %s). Use wait for longer if a video or timer must finish, then click again."
+                     % (sel, int(req.get("waitMs") or CLICK_WAIT_MS) // 1000, state.get("hint") or "nothing"))
             val = evaluate(ws, CLICK_JS, sel) or {}
             if not val.get("ok"):
                 fail(val.get("error") or "click failed")
             pointer(display, val.get("x") or 0, val.get("y") or 0)
             wait_for_visual_update(ws)
-            print(json.dumps({"ok": True, "action": "click", "selector": sel, "restarted": restarted}))
+            out = {"ok": True, "action": "click", "selector": sel, "restarted": restarted}
+            if waited >= 1.0:
+                out["waitedSeconds"] = round(waited, 1)
+            print(json.dumps(out))
             return
         if action == "type":
             sel = req.get("selector") or ""

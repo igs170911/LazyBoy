@@ -80,7 +80,7 @@ pub fn cdp_record_stop_command(skill_id: &str) -> Vec<String> {
     vec!["pkill".into(), "-f".into(), teach_recorder_tag(skill_id)]
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CdpPage {
     pub ok: bool,
     pub error: Option<String>,
@@ -88,25 +88,26 @@ pub struct CdpPage {
     pub title: String,
     pub text: String,
     pub restarted: bool,
+    /// Seconds the click waited for a disabled control to become enabled.
+    pub waited_seconds: Option<f64>,
     pub elements: Vec<UiElement>,
 }
 
 pub fn parse_cdp_page(raw: &str) -> CdpPage {
     let value: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
-    if value.get("ok").and_then(Value::as_bool) != Some(true) {
-        return CdpPage {
-            ok: false,
-            error: value
+    let ok = value.get("ok").and_then(Value::as_bool) == Some(true);
+    CdpPage {
+        ok,
+        error: if ok {
+            None
+        } else {
+            value
                 .get("error")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .or_else(|| Some("cdp unavailable".into())),
-            ..CdpPage::default()
-        };
-    }
-    CdpPage {
-        ok: true,
-        error: None,
+                .or_else(|| Some("cdp unavailable".into()))
+        },
+        waited_seconds: value.get("waitedSeconds").and_then(Value::as_f64),
         url: value
             .get("url")
             .and_then(Value::as_str)

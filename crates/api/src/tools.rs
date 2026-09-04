@@ -122,7 +122,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "browser".into(),
-            description: "Control Chromium through the page DOM. Prefer this over computer_act for anything in the browser. snapshot returns numbered elements and visible text (no screenshot). click/type/navigate by element id or CSS selector. The human still sees the live window.".into(),
+            description: "Control Chromium through the page DOM. Prefer this over computer_act for anything in the browser. snapshot returns numbered elements and visible text (no screenshot). click/type/navigate by element id or CSS selector. click scrolls off-screen elements into view and, if the control is [disabled], waits up to 45s (waitMs to change) for it to enable before clicking. Ids are renumbered after every page change. The human still sees the live window.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -132,7 +132,8 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
                     "text":{"type":"string"},
                     "key":{"type":"string"},
                     "url":{"type":"string"},
-                    "ms":{"type":"number"}
+                    "ms":{"type":"number"},
+                    "waitMs":{"type":"number","description":"click only: how long to wait for a disabled control to enable (default 45000, max 120000)"}
                 },
                 "required":["action"]
             }),
@@ -453,6 +454,17 @@ async fn cdp_snapshot(ctx: &ToolCtx, ensure: bool) -> Option<CdpPage> {
 
 async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
     let display = ctx.context.display.as_deref().unwrap_or(":1");
+    // Clicks may sit through a page's stay timer (CLICK_WAIT_MS in cdp.py).
+    let timeout_ms = if request.get("action").and_then(Value::as_str) == Some("click") {
+        let wait = request
+            .get("waitMs")
+            .and_then(Value::as_u64)
+            .unwrap_or(45_000)
+            .min(120_000);
+        wait + 25_000
+    } else {
+        20_000
+    };
     let argv = cdp_command_on(display, ctx.context.profile_path.as_deref(), &request);
     match ctx
         .sandbox
@@ -461,7 +473,7 @@ async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
             CommandRequest {
                 argv,
                 cwd: None,
-                timeout_ms: Some(20_000),
+                timeout_ms: Some(timeout_ms),
             },
             &ctx.context,
         )
@@ -495,7 +507,7 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         "action": action,
         "ensure": true,
     });
-    for key in ["url", "text", "key", "ms", "selector"] {
+    for key in ["url", "text", "key", "ms", "selector", "waitMs"] {
         if let Some(value) = args.get(key) {
             request[key] = value.clone();
         }
@@ -537,13 +549,27 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         ));
     }
     let page = cdp_call(ctx, request).await;
-    if !page.ok {
-        return text_outcome(page.error.unwrap_or_else(|| "browser failed".into()));
-    }
     if !page.elements.is_empty() {
         *ctx.elements.lock().unwrap() = page.elements.clone();
     }
-    let text = browser_result_text(action, &page);
+    if !page.ok {
+        let mut text = page.error.unwrap_or_else(|| "browser failed".into());
+        if !page.elements.is_empty() {
+            text.push_str(&format!(
+                "\nPage: {} {}\nClickable page elements: {}",
+                page.title,
+                page.url,
+                format_ui_elements(&page.elements)
+            ));
+        }
+        return text_outcome(text);
+    }
+    let mut text = browser_result_text(action, &page);
+    if let Some(seconds) = page.waited_seconds {
+        text.push_str(&format!(
+            " (the control was disabled; waited {seconds:.0}s for it to enable before clicking)"
+        ));
+    }
     if action == "snapshot" {
         return ToolOutcome {
             text,
