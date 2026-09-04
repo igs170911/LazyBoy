@@ -1,6 +1,6 @@
 use lazyboy_contracts::{ComputerAction, PointerButton, PointerType, ScrollDirection};
 
-use crate::screen::{normalize_display, PRIMARY_DISPLAY};
+use crate::screen::{PRIMARY_DISPLAY, normalize_display};
 
 pub const DISPLAY: &str = PRIMARY_DISPLAY;
 pub const HOME: &str = "/home/lazyboy";
@@ -82,7 +82,13 @@ pub fn xdotool_argv_on(display: &str, action: &ComputerAction) -> Option<Vec<Str
         ComputerAction::Clipboard { text } => {
             let quoted = shell_single_quote(text);
             if looks_like_typed_ascii(text) {
-                argv.extend(["type".into(), "--delay".into(), "16".into(), "--".into(), text.clone()]);
+                argv.extend([
+                    "type".into(),
+                    "--delay".into(),
+                    "16".into(),
+                    "--".into(),
+                    text.clone(),
+                ]);
             } else {
                 return Some(vec![
                     "env".into(),
@@ -121,7 +127,9 @@ pub fn xdotool_argv_on(display: &str, action: &ComputerAction) -> Option<Vec<Str
                 ),
             ]);
         }
-        ComputerAction::Wait { .. } | ComputerAction::Open { .. } | ComputerAction::Launch { .. } => {
+        ComputerAction::Wait { .. }
+        | ComputerAction::Open { .. }
+        | ComputerAction::Launch { .. } => {
             return None;
         }
     }
@@ -134,7 +142,9 @@ fn shell_single_quote(value: &str) -> String {
 
 fn looks_like_typed_ascii(text: &str) -> bool {
     text.len() <= 48
-        && text.chars().all(|ch| ch.is_ascii() && (!ch.is_control() || ch == '\n' || ch == '\t'))
+        && text
+            .chars()
+            .all(|ch| ch.is_ascii() && (!ch.is_control() || ch == '\n' || ch == '\t'))
 }
 
 pub fn action_pause_ms(action: &ComputerAction) -> u64 {
@@ -183,25 +193,107 @@ print(json.dumps({"x": int(vals.get("X") or 0), "y": int(vals.get("Y") or 0), "i
     ]
 }
 
-pub fn parse_pointer_state(raw: &str) -> (Option<lazyboy_contracts::CursorPosition>, Option<lazyboy_contracts::ActiveWindow>) {
-    let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap_or(serde_json::Value::Null);
-    let cursor = match (value.get("x").and_then(serde_json::Value::as_i64), value.get("y").and_then(serde_json::Value::as_i64)) {
+pub fn window_list_command() -> Vec<String> {
+    window_list_command_on(PRIMARY_DISPLAY)
+}
+
+pub fn window_list_command_on(display: &str) -> Vec<String> {
+    vec![
+        "env".into(),
+        display_env(display),
+        "python3".into(),
+        "-c".into(),
+        r#"
+import json, subprocess
+def out(args):
+    try:
+        return subprocess.check_output(args, stderr=subprocess.DEVNULL, text=True)
+    except Exception:
+        return ""
+els = []
+n = 1
+for line in out(["wmctrl", "-lG"]).splitlines():
+    parts = line.split(None, 7)
+    if len(parts) < 7:
+        continue
+    try:
+        x, y, w, h = int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
+    except ValueError:
+        continue
+    if w < 32 or h < 16:
+        continue
+    title = parts[7].strip() if len(parts) > 7 else parts[6]
+    if not title or title in ("Desktop", "xfce4-panel"):
+        continue
+    els.append({"id": n, "title": title[:80], "kind": "window", "x": max(0, x), "y": max(0, y), "w": w, "h": h})
+    n += 1
+print(json.dumps(els))
+"#
+        .into(),
+    ]
+}
+
+pub fn parse_ui_elements(raw: &str) -> Vec<lazyboy_contracts::UiElement> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw.trim()).unwrap_or(serde_json::Value::Null);
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            Some(lazyboy_contracts::UiElement {
+                id: item.get("id")?.as_u64()? as u32,
+                title: item.get("title")?.as_str()?.to_string(),
+                x: item.get("x")?.as_u64()? as u32,
+                y: item.get("y")?.as_u64()? as u32,
+                w: item.get("w")?.as_u64()? as u32,
+                h: item.get("h")?.as_u64()? as u32,
+                selector: item
+                    .get("selector")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                kind: item
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_pointer_state(
+    raw: &str,
+) -> (
+    Option<lazyboy_contracts::CursorPosition>,
+    Option<lazyboy_contracts::ActiveWindow>,
+) {
+    let value: serde_json::Value =
+        serde_json::from_str(raw.trim()).unwrap_or(serde_json::Value::Null);
+    let cursor = match (
+        value.get("x").and_then(serde_json::Value::as_i64),
+        value.get("y").and_then(serde_json::Value::as_i64),
+    ) {
         (Some(x), Some(y)) => Some(lazyboy_contracts::CursorPosition {
             x: x as i32,
             y: y as i32,
         }),
         _ => None,
     };
-    let window = value.get("id").and_then(serde_json::Value::as_str).filter(|id| !id.is_empty()).map(|id| {
-        lazyboy_contracts::ActiveWindow {
+    let window = value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(|id| lazyboy_contracts::ActiveWindow {
             id: id.to_string(),
             title: value
                 .get("title")
                 .and_then(serde_json::Value::as_str)
                 .filter(|title| !title.is_empty())
                 .map(str::to_string),
-        }
-    });
+        });
     (cursor, window)
 }
 
@@ -236,7 +328,11 @@ pub fn launch_argv_on(
             Some(browser_argv(display, profile, uri))
         }
         "xterm" | "terminal" | "xfce4-terminal" | "lazyboy-terminal" => {
-            let mut argv = vec!["env".into(), display_env(display), "lazyboy-terminal".into()];
+            let mut argv = vec![
+                "env".into(),
+                display_env(display),
+                "lazyboy-terminal".into(),
+            ];
             if let Some(uri) = uri {
                 argv.push(uri.into());
             }
@@ -252,6 +348,11 @@ fn browser_argv(display: &str, profile: Option<&str>, uri: Option<&str>) -> Vec<
         argv.push(format!("LAZYBOY_BROWSER_PROFILE={profile}"));
     }
     argv.push("lazyboy-browser".into());
+    argv.push(format!(
+        "--remote-debugging-port={}",
+        crate::devtools_port(display)
+    ));
+    argv.push("--remote-allow-origins=*".into());
     if let Some(uri) = uri {
         argv.push(uri.into());
     }
@@ -267,7 +368,7 @@ pub fn screenshot_command_on(display: &str) -> Vec<String> {
         "bash".into(),
         "-lc".into(),
         format!(
-            "DISPLAY={} xwd -root -silent | convert xwd:- png:-",
+            "DISPLAY={} xwd -root -silent | convert xwd:- -quality 60 jpeg:-",
             normalize_display(display)
         ),
     ]
@@ -319,9 +420,43 @@ mod tests {
         assert!(argv.contains(&"DISPLAY=:2".into()));
         let shot = screenshot_command_on(":3");
         assert!(shot.last().unwrap().contains("DISPLAY=:3"));
-        let browser = launch_argv_on(":2", Some("/home/lazyboy/.browser-profiles/bots/a"), "browser", None)
-            .unwrap();
+        assert!(shot.last().unwrap().contains("jpeg:-"));
+        let browser = launch_argv_on(
+            ":2",
+            Some("/home/lazyboy/.browser-profiles/bots/a"),
+            "browser",
+            None,
+        )
+        .unwrap();
         assert!(browser.contains(&"DISPLAY=:2".into()));
         assert!(browser.iter().any(|item| item.contains("bots/a")));
+        assert!(browser.contains(&"--remote-debugging-port=9223".into()));
+    }
+
+    #[test]
+    fn parses_window_list_elements() {
+        let elements =
+            parse_ui_elements(r#"[{"id":1,"title":"Chromium","x":0,"y":24,"w":1280,"h":776}]"#);
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].title, "Chromium");
+        assert_eq!(elements[0].center(), (640, 412));
+    }
+
+    #[test]
+    fn parses_dom_element_selector() {
+        let elements = parse_ui_elements(
+            r#"[{"id":1,"title":"Submit","selector":"[data-lazyboy=\"1\"]","kind":"dom","x":10,"y":20,"w":80,"h":24}]"#,
+        );
+        assert_eq!(elements[0].kind.as_deref(), Some("dom"));
+        assert_eq!(
+            elements[0].selector.as_deref(),
+            Some("[data-lazyboy=\"1\"]")
+        );
+    }
+
+    #[test]
+    fn empty_or_junk_window_list_is_empty() {
+        assert!(parse_ui_elements("").is_empty());
+        assert!(parse_ui_elements("not-json").is_empty());
     }
 }

@@ -9,8 +9,14 @@ pub enum PathError {
 
 pub fn normalize_workspace_path(value: &str) -> Result<String, PathError> {
     let normalized = value.replace('\\', "/").trim_start_matches('/').to_string();
-    let segments: Vec<&str> = normalized.split('/').filter(|segment| !segment.is_empty()).collect();
-    if segments.iter().any(|segment| *segment == "." || *segment == "..") {
+    let segments: Vec<&str> = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments
+        .iter()
+        .any(|segment| *segment == "." || *segment == "..")
+    {
         return Err(PathError::EscapesWorkspace);
     }
     Ok(segments.join("/"))
@@ -124,7 +130,8 @@ mod tests {
 
     #[test]
     fn dedicated_paths_stay_at_home_root() {
-        let path = resolve_bot_workspace_path(ComputerMode::Dedicated, "bot-1", "notes/a.txt").unwrap();
+        let path =
+            resolve_bot_workspace_path(ComputerMode::Dedicated, "bot-1", "notes/a.txt").unwrap();
         assert_eq!(path, "notes/a.txt");
     }
 
@@ -172,7 +179,8 @@ mod tests {
 
     #[test]
     fn private_homes_are_not_the_team_home() {
-        let team = lazyboy_contracts::computer_home_key(ComputerMode::Team, "space-1", None).unwrap();
+        let team =
+            lazyboy_contracts::computer_home_key(ComputerMode::Team, "space-1", None).unwrap();
         let private = lazyboy_contracts::computer_home_key(
             ComputerMode::Dedicated,
             "space-1",
@@ -181,7 +189,8 @@ mod tests {
         .unwrap();
         assert_ne!(team, private);
         assert_eq!(
-            resolve_bot_workspace_path(ComputerMode::Dedicated, "bot-private", "shared/secret.txt").unwrap(),
+            resolve_bot_workspace_path(ComputerMode::Dedicated, "bot-private", "shared/secret.txt")
+                .unwrap(),
             "shared/secret.txt"
         );
     }

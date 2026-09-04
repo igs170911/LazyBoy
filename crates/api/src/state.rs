@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use lazyboy_control::SandboxProvider;
 use lazyboy_sandbox::{DockerSandbox, FakeSandbox};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 
-use crate::db::{Actor, Db};
 use crate::auth::AuthConfig;
+use crate::db::{Actor, Db};
 use crate::mcp::McpHub;
 use crate::memory::MemoryService;
 
@@ -52,7 +52,10 @@ impl AppState {
 }
 
 fn sandbox_from_env() -> Arc<dyn SandboxProvider> {
-    match std::env::var("SANDBOX_PROVIDER").unwrap_or_else(|_| "docker".into()).as_str() {
+    match std::env::var("SANDBOX_PROVIDER")
+        .unwrap_or_else(|_| "docker".into())
+        .as_str()
+    {
         "fake" => Arc::new(FakeSandbox::new()),
         _ => {
             let url = std::env::var("SANDBOX_SUPERVISOR_URL")

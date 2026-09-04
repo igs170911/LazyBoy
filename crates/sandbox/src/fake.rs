@@ -4,8 +4,9 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use lazyboy_contracts::{ComputerObservation, SandboxKind};
 use lazyboy_control::{
-    observation_from_png, ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult,
-    ComputerRef, FileEntry, ProvisionRequest, SandboxError, SandboxProvider, ScreenSession,
+    ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult, ComputerRef,
+    FileEntry, ProvisionRequest, SandboxError, SandboxProvider, ScreenSession,
+    observation_from_png,
 };
 
 const EMPTY_PNG: &[u8] = &[
@@ -165,11 +166,19 @@ impl SandboxProvider for FakeSandbox {
         Ok(())
     }
 
-    async fn stop(&self, _computer: &ComputerRef, _context: &AdapterContext) -> Result<(), SandboxError> {
+    async fn stop(
+        &self,
+        _computer: &ComputerRef,
+        _context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
         Ok(())
     }
 
-    async fn destroy(&self, computer: &ComputerRef, _context: &AdapterContext) -> Result<(), SandboxError> {
+    async fn destroy(
+        &self,
+        computer: &ComputerRef,
+        _context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
         self.files.lock().unwrap().remove(&computer.home_key);
         Ok(())
     }

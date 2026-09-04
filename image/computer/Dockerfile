@@ -84,7 +84,6 @@ RUN useradd --create-home --uid 1000 --shell /bin/zsh lazyboy \
     && chown -R 1000:1000 /home/lazyboy /tmp/lazyboy
 
 COPY --from=controld --chmod=755 /src/target/release/lazyboy-controld /usr/local/bin/lazyboy-controld
-COPY --chmod=755 image/computer/start.sh /usr/local/bin/lazyboy-computer
 COPY --chmod=755 image/computer/lazyboy-screen /usr/local/bin/lazyboy-screen
 COPY --chmod=755 image/computer/lazyboy-browser /usr/local/bin/lazyboy-browser
 COPY --chmod=755 image/computer/lazyboy-terminal /usr/local/bin/lazyboy-terminal
@@ -129,6 +128,7 @@ COPY --chmod=644 image/computer/xfce/helper-terminal.desktop /usr/share/xfce4/he
 COPY --chmod=644 image/computer/xfce/helper-browser.desktop /usr/share/xfce4/helpers/lazyboy-browser.desktop
 COPY --chmod=755 image/computer/chromium /usr/local/bin/chromium
 RUN sed -i 's|^Exec=/usr/bin/chromium|Exec=/usr/local/bin/lazyboy-browser|' /usr/share/applications/chromium.desktop || true
+COPY --chmod=755 image/computer/start.sh /usr/local/bin/lazyboy-computer
 
 USER 1000:1000
 ENV HOME=/home/lazyboy DISPLAY=:1 SHELL=/bin/zsh TERM=xterm-256color \

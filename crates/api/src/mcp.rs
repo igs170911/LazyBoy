@@ -8,14 +8,14 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use lazyboy_contracts::{McpServer, McpTool, PatchMcpServerInput, UpsertMcpServerInput};
+use rig_core::completion::ToolDefinition;
 use rmcp::model::{CallToolRequestParams, ClientInfo, Tool};
 use rmcp::service::RunningService;
+use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::transport::StreamableHttpClientTransport;
-use rig_core::completion::ToolDefinition;
 use rmcp::{RoleClient, ServiceExt};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -25,6 +25,7 @@ use crate::state::AppState;
 
 type ApiError = (StatusCode, Json<Value>);
 type LiveClient = RunningService<RoleClient, ClientInfo>;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct McpHub {
@@ -94,7 +95,8 @@ impl McpHub {
                         map
                     }
                 };
-                let params = CallToolRequestParams::new(tool.name.clone()).with_arguments(arguments);
+                let params =
+                    CallToolRequestParams::new(tool.name.clone()).with_arguments(arguments);
                 let result = entry
                     .client
                     .call_tool(params)
@@ -124,7 +126,10 @@ impl McpHub {
         let client = match connect_client(row).await {
             Ok(client) => client,
             Err(error) => {
-                self.errors.lock().await.insert(row.id.clone(), error.clone());
+                self.errors
+                    .lock()
+                    .await
+                    .insert(row.id.clone(), error.clone());
                 return Err(error);
             }
         };
@@ -132,7 +137,10 @@ impl McpHub {
             Ok(raw) => raw,
             Err(error) => {
                 let message = error.to_string();
-                self.errors.lock().await.insert(row.id.clone(), message.clone());
+                self.errors
+                    .lock()
+                    .await
+                    .insert(row.id.clone(), message.clone());
                 return Err(message);
             }
         };
@@ -219,17 +227,19 @@ fn slugify(name: &str) -> String {
         slug = slug.replace("__", "_");
     }
     let slug = slug.trim_matches('_').chars().take(24).collect::<String>();
-    if slug.is_empty() {
-        "mcp".into()
-    } else {
-        slug
-    }
+    if slug.is_empty() { "mcp".into() } else { slug }
 }
 
 fn exposed_name_for(slug: &str, tool: &str) -> String {
     let tool: String = tool
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("mcp_{slug}_{tool}")
 }
@@ -253,11 +263,12 @@ async fn connect_client(row: &McpRow) -> Result<LiveClient, String> {
                     cmd.env(key, text);
                 }
             }
-            let transport = TokioChildProcess::new(cmd).map_err(|error| error.to_string())?;
+            let transport = TokioChildProcess::new(cmd)
+                .map_err(|error| humanize_mcp_error(Some(command), &error.to_string()))?;
             ClientInfo::default()
                 .serve(transport)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| humanize_mcp_error(Some(command), &error.to_string()))
         }
         "http" | "sse" => {
             let url = row
@@ -292,10 +303,27 @@ async fn connect_client(row: &McpRow) -> Result<LiveClient, String> {
             ClientInfo::default()
                 .serve(transport)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| humanize_mcp_error(None, &error.to_string()))
         }
         other => Err(format!("不支援的 transport：{other}")),
     }
+}
+
+fn humanize_mcp_error(command: Option<&str>, error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("auth required") || lower.contains("unauthorized") || lower.contains("401") {
+        return "這個 MCP 需要有效金鑰才能連線。請填 token 後再試。".into();
+    }
+    if lower.contains("no such file or directory") {
+        return match command {
+            Some(cmd) => format!("找不到指令 `{cmd}`。API 容器沒有這個執行檔。"),
+            None => "找不到 MCP 指令。".into(),
+        };
+    }
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return "連線逾時。遠端服務沒回應，或第一次下載套件太久。".into();
+    }
+    error.to_string()
 }
 
 #[derive(Clone)]
@@ -394,7 +422,11 @@ async fn load_rows(pool: &sqlx::PgPool, actor: &Actor) -> Result<Vec<McpRow>, sq
     Ok(rows.into_iter().map(row_from).collect())
 }
 
-async fn load_row(pool: &sqlx::PgPool, actor: &Actor, id: &str) -> Result<Option<McpRow>, sqlx::Error> {
+async fn load_row(
+    pool: &sqlx::PgPool,
+    actor: &Actor,
+    id: &str,
+) -> Result<Option<McpRow>, sqlx::Error> {
     let row: Option<RowTuple> = sqlx::query_as(
         "SELECT id, name, transport, command, args, env, url, headers, enabled, created_at, updated_at
          FROM mcp_servers WHERE id=$1 AND space_id=$2 AND user_id=$3",
@@ -414,7 +446,11 @@ pub fn router() -> Router<AppState> {
             "/api/mcp-servers/{id}",
             get(get_server).patch(update_server).delete(delete_server),
         )
-        .route("/api/mcp-servers/{id}/reconnect", axum::routing::post(reconnect_server))
+        .route(
+            "/api/mcp-servers/{id}/reconnect",
+            axum::routing::post(reconnect_server),
+        )
+        .merge(crate::mcp_catalog::router())
 }
 
 fn internal(message: String) -> ApiError {
@@ -427,6 +463,14 @@ fn internal(message: String) -> ApiError {
 
 fn bad(message: &str) -> ApiError {
     (StatusCode::BAD_REQUEST, Json(json!({"message": message})))
+}
+
+async fn rollback_server(state: &AppState, id: &str) {
+    state.mcp.forget(id).await;
+    let _ = sqlx::query("DELETE FROM mcp_servers WHERE id=$1")
+        .bind(id)
+        .execute(state.pool())
+        .await;
 }
 
 async fn actor(state: &AppState) -> Result<Actor, ApiError> {
@@ -484,7 +528,7 @@ async fn create_server(
     validate_input(&input)?;
     let actor = actor(&state).await?;
     let id = Uuid::new_v4().to_string();
-    let name = input.name.trim().chars().take(40).collect::<String>();
+    let name = input.name.trim().chars().take(80).collect::<String>();
     sqlx::query(
         "INSERT INTO mcp_servers (id,space_id,user_id,name,transport,command,args,env,url,headers,enabled)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
@@ -515,27 +559,32 @@ async fn create_server(
         .await
         .map_err(|error| internal(error.to_string()))?
         .ok_or_else(|| internal("missing row".into()))?;
-    let mut status = if row.enabled { "disconnected" } else { "disabled" }.to_string();
-    let mut error = None;
+    let mut status = if row.enabled {
+        "disconnected"
+    } else {
+        "disabled"
+    }
+    .to_string();
     let mut tools = Vec::new();
     if row.enabled {
-        match tokio::time::timeout(Duration::from_secs(25), state.mcp.connect_row(&row)).await {
+        match tokio::time::timeout(CONNECT_TIMEOUT, state.mcp.connect_row(&row)).await {
             Ok(Ok(connected)) => {
                 status = "connected".into();
                 tools = connected;
             }
             Ok(Err(message)) => {
-                error = Some(message);
+                rollback_server(&state, &id).await;
+                return Err((StatusCode::BAD_GATEWAY, Json(json!({"message": message}))));
             }
             Err(_) => {
-                error = Some("連線逾時（25 秒）".into());
+                rollback_server(&state, &id).await;
+                return Err(bad("連線逾時（60 秒）"));
             }
         }
     }
-    row.last_error = error.clone();
     Ok((
         StatusCode::CREATED,
-        Json(row.into_server(status, error, tools)),
+        Json(row.into_server(status, None, tools)),
     ))
 }
 
@@ -626,17 +675,22 @@ async fn update_server(
     } else {
         state.mcp.forget(&id).await;
     }
-    let mut status = if row.enabled { "disconnected" } else { "disabled" }.to_string();
+    let mut status = if row.enabled {
+        "disconnected"
+    } else {
+        "disabled"
+    }
+    .to_string();
     let mut error = None;
     let mut tools = Vec::new();
     if row.enabled {
-        match tokio::time::timeout(Duration::from_secs(25), state.mcp.connect_row(&row)).await {
+        match tokio::time::timeout(CONNECT_TIMEOUT, state.mcp.connect_row(&row)).await {
             Ok(Ok(connected)) => {
                 status = "connected".into();
                 tools = connected;
             }
             Ok(Err(message)) => error = Some(message),
-            Err(_) => error = Some("連線逾時（25 秒）".into()),
+            Err(_) => error = Some("連線逾時（60 秒）".into()),
         }
     }
     row.last_error = error.clone();
@@ -675,18 +729,22 @@ async fn reconnect_server(
         state.mcp.disconnect(&id).await;
         return Ok(Json(row.into_server("disabled".into(), None, Vec::new())));
     }
-    match tokio::time::timeout(Duration::from_secs(25), state.mcp.connect_row(&row)).await {
+    match tokio::time::timeout(CONNECT_TIMEOUT, state.mcp.connect_row(&row)).await {
         Ok(Ok(tools)) => Ok(Json(row.into_server("connected".into(), None, tools))),
         Ok(Err(message)) => {
             state.mcp.disconnect(&id).await;
             row.last_error = Some(message.clone());
-            Ok(Json(row.into_server("disconnected".into(), Some(message), Vec::new())))
+            Ok(Json(row.into_server(
+                "disconnected".into(),
+                Some(message),
+                Vec::new(),
+            )))
         }
         Err(_) => {
             state.mcp.disconnect(&id).await;
             Ok(Json(row.into_server(
                 "disconnected".into(),
-                Some("連線逾時（25 秒）".into()),
+                Some("連線逾時（60 秒）".into()),
                 Vec::new(),
             )))
         }

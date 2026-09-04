@@ -69,4 +69,4 @@ For frontend development, run `npm install && npm run dev` in `apps/web`, then o
 
 The standalone supervisor listens on `127.0.0.1:7091` by default. Docker Compose reaches it internally as `supervisor:7091`; there is intentionally no host port `7092`.
 
-Model providers: v1 talks to xAI (`XAI_API_KEY`). `openai` / `anthropic` / `openrouter` are reserved on the factory and return `unsupported_provider`.
+Model providers: set the workspace default in 本機工作區 → 設定. v1 supports xAI (`XAI_API_KEY`), OpenCode Go (`OPENCODE_GO_API_KEY` or a key saved in settings), and a self-hosted OpenAI-compatible endpoint (base URL + optional key). Keys saved in the UI are stored on the local workspace and take precedence over env vars.

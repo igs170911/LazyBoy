@@ -197,8 +197,10 @@ pub const DEFAULT_SCREEN_HEIGHT: u32 = 800;
 pub const TEAM_SCREEN_LIMIT: u32 = 8;
 
 pub const MULTI_SCREEN_UNAVAILABLE: &str = "This computer does not support multiple screens. Desktop tools are already in use on the shared display. File and shell tools still work.";
-pub const TEAM_SCREENS_FULL: &str = "This Team computer has no free screens left. File and shell tools still work.";
-pub const PROFILE_LOCKED: &str = "Another bot is using this shared browser profile. File and shell tools still work.";
+pub const TEAM_SCREENS_FULL: &str =
+    "This Team computer has no free screens left. File and shell tools still work.";
+pub const PROFILE_LOCKED: &str =
+    "Another bot is using this shared browser profile. File and shell tools still work.";
 
 #[cfg(test)]
 mod tests {

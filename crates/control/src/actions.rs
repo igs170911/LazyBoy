@@ -1,5 +1,5 @@
-use lazyboy_contracts::{ComputerAction, PointerButton, PointerType, ScrollDirection};
-use serde_json::Value;
+use lazyboy_contracts::{ComputerAction, PointerButton, PointerType, ScrollDirection, UiElement};
+use serde_json::{Value, json};
 use thiserror::Error;
 
 pub const MAX_COMPUTER_ACTIONS: usize = 24;
@@ -18,6 +18,30 @@ pub enum ActionError {
     Unsupported(String),
     #[error("computer action {0} must be a non-negative coordinate")]
     BadCoordinate(&'static str),
+    #[error("computer action element {0} is not on the current screen")]
+    UnknownElement(u32),
+}
+
+/// Fill x/y from a numbered on-screen element so the model can click by id.
+pub fn apply_element_targets(value: &mut Value, elements: &[UiElement]) -> Result<(), ActionError> {
+    let Some(items) = value.as_array_mut() else {
+        return Ok(());
+    };
+    for raw in items {
+        let Some(action) = raw.as_object_mut() else {
+            continue;
+        };
+        let Some(id) = action.get("element").and_then(Value::as_u64) else {
+            continue;
+        };
+        let Some(element) = elements.iter().find(|element| u64::from(element.id) == id) else {
+            return Err(ActionError::UnknownElement(id as u32));
+        };
+        let (x, y) = element.center();
+        action.insert("x".into(), json!(x));
+        action.insert("y".into(), json!(y));
+    }
+    Ok(())
 }
 
 pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, ActionError> {
@@ -61,7 +85,8 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
                     pointer_type,
                     button: Some(button),
                 };
-                let doubled = action.get("double").and_then(Value::as_bool) == Some(true) && kind == "click";
+                let doubled =
+                    action.get("double").and_then(Value::as_bool) == Some(true) && kind == "click";
                 actions.push(pointer.clone());
                 if doubled {
                     actions.push(ComputerAction::Wait { ms: 70 });
@@ -83,11 +108,17 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
                 let x = coordinate(action.get("x"), "x")?;
                 let y = coordinate(action.get("y"), "y")?;
                 let to_x = coordinate(
-                    action.get("x2").or_else(|| action.get("toX")).or_else(|| action.get("to_x")),
+                    action
+                        .get("x2")
+                        .or_else(|| action.get("toX"))
+                        .or_else(|| action.get("to_x")),
                     "x2",
                 )?;
                 let to_y = coordinate(
-                    action.get("y2").or_else(|| action.get("toY")).or_else(|| action.get("to_y")),
+                    action
+                        .get("y2")
+                        .or_else(|| action.get("toY"))
+                        .or_else(|| action.get("to_y")),
                     "y2",
                 )?;
                 let button = if action.get("button").and_then(Value::as_str) == Some("right") {
@@ -130,13 +161,16 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                let modifiers = action.get("modifiers").and_then(Value::as_array).map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                });
+                let modifiers = action
+                    .get("modifiers")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    });
                 actions.push(ComputerAction::Key { key, modifiers });
             }
             "scroll" => {
@@ -174,11 +208,13 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
                     ms: bounded(action.get("ms"), 0, 1_200, 80),
                 });
             }
-            other => return Err(ActionError::Unsupported(if other.is_empty() {
-                "(missing)".to_string()
-            } else {
-                other.to_string()
-            })),
+            other => {
+                return Err(ActionError::Unsupported(if other.is_empty() {
+                    "(missing)".to_string()
+                } else {
+                    other.to_string()
+                }));
+            }
         }
     }
     if actions.len() > MAX_COMPUTER_ACTIONS {
@@ -253,7 +289,8 @@ mod tests {
 
     #[test]
     fn scroll_defaults_to_a_real_page_chunk() {
-        let actions = parse_computer_actions(&json!([{"kind": "scroll", "direction": "down"}])).unwrap();
+        let actions =
+            parse_computer_actions(&json!([{"kind": "scroll", "direction": "down"}])).unwrap();
         match &actions[0] {
             ComputerAction::Scroll { amount, .. } => assert_eq!(*amount, Some(12)),
             other => panic!("{other:?}"),
@@ -262,11 +299,45 @@ mod tests {
 
     #[test]
     fn rejects_empty_and_overflow() {
-        assert_eq!(parse_computer_actions(&json!([])).unwrap_err(), ActionError::Empty);
+        assert_eq!(
+            parse_computer_actions(&json!([])).unwrap_err(),
+            ActionError::Empty
+        );
         let too_many: Vec<_> = (0..25).map(|_| json!({"kind": "wait", "ms": 1})).collect();
         assert_eq!(
             parse_computer_actions(&json!(too_many)).unwrap_err(),
             ActionError::TooMany
+        );
+    }
+
+    #[test]
+    fn element_id_fills_click_coordinates() {
+        let mut actions = json!([{"kind": "click", "element": 1}]);
+        let elements = vec![UiElement {
+            id: 1,
+            title: "Terminal".into(),
+            x: 10,
+            y: 20,
+            w: 100,
+            h: 40,
+            ..UiElement::default()
+        }];
+        apply_element_targets(&mut actions, &elements).unwrap();
+        assert_eq!(actions[0]["x"], 60);
+        assert_eq!(actions[0]["y"], 40);
+        let parsed = parse_computer_actions(&actions).unwrap();
+        assert!(matches!(
+            parsed[0],
+            ComputerAction::Pointer { x: 60, y: 40, .. }
+        ));
+    }
+
+    #[test]
+    fn unknown_element_errors() {
+        let mut actions = json!([{"kind": "click", "element": 9}]);
+        assert_eq!(
+            apply_element_targets(&mut actions, &[]).unwrap_err(),
+            ActionError::UnknownElement(9)
         );
     }
 }

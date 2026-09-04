@@ -3,19 +3,19 @@ use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
 use lazyboy_contracts::{
-    BrowserProfileMode, ComputerCapabilities, ComputerMode, ComputerState, ComputerStatus, ControlHolder,
-    DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
+    BrowserProfileMode, ComputerCapabilities, ComputerMode, ComputerState, ComputerStatus,
+    ControlHolder, DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
 };
 use lazyboy_control::{
-    admit_gui, admit_new_screen, browser_profile_path, execution_blocks_user_takeover, profile_lock_key,
-    screen_layout, team_bot_workspace_directory, user_holds_control, AdapterContext, CommandRequest,
-    EnsureScreenRequest, ProvisionRequest,
+    AdapterContext, CommandRequest, EnsureScreenRequest, ProvisionRequest, admit_gui,
+    admit_new_screen, browser_profile_path, execution_blocks_user_takeover, profile_lock_key,
+    screen_layout, team_bot_workspace_directory, user_holds_control,
 };
 use uuid::Uuid;
 
 use crate::db::{
-    parse_holder, parse_kind, parse_mode, parse_profile_mode, parse_run_status, parse_state, Actor, ComputerRow,
-    ScreenRow,
+    Actor, ComputerRow, ScreenRow, parse_holder, parse_kind, parse_mode, parse_profile_mode,
+    parse_run_status, parse_state,
 };
 use crate::state::AppState;
 
@@ -143,12 +143,14 @@ pub async fn ensure_bot_screen(
     let profile_path = browser_profile_path(profile_mode, bot_id, run_id);
     let row = if let Some(existing) = existing {
         if existing.profile_path != profile_path && profile_mode == BrowserProfileMode::PerTask {
-            sqlx::query("UPDATE computer_screens SET profile_path = $2, updated_at = now() WHERE id = $1")
-                .bind(&existing.id)
-                .bind(&profile_path)
-                .execute(state.pool())
-                .await
-                .map_err(|error| error.to_string())?;
+            sqlx::query(
+                "UPDATE computer_screens SET profile_path = $2, updated_at = now() WHERE id = $1",
+            )
+            .bind(&existing.id)
+            .bind(&profile_path)
+            .execute(state.pool())
+            .await
+            .map_err(|error| error.to_string())?;
         }
         state
             .db
@@ -179,12 +181,19 @@ pub async fn ensure_bot_screen(
         .await;
         match inserted {
             Ok(row) => row,
-            Err(error) if error.to_string().contains("computer_screens_computer_id_slot") => {
+            Err(error)
+                if error
+                    .to_string()
+                    .contains("computer_screens_computer_id_slot") =>
+            {
                 return Ok(BoundScreen {
                     row: None,
-                    gui_block: Some(admit_new_screen(&caps, &used, None).err().map(|block| block.message()).unwrap_or_else(|| {
-                        lazyboy_contracts::TEAM_SCREENS_FULL.to_string()
-                    })),
+                    gui_block: Some(
+                        admit_new_screen(&caps, &used, None)
+                            .err()
+                            .map(|block| block.message())
+                            .unwrap_or_else(|| lazyboy_contracts::TEAM_SCREENS_FULL.to_string()),
+                    ),
                 });
             }
             Err(error) => return Err(error.to_string()),
@@ -198,7 +207,11 @@ pub async fn ensure_bot_screen(
     };
     let mut last_error = None;
     for attempt in 0..8 {
-        match state.sandbox.ensure_screen(&computer_ref, request.clone(), &ctx).await {
+        match state
+            .sandbox
+            .ensure_screen(&computer_ref, request.clone(), &ctx)
+            .await
+        {
             Ok(_) => {
                 last_error = None;
                 break;
@@ -255,23 +268,88 @@ async fn restore_computer_screens(
     }
 }
 
-async fn guest_has_screens(state: &AppState, actor: &Actor, bot_id: &str, computer: &ComputerRow) -> bool {
+async fn guest_has_screens(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+    computer: &ComputerRow,
+) -> bool {
+    matches!(
+        probe_computer_container(state, actor, bot_id, computer).await,
+        ContainerProbe::Alive
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContainerProbe {
+    Alive,
+    Missing,
+    Unknown,
+}
+
+fn container_missing_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("is not running")
+        || error.contains("no such container")
+        || error.contains("404 not found")
+        || error.contains("status code 409")
+}
+
+async fn probe_computer_container(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+    computer: &ComputerRow,
+) -> ContainerProbe {
     let Some(computer_ref) = computer_ref(computer) else {
-        return false;
+        return ContainerProbe::Missing;
     };
-    let result = state
+    match state
         .sandbox
         .execute(
             &computer_ref,
             CommandRequest {
-                argv: vec!["test".into(), "-x".into(), "/usr/local/bin/lazyboy-screen".into()],
+                argv: vec![
+                    "test".into(),
+                    "-x".into(),
+                    "/usr/local/bin/lazyboy-screen".into(),
+                ],
                 cwd: None,
                 timeout_ms: Some(5_000),
             },
             &adapter_context(actor, bot_id, "probe"),
         )
-        .await;
-    matches!(result, Ok(output) if output.code == 0)
+        .await
+    {
+        Ok(output) if output.code == 0 => ContainerProbe::Alive,
+        Ok(_) => ContainerProbe::Missing,
+        Err(error) if container_missing_error(&error.to_string()) => ContainerProbe::Missing,
+        Err(error) => {
+            tracing::warn!("computer {} probe failed: {error}", computer.id);
+            ContainerProbe::Unknown
+        }
+    }
+}
+
+async fn mark_computer_missing(state: &AppState, computer: &mut ComputerRow) {
+    if computer.state != "running" {
+        return;
+    }
+    tracing::warn!(
+        "computer {} is marked running but the container is gone",
+        computer.id
+    );
+    if let Err(error) = sqlx::query(
+        "UPDATE computers SET state = 'error', updated_at = now() WHERE id = $1 AND state = 'running'",
+    )
+    .bind(&computer.id)
+    .execute(state.pool())
+    .await
+    {
+        tracing::error!("failed to mark computer {} missing: {error}", computer.id);
+        return;
+    }
+    computer.state = "error".into();
 }
 
 pub async fn take_screen_execution(
@@ -371,7 +449,11 @@ pub async fn take_profile_lock(
         )
         .err()
         .map(|block| block.message())
-        .unwrap_or_else(|| format!("Another bot is using this shared browser profile. Currently in use by {other}.")),
+        .unwrap_or_else(|| {
+            format!(
+                "Another bot is using this shared browser profile. Currently in use by {other}."
+            )
+        }),
     ))
 }
 
@@ -382,7 +464,10 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "bot not found".to_string())?;
-    let computer_id = bot.computer_id.clone().ok_or_else(|| "bot has no computer".to_string())?;
+    let computer_id = bot
+        .computer_id
+        .clone()
+        .ok_or_else(|| "bot has no computer".to_string())?;
     let computer = state
         .db
         .get_computer(&computer_id)
@@ -419,31 +504,56 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
     .execute(state.pool())
     .await
     .map_err(|error| error.to_string())?;
-    if claimed.rows_affected() != 1 && computer.state != "booting" {
+    // Only the request that atomically transitions the row to booting may
+    // provision it.  Allowing every caller that observes `booting` through
+    // here starts duplicate containers and can leave the row inconsistent.
+    if claimed.rows_affected() != 1 {
         return Err("Computer is busy".into());
     }
     let ctx = adapter_context(actor, bot_id, "boot");
     let home = home_path(&state.data_dir, &computer.home_key);
-    tokio::fs::create_dir_all(&home)
-        .await
-        .map_err(|error| error.to_string())?;
-    let provisioned = state
-        .sandbox
-        .provision(
+    if let Err(error) = tokio::fs::create_dir_all(&home).await {
+        let message = error.to_string();
+        mark_boot_error(state, &computer_id, None).await;
+        return Err(message);
+    }
+    let provisioned = match tokio::time::timeout(
+        Duration::from_secs(120),
+        state.sandbox.provision(
             ProvisionRequest {
                 home_key: computer.home_key.clone(),
                 home_path: home.to_string_lossy().into_owned(),
                 provider_ref: computer.provider_ref.clone(),
             },
             &ctx,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
+        ),
+    )
+    .await
+    {
+        Ok(Ok(provisioned)) => provisioned,
+        Ok(Err(error)) => {
+            let message = error.to_string();
+            mark_boot_error(state, &computer_id, None).await;
+            return Err(message);
+        }
+        Err(_) => {
+            let message = "computer provision timed out after 120 seconds".to_string();
+            mark_boot_error(state, &computer_id, None).await;
+            return Err(message);
+        }
+    };
     if parse_mode(&computer.scope) == ComputerMode::Team {
-        let folder = team_bot_workspace_directory(bot_id).map_err(|error| error.to_string())?;
-        let _ = state
-            .sandbox
-            .execute(
+        let folder = match team_bot_workspace_directory(bot_id) {
+            Ok(folder) => folder,
+            Err(error) => {
+                let message = error.to_string();
+                mark_boot_error(state, &computer_id, None).await;
+                return Err(message);
+            }
+        };
+        let setup = tokio::time::timeout(
+            Duration::from_secs(15),
+            state.sandbox.execute(
                 &provisioned,
                 CommandRequest {
                     argv: vec!["mkdir".into(), "-p".into(), "shared".into(), folder],
@@ -451,10 +561,19 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
                     timeout_ms: Some(10_000),
                 },
                 &ctx,
-            )
-            .await;
+            ),
+        )
+        .await;
+        if let Err(error) = match setup {
+            Ok(result) => result.map_err(|error| error.to_string()),
+            Err(_) => Err("computer workspace setup timed out after 15 seconds".into()),
+        } {
+            // Workspace setup is additive; a failed mkdir should not make an
+            // otherwise usable desktop unavailable. The next run can retry it.
+            tracing::warn!("computer workspace setup failed for {bot_id}: {error}");
+        }
     }
-    sqlx::query(
+    let running = sqlx::query(
         "UPDATE computers SET state = 'running', provider_ref = $2, kind = $3, updated_at = now()
          WHERE id = $1 AND state = 'booting'",
     )
@@ -464,6 +583,9 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
     .execute(state.pool())
     .await
     .map_err(|error| error.to_string())?;
+    if running.rows_affected() != 1 {
+        return Err("computer boot was superseded".into());
+    }
     let computer = state
         .db
         .get_computer(&computer_id)
@@ -478,6 +600,20 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
     Ok(status_from(bot_id, &computer, screen.as_ref(), None))
 }
 
+async fn mark_boot_error(state: &AppState, computer_id: &str, provider_ref: Option<&str>) {
+    if let Err(error) = sqlx::query(
+        "UPDATE computers SET state = 'error', provider_ref = COALESCE($2, provider_ref), updated_at = now()
+         WHERE id = $1 AND state = 'booting'",
+    )
+    .bind(computer_id)
+    .bind(provider_ref)
+    .execute(state.pool())
+    .await
+    {
+        tracing::error!("failed to mark computer {computer_id} boot error: {error}");
+    }
+}
+
 pub async fn stop(state: &AppState, actor: &Actor, bot_id: &str) -> Result<ComputerStatus, String> {
     let bot = state
         .db
@@ -485,7 +621,10 @@ pub async fn stop(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "bot not found".to_string())?;
-    let computer_id = bot.computer_id.clone().ok_or_else(|| "bot has no computer".to_string())?;
+    let computer_id = bot
+        .computer_id
+        .clone()
+        .ok_or_else(|| "bot has no computer".to_string())?;
     let computer = state
         .db
         .get_computer(&computer_id)
@@ -517,18 +656,30 @@ pub async fn stop(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
     .execute(state.pool())
     .await
     .map_err(|error| error.to_string())?;
-    let computer = state.db.get_computer(&computer_id).await.map_err(|e| e.to_string())?.unwrap();
+    let computer = state
+        .db
+        .get_computer(&computer_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap();
     Ok(status_from(bot_id, &computer, None, None))
 }
 
-pub async fn restart(state: &AppState, actor: &Actor, bot_id: &str) -> Result<ComputerStatus, String> {
+pub async fn restart(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+) -> Result<ComputerStatus, String> {
     let bot = state
         .db
         .get_bot(actor, bot_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "bot not found".to_string())?;
-    let computer_id = bot.computer_id.clone().ok_or_else(|| "bot has no computer".to_string())?;
+    let computer_id = bot
+        .computer_id
+        .clone()
+        .ok_or_else(|| "bot has no computer".to_string())?;
     let computer = state
         .db
         .get_computer(&computer_id)
@@ -537,8 +688,30 @@ pub async fn restart(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Co
         .ok_or_else(|| "computer not found".to_string())?;
     if let Some(computer_ref) = computer_ref(&computer) {
         let ctx = adapter_context(actor, bot_id, "restart");
-        let _ = state.sandbox.stop(&computer_ref, &ctx).await;
-        let _ = state.sandbox.destroy(&computer_ref, &ctx).await;
+        if tokio::time::timeout(
+            Duration::from_secs(20),
+            state.sandbox.stop(&computer_ref, &ctx),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!(
+                "computer stop timed out during restart: {}",
+                computer_ref.id
+            );
+        }
+        if tokio::time::timeout(
+            Duration::from_secs(20),
+            state.sandbox.destroy(&computer_ref, &ctx),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!(
+                "computer destroy timed out during restart: {}",
+                computer_ref.id
+            );
+        }
     }
     sqlx::query(
         "UPDATE computers SET state = 'stopped', provider_ref = NULL, control_holder = 'none',
@@ -554,14 +727,21 @@ pub async fn restart(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Co
     boot(state, actor, bot_id).await
 }
 
-pub async fn takeover(state: &AppState, actor: &Actor, bot_id: &str) -> Result<(String, String), String> {
+pub async fn takeover(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+) -> Result<(String, String), String> {
     let bot = state
         .db
         .get_bot(actor, bot_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "bot not found".to_string())?;
-    let computer_id = bot.computer_id.clone().ok_or_else(|| "bot has no computer".to_string())?;
+    let computer_id = bot
+        .computer_id
+        .clone()
+        .ok_or_else(|| "bot has no computer".to_string())?;
     let computer = state
         .db
         .get_computer(&computer_id)
@@ -572,9 +752,19 @@ pub async fn takeover(state: &AppState, actor: &Actor, bot_id: &str) -> Result<(
         return Err("computer must be running".into());
     }
     let bound = ensure_bot_screen(state, actor, bot_id, &computer, None).await?;
-    let screen = bound.row.ok_or_else(|| bound.gui_block.unwrap_or_else(|| "screen unavailable".into()))?;
-    let active = state.db.active_run(bot_id).await.map_err(|error| error.to_string())?;
-    let run_status = active.as_ref().and_then(|(_, status, _)| parse_run_status(status));
+    let screen = bound.row.ok_or_else(|| {
+        bound
+            .gui_block
+            .unwrap_or_else(|| "screen unavailable".into())
+    })?;
+    let active = state
+        .db
+        .active_run(bot_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let run_status = active
+        .as_ref()
+        .and_then(|(_, status, _)| parse_run_status(status));
     if execution_blocks_user_takeover(
         screen.execution_run_id.is_some(),
         screen.execution_lease_expires_at,
@@ -606,6 +796,28 @@ pub async fn takeover(state: &AppState, actor: &Actor, bot_id: &str) -> Result<(
     .execute(state.pool())
     .await
     .map_err(|error| error.to_string())?;
+    let paused: Vec<(String, String)> = sqlx::query_as(
+        "UPDATE runs SET status = 'waiting_takeover',
+                checkpoint = COALESCE(checkpoint, '{}'::jsonb)
+                    || jsonb_build_object('resumeAfterTakeover', true),
+                updated_at = now()
+         WHERE bot_id = $1 AND status IN ('queued','leased','running')
+         RETURNING id, thread_id",
+    )
+    .bind(bot_id)
+    .fetch_all(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    for (run_id, thread_id) in paused {
+        let _ = crate::runs::append_bot_message(
+            state,
+            &thread_id,
+            &run_id,
+            bot_id,
+            "你已接手操作。完成後釋放控制權，我會從目前畫面繼續。",
+        )
+        .await;
+    }
     Ok((lease_id, expires.to_rfc3339()))
 }
 
@@ -690,7 +902,11 @@ pub fn user_has_control(computer: &ComputerRow, bot_id: &str) -> bool {
     user_has_screen_control(computer, None, bot_id)
 }
 
-pub fn user_has_screen_control(computer: &ComputerRow, screen: Option<&ScreenRow>, bot_id: &str) -> bool {
+pub fn user_has_screen_control(
+    computer: &ComputerRow,
+    screen: Option<&ScreenRow>,
+    bot_id: &str,
+) -> bool {
     if let Some(screen) = screen {
         return user_holds_control(
             parse_holder(&screen.control_holder),
@@ -756,10 +972,12 @@ pub async fn idle_loop(state: AppState) {
                     )
                     .await;
             }
-            let _ = sqlx::query("UPDATE computers SET state = 'stopped', updated_at = now() WHERE id = $1")
-                .bind(&computer.id)
-                .execute(state.pool())
-                .await;
+            let _ = sqlx::query(
+                "UPDATE computers SET state = 'stopped', updated_at = now() WHERE id = $1",
+            )
+            .bind(&computer.id)
+            .execute(state.pool())
+            .await;
         }
     }
 }
@@ -775,20 +993,32 @@ pub fn computer_ref(computer: &ComputerRow) -> Option<lazyboy_control::ComputerR
     })
 }
 
-pub async fn current_status(state: &AppState, actor: &Actor, bot_id: &str) -> Result<ComputerStatus, String> {
+pub async fn current_status(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+) -> Result<ComputerStatus, String> {
     let bot = state
         .db
         .get_bot(actor, bot_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "bot not found".to_string())?;
-    let computer_id = bot.computer_id.ok_or_else(|| "bot has no computer".to_string())?;
-    let computer = state
+    let computer_id = bot
+        .computer_id
+        .ok_or_else(|| "bot has no computer".to_string())?;
+    let mut computer = state
         .db
         .get_computer(&computer_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "computer not found".to_string())?;
+    if computer.state == "running"
+        && probe_computer_container(state, actor, bot_id, &computer).await
+            == ContainerProbe::Missing
+    {
+        mark_computer_missing(state, &mut computer).await;
+    }
     let screen = state
         .db
         .get_screen(&computer.id, bot_id)
@@ -799,8 +1029,9 @@ pub async fn current_status(state: &AppState, actor: &Actor, bot_id: &str) -> Re
         .as_ref()
         .and_then(|(_, run_status, _)| parse_run_status(run_status));
     let waiting_for_takeover = run_status == Some(lazyboy_contracts::RunStatus::WaitingTakeover);
-    let busy = run_status
-        .filter(|status| status.is_active() && *status != lazyboy_contracts::RunStatus::WaitingTakeover);
+    let busy = run_status.filter(|status| {
+        status.is_active() && *status != lazyboy_contracts::RunStatus::WaitingTakeover
+    });
     let busy_bot_name = busy.map(|_| bot.name.clone());
     let mut status = status_from(bot_id, &computer, screen.as_ref(), busy_bot_name);
     status.takeover_requested = waiting_for_takeover;

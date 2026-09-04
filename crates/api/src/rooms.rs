@@ -4,8 +4,10 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use lazyboy_contracts::{CreateRoomInput, CreateSessionInput, Room, RoomMember, RoomStatus, Session};
-use serde_json::{json, Value};
+use lazyboy_contracts::{
+    CreateRoomInput, CreateSessionInput, Room, RoomMember, RoomStatus, Session,
+};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::db::Actor;
@@ -18,7 +20,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/rooms", get(list_rooms).post(create_room))
         .route("/api/rooms/{id}", get(get_room).delete(delete_room))
-        .route("/api/rooms/{id}/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/api/rooms/{id}/sessions",
+            get(list_sessions).post(create_session),
+        )
         .route("/api/rooms/{id}/status", get(room_status))
 }
 
@@ -59,7 +64,11 @@ async fn members_for(state: &AppState, room_id: &str) -> Result<Vec<RoomMember>,
     Ok(rows.into_iter().map(member_from_row).collect())
 }
 
-async fn room_from_id(state: &AppState, actor: &Actor, id: &str) -> Result<Option<Room>, sqlx::Error> {
+async fn room_from_id(
+    state: &AppState,
+    actor: &Actor,
+    id: &str,
+) -> Result<Option<Room>, sqlx::Error> {
     let row: Option<(String, String, Option<chrono::DateTime<chrono::Utc>>, Option<String>, i64)> =
         sqlx::query_as(
             "SELECT r.id, r.name,
@@ -145,13 +154,20 @@ async fn create_room(
         .await
         .map_err(|error| internal(error.to_string()))?;
         let Some(row) = exists else {
-            return Err((StatusCode::BAD_REQUEST, Json(json!({"message":"找不到機器人"}))));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"message":"找不到機器人"})),
+            ));
         };
         members.push(member_from_row(row));
     }
     let room_id = Uuid::new_v4().to_string();
     let host_id = members[0].id.clone();
-    let mut tx = state.pool().begin().await.map_err(|error| internal(error.to_string()))?;
+    let mut tx = state
+        .pool()
+        .begin()
+        .await
+        .map_err(|error| internal(error.to_string()))?;
     sqlx::query("INSERT INTO rooms (id,space_id,user_id,name) VALUES ($1,$2,$3,$4)")
         .bind(&room_id)
         .bind(&actor.space_id)
@@ -180,7 +196,9 @@ async fn create_room(
     .execute(&mut *tx)
     .await
     .map_err(|error| internal(error.to_string()))?;
-    tx.commit().await.map_err(|error| internal(error.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|error| internal(error.to_string()))?;
     Ok((
         StatusCode::CREATED,
         Json(Room {
@@ -194,16 +212,27 @@ async fn create_room(
     ))
 }
 
-async fn get_room(State(state): State<AppState>, Path(id): Path<String>) -> Result<Json<Room>, ApiError> {
+async fn get_room(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Room>, ApiError> {
     let actor = actor(&state).await?;
     room_from_id(&state, &actor, &id)
         .await
         .map_err(|error| internal(error.to_string()))?
         .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"message":"group not found"}))))
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"message":"group not found"})),
+            )
+        })
 }
 
-async fn delete_room(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+async fn delete_room(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
     let actor = actor(&state).await?;
     let deleted = sqlx::query("DELETE FROM rooms WHERE id=$1 AND space_id=$2 AND user_id=$3")
         .bind(&id)
@@ -213,7 +242,10 @@ async fn delete_room(State(state): State<AppState>, Path(id): Path<String>) -> R
         .await
         .map_err(|error| internal(error.to_string()))?;
     if deleted.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"group not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"group not found"})),
+        ));
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -228,7 +260,10 @@ async fn list_sessions(
         .map_err(|error| internal(error.to_string()))?
         .is_none()
     {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"group not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"group not found"})),
+        ));
     }
     let rows = sqlx::query_as(
         "SELECT id, bot_id, title, status, created_at, updated_at, next_message_seq,
@@ -256,12 +291,17 @@ async fn create_session(
         .await
         .map_err(|error| internal(error.to_string()))?
     else {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"group not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"group not found"})),
+        ));
     };
-    let host = room
-        .members
-        .first()
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, Json(json!({"message":"群組沒有成員"}))))?;
+    let host = room.members.first().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message":"群組沒有成員"})),
+        )
+    })?;
     let title = normalized_title(&input.title);
     let row = sqlx::query_as(
         "INSERT INTO threads (id, space_id, bot_id, user_id, title, room_id)
@@ -291,7 +331,10 @@ async fn room_status(
         .map_err(|error| internal(error.to_string()))?
         .is_none()
     {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"group not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"group not found"})),
+        ));
     }
     let rows: Vec<(String, String, String, String)> = sqlx::query_as(
         "SELECT DISTINCT b.id, b.name, b.avatar_color, b.avatar_shape

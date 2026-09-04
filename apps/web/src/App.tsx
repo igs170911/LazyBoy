@@ -16,39 +16,37 @@ import visibility from "react-useanimations/lib/visibility";
 import visibility2 from "react-useanimations/lib/visibility2";
 import searchToX from "react-useanimations/lib/searchToX";
 import { api, ApiError } from "./api";
-import { t } from "./i18n";
-import blobshape from "blobshape";
-import type { AvatarShape, Bot, ComputerMode, ComputerStatus, McpServer, McpTransport, MemoryItem, Message, Room, RoomMember, Session } from "./types";
+import { Avatar, AvatarLookProvider, AvatarStack, BLOBATAR_BACKGROUNDS, BLOBATAR_EXPRESSIONS, BLOBATAR_SHAPES, DEFAULT_LOOK, persistBlobatarShape, readAvatarLooks, resolveBlobatarShape, writeAvatarLook, type AvatarBackground, type AvatarExpression, type AvatarLook } from "./avatar";
+import { t, type MessageKey } from "./i18n";
+import type { AvatarShape, Bot, ComputerMode, ComputerStatus, McpCatalogEntry, McpServer, McpTransport, MemoryItem, Message, ModelProviderId, Room, RoomMember, Session, WorkspaceSettings } from "./types";
 
 const blankComputer:ComputerStatus={botId:"",mode:"team",state:"stopped",controlHolder:"none",takeoverRequested:false,busyBotName:null,busySessionId:null,busyRunId:null,display:null,profileMode:"per-bot",screenAvailable:false};
 const SESSION_STORE="lazyboy.sessionByBot";
 const PANE_STORE="lazyboy.rightPane";
 const WORKSPACE_STORE="lazyboy.workspace";
 type RightPart="computer"|"memory"|"settings"|"plugins";
-type AccountDialog="phone"|"settings"|"about"|"help"|"feedback"|null;
+type AccountDialog="phone"|"settings"|"model"|"about"|"help"|"feedback"|null;
 function readSessionStore():Record<string,string>{try{const raw=localStorage.getItem(SESSION_STORE);return raw?JSON.parse(raw) as Record<string,string>:{}}catch{return {}}}
 function writeSessionStore(botId:string,sessionId:string){const store=readSessionStore();store[botId]=sessionId;localStorage.setItem(SESSION_STORE,JSON.stringify(store))}
 function readPaneStore():{collapsed:boolean;part:RightPart}{try{const raw=localStorage.getItem(PANE_STORE);if(!raw)return{collapsed:false,part:"computer"};const value=JSON.parse(raw) as {collapsed?:boolean;part?:string};return{collapsed:Boolean(value.collapsed),part:value.part==="memory"||value.part==="settings"||value.part==="plugins"?value.part:"computer"}}catch{return{collapsed:false,part:"computer"}}}
 type WorkspacePrefs={name:string;showHidden:boolean};
 function readWorkspace():WorkspacePrefs{try{const raw=localStorage.getItem(WORKSPACE_STORE);if(!raw)return{name:t("localWorkspace"),showHidden:false};const value=JSON.parse(raw) as {name?:string;showHidden?:boolean};const name=value.name?.trim();return{name:name&&name!=="Local workspace"?name:t("localWorkspace"),showHidden:Boolean(value.showHidden)}}catch{return{name:t("localWorkspace"),showHidden:false}}}
 
-const botColors=["#3ec5a8","#f5a03c","#6a6bf5","#9b5cf6","#3b82f6","#d9508a"];
-function Avatar({name,color,shape="blob",active=false,thinking=false,online=false,size=32}:{name:string;color?:string;shape?:AvatarShape;active?:boolean;thinking?:boolean;online?:boolean;size?:number}){const hash=[...`${name}-${shape}`].reduce((n,c)=>(n*31+c.charCodeAt(0))>>>0,7);const resolved=color||botColors[hash%botColors.length];const generated=shape==="blob"||shape.startsWith("organic-");const edges=shape==="blob"?7:Number(shape.slice(8));const generatedPath=generated?blobshape({size:100,growth:shape==="blob"?8:6,edges,seed:hash||1}).path:null;const specialPath=shape==="cloud"?"M23 80C9 80 2 70 7 57C10 48 18 44 27 45C29 30 40 21 53 24C63 25 70 32 72 43C87 42 96 51 95 64C94 75 86 81 73 80C67 88 56 90 48 84C39 91 28 89 23 80Z":shape==="drop"?"M52 5C44 20 18 44 18 65C18 83 32 95 50 95C69 95 83 82 82 64C81 43 60 21 52 5Z":shape==="cat"?"M22 42C16 36 14 20 17 8C28 14 38 22 42 28C47 26.5 53 26.5 58 28C62 22 72 14 83 8C86 20 84 36 78 42C86 50 90 58 90 64C90 82 73 94 50 94C27 94 10 82 10 64C10 58 14 50 22 42Z":shape==="bunny"?"M38 34C32 30 28 18 30 6C40 8 46 20 47 32C49 31 51 31 53 32C54 20 60 8 70 6C72 18 68 30 62 34C76 42 84 54 84 66C84 84 69 94 50 94C31 94 16 84 16 66C16 54 24 42 38 34Z":shape==="star"?"M50 8L62 38L94 40L69 60L77 91L50 74L23 91L31 60L6 40L38 38Z":shape==="heart"?"M50 90C30 74 10 58 10 38C10 22 22 12 35 12C43 12 48 16 50 22C52 16 57 12 65 12C78 12 90 22 90 38C90 58 70 74 50 90Z":shape==="egg"?"M50 6C32 6 16 34 16 58C16 80 31 94 50 94C69 94 84 80 84 58C84 34 68 6 50 6Z":shape==="ghost"?"M50 6C29 6 15 24 15 46L15 82C15 86 18 89 22 89C26 89 28 85 32 85C36 85 38 89 42 89C46 89 48 85 52 85C56 85 58 89 62 89C66 89 68 85 72 85C76 85 78 89 82 89C86 89 89 86 89 82L89 46C89 24 75 6 50 6Z":shape==="sprout"?"M50 36C48 20 38 10 24 10C26 26 36 34 48 36C30 38 18 52 18 66C18 84 32 94 50 94C68 94 82 84 82 66C82 52 70 38 52 36C64 34 74 26 76 10C62 10 52 20 50 36Z":shape==="cactus"?"M50 10C38 10 28 18 28 30L28 58L20 58C15 58 12 61 12 66C12 71 15 74 20 74L28 74L28 78C28 89 38 96 50 96C62 96 72 89 72 78L72 64L80 64C85 64 88 61 88 56C88 51 85 48 80 48L72 48L72 30C72 18 62 10 50 10Z":shape==="mushroom"?"M50 12C28 12 12 28 12 46C12 51 15 54 21 54L38 54C37 59 38 64 38 68L38 82C38 90 42 94 50 94C58 94 62 90 62 82L62 68C62 64 63 59 62 54L79 54C85 54 88 51 88 46C88 28 72 12 50 12Z":shape==="paw"?"M8 40A9 9 0 1 0 26 40A9 9 0 1 0 8 40Z M24.5 27A10.5 10.5 0 1 0 45.5 27A10.5 10.5 0 1 0 24.5 27Z M54.5 27A10.5 10.5 0 1 0 75.5 27A10.5 10.5 0 1 0 54.5 27Z M74 40A9 9 0 1 0 92 40A9 9 0 1 0 74 40Z M20 66A29 22 0 1 0 78 66A29 22 0 1 0 20 66Z":null;const path=generatedPath||specialPath;const svgShape=Boolean(path);return <span className={`avatar robot avatar-${shape} ${svgShape?"avatar-organic":""} ${active?"online":""} ${thinking?"thinking":""}`} style={{"--bot-color":resolved,"--avatar-size":`${size}px`} as React.CSSProperties}>{path&&<svg className="avatar-shape" viewBox="0 0 100 100" aria-hidden="true"><path d={path}/></svg>}<span className="robot-eyes"><i/><i/></span>{(online||active)&&<i className="presence" aria-hidden="true"/>}</span>}
-function AvatarStack({members,size=38,online=false,thinkingIds}:{members:RoomMember[];size?:number;online?:boolean;thinkingIds?:string[]}){
-  if(members.length===1){const member=members[0];return <Avatar name={member.name} color={member.avatarColor} shape={member.avatarShape} size={size} thinking={Boolean(thinkingIds?.includes(member.id))} online={online}/>}
-  const pair=members.length===2;
-  const miniSize=Math.round(size*(pair?.65:.54));
-  const shown=members.slice(0,members.length>3?2:3);
-  const positions=pair?[{left:0,top:0},{left:size-miniSize,top:size-miniSize}]:[{left:(size-miniSize)/2,top:0},{left:0,top:size-miniSize},{left:size-miniSize,top:size-miniSize}];
-  return <span className="avatar-stack" style={{width:size,height:size}}>
-    {shown.map((member,index)=><span className="stack-item" key={member.id} style={{...positions[index],zIndex:index+1}}><Avatar name={member.name} color={member.avatarColor} shape={member.avatarShape} size={miniSize} thinking={Boolean(thinkingIds?.includes(member.id))} online={Boolean(online&&index===shown.length-1)}/></span>)}
-    {members.length>3&&<span className="stack-extra" style={{left:size-miniSize,top:size-miniSize,zIndex:3,width:miniSize,height:miniSize}}>+{members.length-2}</span>}
-  </span>
-}
 function WorkspaceAvatar({name}:{name:string}){const parts=name.trim().split(/\s+/).filter(Boolean);const initials=(parts.length>1?parts.map(part=>part[0]).join(""):parts[0]?.slice(0,2)||"LB").slice(0,2).toUpperCase();return <span className="workspace-avatar" aria-hidden="true">{initials}</span>}
 function modeLabel(mode:ComputerMode){return mode==="team"?t("sharedComputer"):t("privateComputer")}
 function stateLabel(state:ComputerStatus["state"]){return ({stopped:t("stopped"),booting:t("booting"),running:t("running"),suspended:t("suspended"),error:t("error")})[state]}
 function inboxTime(value:string|null){if(!value)return "";const date=new Date(value),now=new Date();if(date.toDateString()===now.toDateString())return new Intl.DateTimeFormat("zh-TW",{hour:"2-digit",minute:"2-digit",hour12:false}).format(date);const days=Math.floor((new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime()-new Date(date.getFullYear(),date.getMonth(),date.getDate()).getTime())/86400000);if(days<7)return new Intl.DateTimeFormat("zh-TW",{weekday:"long"}).format(date);return new Intl.DateTimeFormat("zh-TW",{month:"numeric",day:"numeric"}).format(date)}
+function clientNonce(){
+  const webCrypto=globalThis.crypto;
+  if(webCrypto&&typeof webCrypto.randomUUID==="function")return webCrypto.randomUUID();
+  const bytes=new Uint8Array(16);
+  if(webCrypto&&typeof webCrypto.getRandomValues==="function")webCrypto.getRandomValues(bytes);
+  else for(let i=0;i<bytes.length;i++)bytes[i]=Math.floor(Math.random()*256);
+  bytes[6]=(bytes[6]&0x0f)|0x40;
+  bytes[8]=(bytes[8]&0x3f)|0x80;
+  const hex=[...bytes].map(b=>b.toString(16).padStart(2,"0")).join("");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
 
 export function App(){
   const [bots,setBots]=useState<Bot[]>([]); const [rooms,setRooms]=useState<Room[]>([]); const [activeId,setActiveId]=useState<string|null>(null); const [activeRoomId,setActiveRoomId]=useState<string|null>(null); const [busyMembers,setBusyMembers]=useState<RoomMember[]>([]);
@@ -70,7 +68,8 @@ export function App(){
   const [roomToDelete,setRoomToDelete]=useState<Room|null>(null); const [mcpServers,setMcpServers]=useState<McpServer[]>([]);
   const [accountOpen,setAccountOpen]=useState(false); const [accountDialog,setAccountDialog]=useState<AccountDialog>(null);
   const [workspaceName,setWorkspaceName]=useState(workspaceStart.name);
-  const sendingRef=useRef(false);
+  const [looks,setLooks]=useState(readAvatarLooks);
+  const sendingRef=useRef(false); const refreshingRef=useRef(false);
   const roomsRef=useRef(rooms);
   roomsRef.current=rooms;
   const filtered=useMemo(()=>bots.filter(b=>(showHidden||!b.hidden)&&b.name.toLowerCase().includes(query.toLowerCase())),[bots,query,showHidden]);
@@ -85,20 +84,22 @@ export function App(){
   const sessionStoreKey=activeRoomId?`room:${activeRoomId}`:activeId;
   const sessionsPath=activeRoomId?`/api/rooms/${activeRoomId}/sessions`:activeId?`/api/bots/${activeId}/sessions`:null;
   const loadSessions=useCallback(async()=>{if(!sessionsPath){setSessions([]);setActiveSessionId(null);return}const next=await api<Session[]>(sessionsPath);setSessions(next);setActiveSessionId(id=>{if(id&&next.some(session=>session.id===id))return id;const stored=sessionStoreKey?readSessionStore()[sessionStoreKey]:undefined;if(stored&&next.some(session=>session.id===stored))return stored;return next[0]?.id||null})},[sessionsPath,sessionStoreKey]);
-  const refresh=useCallback(async()=>{if(!activeSessionId)return;const messagesJob=api<Message[]>(`/api/sessions/${activeSessionId}/messages`).then(setMessages);
+  const refresh=useCallback(async()=>{if(!activeSessionId||refreshingRef.current)return;refreshingRef.current=true;try{const messagesJob=api<Message[]>(`/api/sessions/${activeSessionId}/messages`).then(setMessages);
     let computerBot=activeId;
     if(activeRoomId){
       try{const status=await api<{busy:RoomMember[]}>(`/api/rooms/${activeRoomId}/status`);setBusyMembers(status.busy);computerBot=status.busy[0]?.id||roomsRef.current.find(room=>room.id===activeRoomId)?.members[0]?.id||null}catch{setBusyMembers([]);computerBot=roomsRef.current.find(room=>room.id===activeRoomId)?.members[0]?.id||null}
     }else setBusyMembers([]);
     if(!computerBot){await messagesJob;return}
-    await Promise.all([messagesJob,api<ComputerStatus>(`/api/computer/${computerBot}/status`).then(setComputer),api<{url:string|null}>(`/api/computer/${computerBot}/screen`).then(screen=>setScreenUrl(screen.url)).catch(()=>setScreenUrl(null))])},[activeId,activeRoomId,activeSessionId]);
+    const status=await api<ComputerStatus>(`/api/computer/${computerBot}/status`);setComputer(status);await messagesJob;
+    if(status.state==="running")await api<{url:string|null}>(`/api/computer/${computerBot}/screen`).then(screen=>setScreenUrl(screen.url)).catch(()=>setScreenUrl(null));else setScreenUrl(null)
+    }finally{refreshingRef.current=false}},[activeId,activeRoomId,activeSessionId]);
   useEffect(()=>{loadBots().catch(e=>{if(e instanceof ApiError&&e.status===401)setAuthRequired(true);else setError(e.message)})},[loadBots]);
   useEffect(()=>{if(activeId||activeRoomId||bots.length===0)return;setActiveId(bots[0].id)},[bots,activeId,activeRoomId]);
   useEffect(()=>{setMessages([]);loadSessions().catch(e=>setError(e.message))},[loadSessions]);
   useEffect(()=>{if(!activeSessionId||(!activeId&&!activeRoomId)){setMessages([]);if(!activeId&&!activeRoomId)setComputer(blankComputer);return}refresh().catch(e=>setError(e.message));const timer=setInterval(()=>{refresh().catch(()=>{});const beat=roomsRef.current.find(room=>room.id===activeRoomId)?.members[0]?.id||activeId;if(beat)api(`/api/computer/${beat}/heartbeat`,{method:"POST",body:"{}"}).catch(()=>{})},2000);return()=>clearInterval(timer)},[activeId,activeRoomId,activeSessionId,refresh]);
   useEffect(()=>{const listener=(event:MessageEvent)=>{if(event.origin!==location.origin||!event.data)return;if(event.data.type==="lazyboy-desktop-clipboard"){const text=String(event.data.text||"");setDesktopClipboard(text);navigator.clipboard.writeText(text).catch(()=>{})}};window.addEventListener("message",listener);return()=>window.removeEventListener("message",listener)});
   useEffect(()=>{const listener=(event:MessageEvent)=>{if(event.origin!==location.origin||event.data?.type!=="lazyboy-request-control"||!paneBotId)return;void action(()=>api(`/api/computer/${paneBotId}/takeover`,{method:"POST",body:"{}"}))};window.addEventListener("message",listener);return()=>window.removeEventListener("message",listener)},[paneBotId]);
-  useEffect(()=>{const close=()=>{setContext(null);setRoomContext(null);setSessionMenuOpen(false);setAccountOpen(false);setCreateMenuOpen(false)};window.addEventListener("click",close);return()=>window.removeEventListener("click",close)},[]);
+  useEffect(()=>{const close=(event:MouseEvent)=>{const target=event.target;if(target instanceof Element&&target.closest(".create-menu-wrap,.account-wrap,.session-picker,.context-menu"))return;setContext(null);setRoomContext(null);setSessionMenuOpen(false);setAccountOpen(false);setCreateMenuOpen(false)};window.addEventListener("click",close);return()=>window.removeEventListener("click",close)},[]);
   useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if(event.key!=="Escape")return;setAccountOpen(false);setAccountDialog(null);setCreateMenuOpen(false);setSessionMenuOpen(false);setContext(null);setRoomContext(null)};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey)},[]);
   useEffect(()=>{localStorage.setItem(WORKSPACE_STORE,JSON.stringify({name:workspaceName,showHidden}))},[workspaceName,showHidden]);
   useEffect(()=>{if(!sessionStoreKey||!activeSessionId)return;if(!sessions.some(session=>session.id===activeSessionId))return;if(!activeRoomId&&!sessions.some(session=>session.id===activeSessionId&&session.botId===activeId))return;writeSessionStore(sessionStoreKey,activeSessionId)},[sessionStoreKey,activeId,activeRoomId,activeSessionId,sessions]);
@@ -111,7 +112,7 @@ export function App(){
 
   async function action(work:()=>Promise<unknown>){setBusy(true);setError(null);try{await work();await refresh()}catch(e){setError(e instanceof Error?e.message:t("operationFailed"))}finally{setBusy(false)}}
   async function stopChat(){if(activeSessionId)await api(`/api/sessions/${activeSessionId}/stop`,{method:"POST",body:"{}"});else if(active)await api(`/api/bots/${active.id}/stop`,{method:"POST",body:"{}"});}
-  async function send(event:FormEvent){event.preventDefault();if(sendingRef.current||busy)return;const text=draft.trim();if((!active&&!activeRoom)||!activeSessionId||!text)return;sendingRef.current=true;setDraft("");try{await action(async()=>{await api(`/api/sessions/${activeSessionId}/messages`,{method:"POST",body:JSON.stringify({text,clientNonce:crypto.randomUUID()})});await loadSessions()})}finally{sendingRef.current=false}}
+  async function send(event:FormEvent){event.preventDefault();if(sendingRef.current||busy)return;const text=draft.trim();if((!active&&!activeRoom)||!activeSessionId||!text)return;sendingRef.current=true;setDraft("");try{await action(async()=>{await api(`/api/sessions/${activeSessionId}/messages`,{method:"POST",body:JSON.stringify({text,clientNonce:clientNonce()})});await loadSessions()})}finally{sendingRef.current=false}}
   function selectSession(id:string){setActiveSessionId(id);setSessionMenuOpen(false);if(sessionStoreKey)writeSessionStore(sessionStoreKey,id)}
   async function createSession(){if(!sessionsPath||!sessionStoreKey)return;setSessionMenuOpen(false);setBusy(true);setError(null);try{const session=await api<Session>(sessionsPath,{method:"POST",body:JSON.stringify({title:t("newConversation")})});writeSessionStore(sessionStoreKey,session.id);const next=await api<Session[]>(sessionsPath);setSessions(next);setActiveSessionId(session.id);setMessages([])}catch(e){setError(e instanceof Error?e.message:t("operationFailed"))}finally{setBusy(false)}}
   async function clearSession(){if(!activeSessionId)return;setClearOpen(false);setSessionMenuOpen(false);await action(async()=>{await api(`/api/sessions/${activeSessionId}/messages`,{method:"DELETE"});setMessages([]);await loadSessions()})}
@@ -125,7 +126,11 @@ export function App(){
   async function deleteRoom(room:Room){setRoomToDelete(null);await action(async()=>{await api(`/api/rooms/${room.id}`,{method:"DELETE"});if(activeRoomId===room.id){setActiveRoomId(null);setActiveSessionId(null);setMessages([]);setBusyMembers([])}await loadBots()})}
   function openAccount(dialog:AccountDialog){setAccountOpen(false);setAccountDialog(dialog)}
   async function logout(){setAccountOpen(false);await api("/api/session",{method:"DELETE",body:"{}"}).catch(()=>{});setBots([]);setRooms([]);setMcpServers([]);setActiveId(null);setActiveRoomId(null);setAuthRequired(true)}
-  const frame=screenUrl?<iframe className="desktop-frame" src={screenUrl} title={t("agentComputer")} allow="fullscreen; clipboard-read; clipboard-write"/>:<EmptyComputer state={computer.state}/>;
+  // Re-mount noVNC after every status transition so a freshly booted Docker
+  // display cannot remain stuck on the previous disconnected iframe.
+  const startBoot=async()=>{setScreenUrl(null);setComputer(current=>({...current,state:"booting"}));await api(`/api/computer/${paneBot?.id||active?.id}/boot`,{method:"POST",body:"{}"})};
+  const restartComputer=async()=>{setScreenUrl(null);setComputer(current=>({...current,state:"booting"}));await api(`/api/computer/${paneBot?.id||active?.id}/restart`,{method:"POST",body:"{}"})};
+  const frame=screenUrl?<iframe key={`${screenUrl}:${computer.state}:${computer.botId}:${computer.controlHolder}`} className="desktop-frame" src={screenUrl} title={t("agentComputer")} allow="fullscreen; clipboard-read; clipboard-write"/>:<EmptyComputer state={computer.state}/>;
   const topTools=<nav className="top-tools" aria-label={t("workTools")}>
     <button type="button" className={`top-tool-button ${!rightCollapsed&&rightPart==="computer"?"active":""}`} title={t("computer")} aria-label={t("computer")} onClick={()=>openPane("computer")}><Computer/></button>
     <button type="button" className={`top-tool-button ${!rightCollapsed&&rightPart==="memory"?"active":""}`} title={t("memory")} aria-label={t("memory")} onClick={()=>openPane("memory")} disabled={!paneBot}><Brain/></button>
@@ -135,13 +140,13 @@ export function App(){
 
   if(authRequired)return <LoginScreen authenticated={async()=>{setAuthRequired(false);setError(null);try{await loadBots()}catch(e){if(e instanceof ApiError&&e.status===401)setAuthRequired(true);else setError(e instanceof Error?e.message:t("loginFailed"))}}}/>;
 
-  return <div className={`app-shell ${rightCollapsed?"right-collapsed":"right-open"}`}>
+  return <AvatarLookProvider value={looks}><div className={`app-shell ${rightCollapsed?"right-collapsed":"right-open"}`}>
     <aside className={`sidebar ${mobileNav?"open":""}`}>
-      <div className="brand"><span>LazyBoy</span><div className="create-menu-wrap"><button className="icon-button" onClick={()=>setCreateMenuOpen(v=>!v)} aria-label={t("add")}><UseAnimations animation={plusToX} size={18} strokeColor="#dfdfe2"/></button>{createMenuOpen&&<div className="create-menu"><button onClick={()=>{setCreateMenuOpen(false);setCreateOpen(true)}}><BotIcon/>{t("addBot")}</button><button onClick={()=>{setCreateMenuOpen(false);setGroupOpen(true)}} disabled={bots.length===0}><Users/>{t("addGroup")}</button></div>}</div></div>
+      <div className="brand"><span>LazyBoy</span><div className="create-menu-wrap" onClick={event=>event.stopPropagation()}><button type="button" className="icon-button" onClick={event=>{event.stopPropagation();setCreateMenuOpen(v=>!v)}} aria-label={t("add")} aria-haspopup="menu" aria-expanded={createMenuOpen}><UseAnimations animation={plusToX} size={18} strokeColor="#dfdfe2" wrapperStyle={{pointerEvents:"none"}}/></button>{createMenuOpen&&<div className="create-menu" role="menu"><button type="button" role="menuitem" onClick={()=>{setCreateMenuOpen(false);setCreateOpen(true)}}><BotIcon/>{t("addBot")}</button><button type="button" role="menuitem" onClick={()=>{setCreateMenuOpen(false);setGroupOpen(true)}} disabled={bots.length===0}><Users/>{t("addGroup")}</button></div>}</div></div>
       <label className="search"><UseAnimations animation={searchToX} size={16} strokeColor="var(--muted)"/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={t("search")}/></label>
       <div className="bot-list">
         {filteredRooms.length>0&&<section className="bot-group"><div className="group-label">{t("groups")}</div>{filteredRooms.map(room=><button className={`bot-row room-row ${room.id===activeRoomId?"selected":""}`} key={room.id} onClick={()=>openRoom(room)} onContextMenu={e=>{e.preventDefault();setRoomContext({room,x:e.clientX,y:e.clientY})}}><span className="avatar-wrap"><AvatarStack members={room.members} online thinkingIds={room.id===activeRoomId?busyMembers.map(member=>member.id):[]}/>{room.unreadCount>0&&<i className="unread-dot" title={t("unreadMessages",{count:room.unreadCount})}/>}</span><span className="bot-copy"><strong>{room.name}</strong><small>{room.lastPreview||t("members",{count:room.members.length})}</small></span>{room.lastMessageAt&&<time className="row-time">{inboxTime(room.lastMessageAt)}</time>}</button>)}</section>}
-        {sections.map(([label,items])=><section className="bot-group" key={label}><div className="group-label">{label}</div>{items.map(bot=><button className={`bot-row ${bot.id===activeId&&!activeRoomId?"selected":""}`} key={bot.id} onClick={()=>openBot(bot)} onContextMenu={e=>{e.preventDefault();setContext({bot,x:e.clientX,y:e.clientY})}}><span className="avatar-wrap"><Avatar name={bot.name} color={bot.avatarColor} shape={bot.avatarShape} active={bot.id===activeId&&!activeRoomId} online/>{bot.unreadCount>0&&<i className="unread-dot" title={t("unreadMessages",{count:bot.unreadCount})}/>}</span><span className="bot-copy"><strong>{bot.name}</strong><small>{modeLabel(bot.computerMode)}</small></span>{bot.tags?.[0]&&<span className="bot-tag side-tag">{bot.tags[0]}</span>}{bot.lastMessageAt&&<time className="row-time">{inboxTime(bot.lastMessageAt)}</time>}{bot.pinned&&<Pin className="row-pin"/>}</button>)}</section>)}
+        {sections.map(([label,items])=><section className="bot-group" key={label}><div className="group-label">{label}</div>{items.map(bot=><button className={`bot-row ${bot.id===activeId&&!activeRoomId?"selected":""}`} key={bot.id} onClick={()=>openBot(bot)} onContextMenu={e=>{e.preventDefault();setContext({bot,x:e.clientX,y:e.clientY})}}><span className="avatar-wrap"><Avatar lookId={bot.id} name={bot.name} color={bot.avatarColor} shape={bot.avatarShape} active={bot.id===activeId&&!activeRoomId} online/>{bot.unreadCount>0&&<i className="unread-dot" title={t("unreadMessages",{count:bot.unreadCount})}/>}</span><span className="bot-copy"><strong>{bot.name}</strong><small>{modeLabel(bot.computerMode)}</small></span>{bot.tags?.[0]&&<span className="bot-tag side-tag">{bot.tags[0]}</span>}{bot.lastMessageAt&&<time className="row-time">{inboxTime(bot.lastMessageAt)}</time>}{bot.pinned&&<Pin className="row-pin"/>}</button>)}</section>)}
       </div>
       <button className="hidden-toggle" onClick={()=>setShowHidden(v=>!v)}>{showHidden?<UseAnimations animation={visibility2} size={14} strokeColor="var(--muted)"/>:<UseAnimations animation={visibility} size={14} strokeColor="var(--muted)"/>}{showHidden?t("hideHiddenItems"):t("showHiddenItems")}</button>
       <div className="sidebar-bottom">
@@ -153,6 +158,7 @@ export function App(){
           {accountOpen&&<div className="account-menu" role="menu">
             <button type="button" role="menuitem" onClick={()=>openAccount("phone")}><Smartphone/>{t("openOnPhone")}</button>
             <button type="button" role="menuitem" onClick={()=>openAccount("settings")}><Settings/>{t("settings")}</button>
+            <button type="button" role="menuitem" onClick={()=>openAccount("model")}><BotIcon/>{t("modelSettings")}</button>
             <button type="button" role="menuitem" disabled={!paneBot} onClick={()=>{setAccountOpen(false);openPane("memory")}}><Brain/>{t("memory")}</button>
             <button type="button" role="menuitem" onClick={()=>openAccount("about")}><Info/>{t("about")}</button>
             <button type="button" role="menuitem" onClick={()=>openAccount("help")}><CircleHelp/>{t("helpCenter")}</button>
@@ -168,8 +174,8 @@ export function App(){
     </aside>
 
     <main className="chat-panel">
-      <header className="topbar"><button className="icon-button mobile-menu" onClick={()=>setMobileNav(v=>!v)}><UseAnimations animation={menu} size={18} strokeColor="#dfdfe2"/></button>{activeRoom?<><AvatarStack members={activeRoom.members} online thinkingIds={busyMembers.map(member=>member.id)}/><strong>{activeRoom.name}</strong><SessionMenu sessions={sessions} activeSessionId={activeSessionId} open={sessionMenuOpen} setOpen={setSessionMenuOpen} busy={busy} onSelect={selectSession} onCreate={createSession} onDelete={id=>{setSessionMenuOpen(false);setSessionToDelete(id)}} onClear={()=>{setSessionMenuOpen(false);setClearOpen(true)}}/><span className="grow"/>{topTools}</>:active?<><Avatar name={active.name} color={active.avatarColor} shape={active.avatarShape} active online/><strong>{active.name}</strong><SessionMenu sessions={sessions} activeSessionId={activeSessionId} open={sessionMenuOpen} setOpen={setSessionMenuOpen} busy={busy} onSelect={selectSession} onCreate={createSession} onDelete={id=>{setSessionMenuOpen(false);setSessionToDelete(id)}} onClear={()=>{setSessionMenuOpen(false);setClearOpen(true)}}/><span className="grow"/>{topTools}</>:<><strong>{t("chooseBot")}</strong><span className="grow"/>{topTools}</>}</header>
-      <div className="messages">{(activeRoom||active)&&messages.length===0?<div className="welcome">{activeRoom?<AvatarStack members={activeRoom.members} size={56} online/>:<Avatar name={active!.name} color={active!.avatarColor} shape={active!.avatarShape} active online size={64}/>}<h1>{activeRoom?t("startRoomDiscussion",{name:activeRoom.name}):t("startBotWork",{name:active!.name})}</h1><p>{activeRoom?t("roomWillReply",{names:activeRoom.members.map(member=>member.name).join("、")}):active!.description||t("botWelcome")}</p></div>:messages.map(message=>{const spoken=message.role!=="user"&&Boolean(activeRoom);const speakerName=message.speakerName||(spoken?paneBot?.name:undefined);const speakerShape=(message.speakerShape||paneBot?.avatarShape||"blob") as AvatarShape;return <div key={message.id} className={`message ${message.role} ${spoken?"spoken":""}`}>{spoken&&<span className="msg-avatar"><Avatar name={speakerName||"agent"} color={message.speakerColor||undefined} shape={speakerShape} size={22}/></span>}{spoken&&<b className="speaker" style={{color:message.speakerColor||undefined}}>{speakerName}</b>}<span className="message-body">{message.body}</span>{message.body.trim()&&<button type="button" className={`remember-msg ${remembered[message.id]?"saved":""}`} title={remembered[message.id]?t("remembered"):t("remember")} disabled={!!remembered[message.id]} onClick={()=>void rememberMessage(message)}><UseAnimations animation={bookmark} size={14} strokeColor="var(--muted)"/></button>}</div>})}{workingMembers.map(member=><div className="thinking-row" key={member.id}><Avatar name={member.name} color={member.avatarColor} shape={member.avatarShape} thinking online/><span className="working-label">{t("working",{name:member.name})}</span></div>)}</div>
+      <header className="topbar"><button className="icon-button mobile-menu" onClick={()=>setMobileNav(v=>!v)}><UseAnimations animation={menu} size={18} strokeColor="#dfdfe2"/></button>{activeRoom?<><AvatarStack members={activeRoom.members} online thinkingIds={busyMembers.map(member=>member.id)}/><strong>{activeRoom.name}</strong><SessionMenu sessions={sessions} activeSessionId={activeSessionId} open={sessionMenuOpen} setOpen={setSessionMenuOpen} busy={busy} onSelect={selectSession} onCreate={createSession} onDelete={id=>{setSessionMenuOpen(false);setSessionToDelete(id)}} onClear={()=>{setSessionMenuOpen(false);setClearOpen(true)}}/><span className="grow"/>{topTools}</>:active?<><Avatar lookId={active.id} name={active.name} color={active.avatarColor} shape={active.avatarShape} active online/><strong>{active.name}</strong><SessionMenu sessions={sessions} activeSessionId={activeSessionId} open={sessionMenuOpen} setOpen={setSessionMenuOpen} busy={busy} onSelect={selectSession} onCreate={createSession} onDelete={id=>{setSessionMenuOpen(false);setSessionToDelete(id)}} onClear={()=>{setSessionMenuOpen(false);setClearOpen(true)}}/><span className="grow"/>{topTools}</>:<><strong>{t("chooseBot")}</strong><span className="grow"/>{topTools}</>}</header>
+      <div className="messages">{(activeRoom||active)&&messages.length===0?<div className="welcome">{activeRoom?<AvatarStack members={activeRoom.members} size={56} online/>:<Avatar lookId={active!.id} name={active!.name} color={active!.avatarColor} shape={active!.avatarShape} active online size={64}/>}<h1>{activeRoom?t("startRoomDiscussion",{name:activeRoom.name}):t("startBotWork",{name:active!.name})}</h1><p>{activeRoom?t("roomWillReply",{names:activeRoom.members.map(member=>member.name).join("、")}):active!.description||t("botWelcome")}</p></div>:messages.map(message=>{const spoken=message.role!=="user"&&Boolean(activeRoom);const speakerName=message.speakerName||(spoken?paneBot?.name:undefined);const speakerShape=(message.speakerShape||paneBot?.avatarShape||"blob") as AvatarShape;return <div key={message.id} className={`message ${message.role} ${spoken?"spoken":""}`}>{spoken&&<span className="msg-avatar"><Avatar lookId={message.speakerBotId||paneBot?.id||undefined} name={speakerName||"agent"} color={message.speakerColor||undefined} shape={speakerShape} size={22}/></span>}{spoken&&<b className="speaker" style={{color:message.speakerColor||undefined}}>{speakerName}</b>}<span className="message-body">{message.body}</span>{message.body.trim()&&<button type="button" className={`remember-msg ${remembered[message.id]?"saved":""}`} title={remembered[message.id]?t("remembered"):t("remember")} disabled={!!remembered[message.id]} onClick={()=>void rememberMessage(message)}><UseAnimations animation={bookmark} size={14} strokeColor="var(--muted)"/></button>}</div>})}{workingMembers.map(member=><div className="thinking-row" key={member.id}><Avatar lookId={member.id} name={member.name} color={member.avatarColor} shape={member.avatarShape} thinking online/><span className="working-label">{t("working",{name:member.name})}</span></div>)}</div>
       {error&&<div className="error-banner"><span>{error}</span><button onClick={()=>setError(null)}><X/></button></div>}
       {otherSessionBusy&&<div className="queue-hint">{t("anotherConversationQueued")}</div>}
       <form className="composer" onSubmit={send}><button type="button" className="composer-plus" disabled title={t("attachmentsUnavailable")} aria-label={t("attachmentsUnavailable")}><Plus/></button><textarea rows={1} value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.nativeEvent.isComposing||e.key==="Process")return;if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if(sendingRef.current||busy)return;e.currentTarget.form?.requestSubmit()}}} placeholder={activeSessionId&&chatName?t("messageTo",{name:chatName}):t("chooseConversationFirst")} disabled={!activeSessionId}/>{sessionBusy?<button type="button" className="send stop-send" title={t("stopConversation")} onClick={()=>void action(stopChat)}><Square/></button>:<button className="send" disabled={!activeSessionId||!draft.trim()||busy}><UseAnimations animation={arrowUp} size={20} strokeColor="#1b1b1c"/></button>}</form>
@@ -186,16 +192,16 @@ export function App(){
           <div className={`side-part computer-part ${rightPart==="computer"?"":"hidden-part"}`}>
             <div className="computer-status-row">{paneBot?<span>{t("botComputer",{name:paneBot.name})}</span>:<span>{t("computer")}</span>}{computer.state==="booting"?<UseAnimations animation={loading} size={17} wrapperStyle={{display:"inline-block",verticalAlign:"middle"}}/>:<i className={`state-dot ${computer.state}`}/>}<small>{stateLabel(computer.state)}</small></div>
             <div className="preview">{computerOpen?<EmptyComputer state={computer.state}/>:frame}</div>
-            {paneBot&&<><div className="computer-caption"><span>{t("dedicatedScreen")}</span><button className="outline" onClick={()=>setComputerOpen(true)}>{t("enlarge")}</button></div><ControlBar active={paneBot} computer={computer} busy={busy} action={action} paste={pasteClipboard} copy={copyClipboard} sessionId={activeSessionId}/></>}
+            {paneBot&&<><div className="computer-caption"><span>{t("dedicatedScreen")}</span><button className="outline" onClick={()=>setComputerOpen(true)}>{t("enlarge")}</button></div><ControlBar active={paneBot} computer={computer} busy={busy} action={action} paste={pasteClipboard} copy={copyClipboard} sessionId={activeSessionId} onBoot={startBoot} onRestart={restartComputer}/></>}
           </div>
           {rightPart==="memory"&&paneBot&&<MemoryPane bot={paneBot} changed={loadBots}/>}
           {rightPart==="plugins"&&<McpPane servers={mcpServers} reload={loadMcp}/>}
-          {rightPart==="settings"&&active&&<BotSettingsPane bot={active} saved={loadBots} onDelete={()=>setDeleteOpen(true)}/>}
+          {rightPart==="settings"&&active&&<BotSettingsPane bot={active} look={looks[active.id]||DEFAULT_LOOK} onLook={look=>{writeAvatarLook(active.id,look);setLooks(readAvatarLooks())}} saved={loadBots} onDelete={()=>setDeleteOpen(true)}/>}
         </div>
       </>
     </aside>}
 
-    {computerOpen&&paneBot&&<div className="computer-overlay"><header><div><Avatar name={paneBot.name} color={paneBot.avatarColor} shape={paneBot.avatarShape} active online/><strong>{modeLabel(computer.mode)}</strong><span className="control-badge">{computer.controlHolder==="user"?t("userControlling"):computer.busyBotName?t("aiReadOnly"):t("readOnly")}</span></div><div><ControlButtons computer={computer} busy={busy} action={action} active={paneBot} sessionId={activeSessionId}/><button className="icon-button" onClick={pasteClipboard} disabled={computer.controlHolder!=="user"} title={t("pasteClipboard")}><ClipboardPaste/></button><button className="icon-button" onClick={copyClipboard} disabled={computer.controlHolder!=="user"||!desktopClipboard} title={t("copyDesktopClipboard")}><UseAnimations animation={copy} size={18} strokeColor="#dfdfe2"/></button><button className="icon-button" title={t("moreActions")}><Ellipsis/></button><button className="icon-button" onClick={()=>setComputerOpen(false)}><X/></button></div></header><div className="overlay-screen">{frame}</div>{error&&<div className="overlay-error">{error}</div>}</div>}
+    {computerOpen&&paneBot&&<div className="computer-overlay"><header><div><Avatar lookId={paneBot.id} name={paneBot.name} color={paneBot.avatarColor} shape={paneBot.avatarShape} active online/><strong>{modeLabel(computer.mode)}</strong><span className="control-badge">{computer.controlHolder==="user"?t("userControlling"):computer.busyBotName?t("aiReadOnly"):t("readOnly")}</span></div><div><ControlButtons computer={computer} busy={busy} action={action} active={paneBot} sessionId={activeSessionId} onBoot={startBoot} onRestart={restartComputer}/><button className="icon-button" onClick={pasteClipboard} disabled={computer.controlHolder!=="user"} title={t("pasteClipboard")}><ClipboardPaste/></button><button className="icon-button" onClick={copyClipboard} disabled={computer.controlHolder!=="user"||!desktopClipboard} title={t("copyDesktopClipboard")}><UseAnimations animation={copy} size={18} strokeColor="#dfdfe2"/></button><button className="icon-button" title={t("moreActions")}><Ellipsis/></button><button className="icon-button" onClick={()=>setComputerOpen(false)}><X/></button></div></header><div className="overlay-screen">{frame}</div>{error&&<div className="overlay-error">{error}</div>}</div>}
     {clipboardOpen&&<ClipboardDialog close={()=>setClipboardOpen(false)} paste={text=>{document.querySelectorAll<HTMLIFrameElement>(".desktop-frame").forEach(frame=>frame.contentWindow?.postMessage({type:"lazyboy-host-clipboard",text},location.origin));setClipboardOpen(false)}}/>}
 
     {createOpen&&<CreateDialog close={()=>setCreateOpen(false)} created={async bot=>{setCreateOpen(false);await loadBots();setActiveId(bot.id)}}/>}
@@ -208,10 +214,11 @@ export function App(){
     {roomContext&&<RoomContextMenu context={roomContext} close={()=>setRoomContext(null)} onDelete={()=>{setRoomToDelete(roomContext.room);setRoomContext(null)}}/>}
     {accountDialog==="phone"&&<PhoneAccessDialog close={()=>setAccountDialog(null)}/>}
     {accountDialog==="settings"&&<WorkspaceSettingsDialog name={workspaceName} setName={setWorkspaceName} showHidden={showHidden} setShowHidden={setShowHidden} rightCollapsed={rightCollapsed} setRightCollapsed={setRightCollapsed} close={()=>setAccountDialog(null)}/>}
+    {accountDialog==="model"&&<ModelSettingsDialog close={()=>setAccountDialog(null)}/>}
     {accountDialog==="about"&&<AboutDialog close={()=>setAccountDialog(null)}/>}
     {accountDialog==="help"&&<HelpDialog close={()=>setAccountDialog(null)}/>}
     {accountDialog==="feedback"&&<FeedbackDialog close={()=>setAccountDialog(null)}/>}
-  </div>
+  </div></AvatarLookProvider>
 }
 
 function BotContextMenu({context,close,run}:{context:{bot:Bot;x:number;y:number};close:()=>void;run:(action:string,group?:string|null)=>void}){const bot=context.bot;return <div className="context-menu" style={{left:Math.min(context.x,window.innerWidth-220),top:Math.min(context.y,window.innerHeight-280)}} onClick={e=>e.stopPropagation()}><button onClick={()=>run(bot.pinned?"unpin":"pin")}><Pin/>{bot.pinned?t("unpin"):t("pin")}</button><button onClick={()=>run("unread")}><UseAnimations animation={mail} size={15} strokeColor="#dfdfe2"/>{t("markUnread")}</button><button onClick={()=>{const name=window.prompt(t("enterGroupName"),bot.groupName||"");if(name!==null)run("group",name)}}><UseAnimations animation={folder} size={15} strokeColor="#dfdfe2"/>{bot.groupName?t("changeGroup"):t("createOrMoveGroup")}</button>{bot.groupName&&<button onClick={()=>run("group",null)}><X/>{t("removeFromGroup")}</button>}<button onClick={()=>run(bot.hidden?"show":"hide")}>{bot.hidden?<UseAnimations animation={visibility} size={15} strokeColor="#dfdfe2"/>:<UseAnimations animation={visibility2} size={15} strokeColor="#dfdfe2"/>}{bot.hidden?t("unhide"):t("hide")}</button><hr/><button className="danger-item" onClick={()=>run("delete")}><UseAnimations animation={trash2} size={15} strokeColor="#ff7777"/>{t("delete")}</button><button className="context-close" onClick={close}><X/></button></div>}
@@ -247,15 +254,20 @@ function ConfirmSessionDelete({close,confirm}:{close:()=>void;confirm:()=>void})
   return <div className="modal-backdrop"><div className="dialog compact"><h2>{t("deleteConversationTitle")}</h2><p>{t("deleteConversationDescription")}</p><div className="dialog-actions"><button className="outline" onClick={close}>{t("cancel")}</button><button className="danger" onClick={confirm}>{t("deleteConversation")}</button></div></div></div>
 }
 
-function BotSettingsPane({bot,saved,onDelete}:{bot:Bot;saved:()=>Promise<void>|void;onDelete:()=>void}){
-  const[name,setName]=useState(bot.name);const[title,setTitle]=useState(bot.title);const[description,setDescription]=useState(bot.description);const[color,setColor]=useState(bot.avatarColor||"#8B5CF6");const[shape,setShape]=useState<AvatarShape>(bot.avatarShape||"blob");const[tagText,setTagText]=useState((bot.tags||[]).join("、"));const[busy,setBusy]=useState(false);
-  useEffect(()=>{setName(bot.name);setTitle(bot.title);setDescription(bot.description);setColor(bot.avatarColor||"#8B5CF6");setShape(bot.avatarShape||"blob");setTagText((bot.tags||[]).join("、"))},[bot.id,bot.name,bot.title,bot.description,bot.avatarColor,bot.avatarShape,bot.tags]);
+const EXPR_I18N = {idle:"exprIdle",happy:"exprHappy",sad:"exprSad",mad:"exprMad",surprised:"exprSurprised",wink:"exprWink",sleepy:"exprSleepy",smug:"exprSmug",unsure:"exprUnsure",scared:"exprScared",love:"exprLove",shy:"exprShy",sick:"exprSick",thinking:"exprThinking"} as const satisfies Record<AvatarExpression, MessageKey>;
+const BG_I18N = {none:"bgNone",circle:"bgCircle",squircle:"bgSquircle",square:"bgSquare"} as const satisfies Record<AvatarBackground, MessageKey>;
+
+function BotSettingsPane({bot,look,onLook,saved,onDelete}:{bot:Bot;look:AvatarLook;onLook:(look:AvatarLook)=>void;saved:()=>Promise<void>|void;onDelete:()=>void}){
+  const[name,setName]=useState(bot.name);const[title,setTitle]=useState(bot.title);const[description,setDescription]=useState(bot.description);const[color,setColor]=useState(bot.avatarColor||"#8B5CF6");const[shape,setShape]=useState<AvatarShape>(resolveBlobatarShape(bot.avatarShape));const[expression,setExpression]=useState<AvatarExpression>(look.expression);const[background,setBackground]=useState<AvatarBackground>(look.background);const[tagText,setTagText]=useState((bot.tags||[]).join("、"));const[busy,setBusy]=useState(false);
+  useEffect(()=>{setName(bot.name);setTitle(bot.title);setDescription(bot.description);setColor(bot.avatarColor||"#8B5CF6");setShape(resolveBlobatarShape(bot.avatarShape));setExpression(look.expression);setBackground(look.background);setTagText((bot.tags||[]).join("、"))},[bot.id,bot.name,bot.title,bot.description,bot.avatarColor,bot.avatarShape,bot.tags,look.expression,look.background]);
   const colors=["#08A99D","#F1F2F2","#956A43","#DD263B","#F36C05","#F39A00","#00B873","#1985E6","#7140D9","#DC2781","#A7A7A7"];
-  const shapes:AvatarShape[]=["round","blob","squircle","capsule","triangle","hexagon","cloud","drop","cat","bunny","star","heart","egg","ghost","sprout","cactus","mushroom","paw"];
-  return <form className="pane-form settings-pane" onSubmit={async e=>{e.preventDefault();if(!name.trim())return;setBusy(true);try{await api(`/api/bots/${bot.id}`,{method:"PATCH",body:JSON.stringify({name:name.trim(),title,description,avatarColor:color,avatarShape:shape,tags:tagText.split(/[、,，]/).map(v=>v.trim()).filter(Boolean)})});await saved()}finally{setBusy(false)}}}>
-    <div className="avatar-editor"><Avatar name={name||bot.name} color={color} shape={shape} size={78}/><strong>{t("avatarAppearance")}</strong><small>{t("avatarAppearanceHint")}</small></div>
+  const face={name:name||bot.name,color,shape,expression,background};
+  return <form className="pane-form settings-pane" onSubmit={async e=>{e.preventDefault();if(!name.trim())return;setBusy(true);try{await api(`/api/bots/${bot.id}`,{method:"PATCH",body:JSON.stringify({name:name.trim(),title,description,avatarColor:color,avatarShape:persistBlobatarShape(shape),tags:tagText.split(/[、,，]/).map(v=>v.trim()).filter(Boolean)})});onLook({expression,background});await saved()}finally{setBusy(false)}}}>
+    <div className="avatar-editor"><Avatar {...face} size={96}/><strong>{t("avatarAppearance")}</strong><small>{t("avatarAppearanceHint")}</small></div>
     <fieldset><legend>{t("color")}</legend><div className="color-grid">{colors.map(value=><button type="button" key={value} className={color===value?"selected":""} style={{background:value}} onClick={()=>setColor(value)} aria-label={t("chooseColor",{value})}/>)}<label className="custom-color" title={t("customColor")}><input type="color" value={color} onChange={e=>setColor(e.target.value.toUpperCase())}/><span>＋</span></label></div></fieldset>
-    <fieldset><legend>{t("shape")}</legend><div className="shape-grid">{shapes.map(value=><button type="button" className={shape===value?"selected":""} onClick={()=>setShape(value)} key={value}><Avatar name={name||bot.name} color={color} shape={value}/></button>)}</div></fieldset>
+    <fieldset><legend>{t("shape")}</legend><div className="shape-grid">{BLOBATAR_SHAPES.map(value=><button type="button" className={resolveBlobatarShape(shape)===value?"selected":""} onClick={()=>setShape(value)} key={value}><Avatar {...face} shape={value} gaze={false}/></button>)}</div></fieldset>
+    <fieldset><legend>{t("expression")}</legend><div className="expr-grid">{BLOBATAR_EXPRESSIONS.map(value=><button type="button" className={expression===value?"selected":""} onClick={()=>setExpression(value)} key={value}><Avatar {...face} expression={value} gaze={false} size={36}/><span>{t(EXPR_I18N[value])}</span></button>)}</div></fieldset>
+    <fieldset><legend>{t("background")}</legend><div className="bg-grid">{BLOBATAR_BACKGROUNDS.map(value=><button type="button" className={background===value?"selected":""} onClick={()=>setBackground(value)} key={value}><Avatar {...face} background={value} gaze={false} size={36}/><span>{t(BG_I18N[value])}</span></button>)}</div></fieldset>
     <label>{t("name")}<input value={name} maxLength={80} onChange={e=>setName(e.target.value)}/></label>
     <label>{t("tags")}<input value={tagText} maxLength={120} onChange={e=>setTagText(e.target.value)} placeholder={t("tagsPlaceholder")}/><small>{t("tagsLimit")}</small></label>
     <label>{t("shortTitle")}<input value={title} maxLength={100} onChange={e=>setTitle(e.target.value)} placeholder={t("shortTitlePlaceholder")}/></label>
@@ -302,26 +314,12 @@ function MemoryPane({bot,changed}:{bot:Bot;changed:()=>Promise<void>}){
 
 function parsePairs(text:string){const out:Record<string,string>={};for(const line of text.split(/\n+/)){const trimmed=line.trim();if(!trimmed)continue;const cut=trimmed.indexOf("=");if(cut<=0)continue;out[trimmed.slice(0,cut).trim()]=trimmed.slice(cut+1)}return out}
 function McpPane({servers,reload}:{servers:McpServer[];reload:()=>Promise<void>}){
-  const[name,setName]=useState("");const[transport,setTransport]=useState<McpTransport>("http");
-  const[command,setCommand]=useState("");const[args,setArgs]=useState("");const[url,setUrl]=useState("");
-  const[envText,setEnvText]=useState("");const[headerText,setHeaderText]=useState("");
-  const[busy,setBusy]=useState(false);const[error,setError]=useState("");const[openId,setOpenId]=useState<string|null>(null);
+  const[picker,setPicker]=useState(false);const[busy,setBusy]=useState(false);const[error,setError]=useState("");const[openId,setOpenId]=useState<string|null>(null);
   async function run(work:()=>Promise<unknown>){setBusy(true);setError("");try{await work();await reload()}catch(e){setError(e instanceof Error?e.message:t("operationFailed"))}finally{setBusy(false)}}
   return <div className="mcp-pane">
     <p className="memory-help">{t("mcpHelp")}</p>
-    <form className="mcp-add" onSubmit={e=>{e.preventDefault();const trimmed=name.trim();if(!trimmed)return;void run(async()=>{await api("/api/mcp-servers",{method:"POST",body:JSON.stringify({name:trimmed,transport,command:command.trim()||null,args:args.trim()?args.trim().split(/\s+/):[],url:url.trim()||null,env:parsePairs(envText),headers:parsePairs(headerText),enabled:true})});setName("");setCommand("");setArgs("");setUrl("");setEnvText("");setHeaderText("")})}}>
-      <label>{t("name")}<input value={name} maxLength={40} onChange={e=>setName(e.target.value)} placeholder={t("mcpNamePlaceholder")}/></label>
-      <div className="mcp-transport">{(["http","sse","stdio"] as McpTransport[]).map(value=><button type="button" key={value} className={transport===value?"picked":""} onClick={()=>setTransport(value)}>{value==="http"?"HTTP":value==="sse"?"SSE":"stdio"}</button>)}</div>
-      {transport==="stdio"?<>
-        <label>{t("command")}<input value={command} onChange={e=>setCommand(e.target.value)} placeholder={t("commandPlaceholder")}/></label>
-        <label>{t("arguments")}<input value={args} onChange={e=>setArgs(e.target.value)} placeholder="-y @modelcontextprotocol/server-github"/></label>
-        <label>{t("environmentVariables")}<textarea rows={3} value={envText} onChange={e=>setEnvText(e.target.value)} placeholder="GITHUB_TOKEN=…"/></label>
-      </>:<>
-        <label>{t("url")}<input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://mcp.example.com/mcp"/></label>
-        <label>{t("headers")}<textarea rows={3} value={headerText} onChange={e=>setHeaderText(e.target.value)} placeholder="Authorization=Bearer …"/></label>
-      </>}
-      <button className="primary" disabled={busy||!name.trim()||(transport==="stdio"?!command.trim():!url.trim())}>{busy?t("connecting"):t("connectMcp")}</button>
-    </form>
+    <button type="button" className="primary mcp-choose" disabled={busy} onClick={()=>setPicker(true)}><Plug/>{t("chooseMcp")}</button>
+    {picker&&<McpPickerDialog added={servers.map(server=>server.name)} close={()=>setPicker(false)} connected={async()=>{setPicker(false);await reload()}}/>}
     <div className="mcp-list">{servers.length===0?<p>{t("noMcp")}</p>:servers.map(server=><div className={`mcp-card ${server.status}`} key={server.id}>
       <button type="button" className="mcp-card-head" onClick={()=>setOpenId(id=>id===server.id?null:server.id)}>
         <i className={`mcp-dot ${server.status}`}/><strong>{server.name}</strong>
@@ -341,12 +339,83 @@ function McpPane({servers,reload}:{servers:McpServer[];reload:()=>Promise<void>}
   </div>
 }
 
+function McpPickerDialog({added,close,connected}:{added:string[];close:()=>void;connected:()=>Promise<void>}){
+  const[query,setQuery]=useState("");const[custom,setCustom]=useState(false);
+  const[items,setItems]=useState<McpCatalogEntry[]>([]);const[loading,setLoading]=useState(true);
+  const[picked,setPicked]=useState<McpCatalogEntry|null>(null);
+  const[secrets,setSecrets]=useState<Record<string,string>>({});
+  const[busy,setBusy]=useState(false);const[error,setError]=useState("");
+  const addedSet=useMemo(()=>new Set(added.map(name=>name.toLowerCase())),[added]);
+  useEffect(()=>{const timer=setTimeout(()=>{setLoading(true);api<{servers:McpCatalogEntry[]}>(`/api/mcp-catalog?q=${encodeURIComponent(query.trim())}`).then(result=>setItems(result.servers)).catch(e=>setError(e instanceof Error?e.message:t("loadFailed"))).finally(()=>setLoading(false))},query?280:0);return()=>clearTimeout(timer)},[query]);
+  function needsSecrets(entry:McpCatalogEntry){return entry.envKeys.some(field=>field.required)||entry.headerKeys.some(field=>field.required)}
+  async function connect(entry:McpCatalogEntry,values:Record<string,string>){
+    const env:Record<string,string>={};const headers:Record<string,string>={};
+    for(const field of entry.envKeys){const value=values[field.name]?.trim();if(value)env[field.name]=value;else if(field.required){setError(t("mcpKeyHint"));return}}
+    for(const field of entry.headerKeys){const value=values[field.name]?.trim();if(value)headers[field.name]=value;else if(field.required){setError(t("mcpKeyHint"));return}}
+    setBusy(true);setError("");
+    try{
+      const server=await api<McpServer>("/api/mcp-servers",{method:"POST",body:JSON.stringify({name:entry.title.slice(0,80),transport:entry.transport,command:entry.command,args:entry.args,url:entry.url,env,headers,enabled:true})});
+      if(server.enabled&&server.status!=="connected"){setError(server.error||t("mcpConnectFailed"));return}
+      await connected();
+    }catch(e){setError(e instanceof Error?e.message:t("operationFailed"))}
+    finally{setBusy(false)}
+  }
+  function choose(entry:McpCatalogEntry){
+    if(addedSet.has(entry.title.toLowerCase())||addedSet.has(entry.id.toLowerCase()))return;
+    if(needsSecrets(entry)){setPicked(entry);setSecrets({});return}
+    void connect(entry,{});
+  }
+  return <div className="modal-backdrop" onClick={close}><div className="dialog mcp-picker" onClick={e=>e.stopPropagation()}>
+    <div className="dialog-title"><h2>{t("mcpPickerTitle")}</h2><button type="button" onClick={close}><X/></button></div>
+    {picked?<div className="mcp-secret-step">
+      <button type="button" className="outline mcp-back" onClick={()=>setPicked(null)}>{t("mcpBackToList")}</button>
+      <strong>{t("mcpConnectNamed",{name:picked.title})}</strong>
+      <p className="dialog-lead">{t("mcpKeyHint")}</p>
+      {[...picked.envKeys,...picked.headerKeys].map(field=><label key={field.name}>{field.name}{field.required?" *":""}<input type={field.secret?"password":"text"} autoComplete="off" value={secrets[field.name]||""} onChange={e=>setSecrets(current=>({...current,[field.name]:e.target.value}))} placeholder={field.hint||field.name}/></label>)}
+      {error&&<div className="pane-error">{error}</div>}
+      <div className="dialog-actions"><button type="button" className="outline" onClick={()=>setPicked(null)}>{t("cancel")}</button><button type="button" className="primary" disabled={busy} onClick={()=>void connect(picked,secrets)}>{busy?t("connecting"):t("connectMcp")}</button></div>
+    </div>:custom?<McpCustomForm busy={busy} error={error} onBack={()=>setCustom(false)} onSubmit={async payload=>{setBusy(true);setError("");try{const server=await api<McpServer>("/api/mcp-servers",{method:"POST",body:JSON.stringify(payload)});if(server.enabled&&server.status!=="connected"){setError(server.error||t("mcpConnectFailed"));setBusy(false);return}await connected()}catch(e){setError(e instanceof Error?e.message:t("operationFailed"));setBusy(false)}}}/>:<>
+      <p className="dialog-lead">{t("mcpPickerLead")}</p>
+      <label className="mcp-picker-search"><UseAnimations animation={searchToX} size={16} strokeColor="var(--muted)"/><input autoFocus value={query} onChange={e=>setQuery(e.target.value)} placeholder={t("searchMcp")}/></label>
+      <div className="mcp-picker-grid">{loading&&items.length===0?<div className="mcp-picker-empty">{t("connecting")}</div>:items.length===0?<div className="mcp-picker-empty">{t("mcpNoResults")}</div>:items.map(entry=>{const already=addedSet.has(entry.title.toLowerCase())||addedSet.has(entry.id.toLowerCase());return <button type="button" className={`mcp-pick-card ${already?"added":""}`} key={entry.id} disabled={already||busy} onClick={()=>choose(entry)}>
+        <span className="mcp-pick-icon">{entry.title.slice(0,1).toUpperCase()}</span>
+        <strong>{entry.title}</strong>
+        <small>{entry.description}</small>
+        <span className="mcp-pick-meta">{already?t("mcpAdded"):entry.remote?t("mcpRemote"):t("mcpLocal")}{needsSecrets(entry)&&!already?` · ${t("mcpNeedsKey")}`:""}</span>
+      </button>})}</div>
+      {error&&<div className="pane-error">{error}</div>}
+      <div className="dialog-actions"><button type="button" className="outline" onClick={()=>setCustom(true)}>{t("mcpCustom")}</button><button type="button" className="outline" onClick={close}>{t("close")}</button></div>
+    </>}
+  </div></div>
+}
+
+function McpCustomForm({busy,error,onBack,onSubmit}:{busy:boolean;error:string;onBack:()=>void;onSubmit:(payload:Record<string,unknown>)=>Promise<void>}){
+  const[name,setName]=useState("");const[transport,setTransport]=useState<McpTransport>("http");
+  const[command,setCommand]=useState("");const[args,setArgs]=useState("");const[url,setUrl]=useState("");
+  const[envText,setEnvText]=useState("");const[headerText,setHeaderText]=useState("");
+  return <form className="mcp-add" onSubmit={e=>{e.preventDefault();const trimmed=name.trim();if(!trimmed)return;void onSubmit({name:trimmed,transport,command:command.trim()||null,args:args.trim()?args.trim().split(/\s+/):[],url:url.trim()||null,env:parsePairs(envText),headers:parsePairs(headerText),enabled:true})}}>
+    <button type="button" className="outline mcp-back" onClick={onBack}>{t("mcpBackToList")}</button>
+    <label>{t("name")}<input autoFocus value={name} maxLength={80} onChange={e=>setName(e.target.value)} placeholder={t("mcpNamePlaceholder")}/></label>
+    <div className="mcp-transport">{(["http","sse","stdio"] as McpTransport[]).map(value=><button type="button" key={value} className={transport===value?"picked":""} onClick={()=>setTransport(value)}>{value==="http"?"HTTP":value==="sse"?"SSE":"stdio"}</button>)}</div>
+    {transport==="stdio"?<>
+      <label>{t("command")}<input value={command} onChange={e=>setCommand(e.target.value)} placeholder={t("commandPlaceholder")}/></label>
+      <label>{t("arguments")}<input value={args} onChange={e=>setArgs(e.target.value)} placeholder={t("argumentsPlaceholder")}/></label>
+      <label>{t("environmentVariables")}<textarea rows={3} value={envText} onChange={e=>setEnvText(e.target.value)} placeholder={t("environmentVariablesPlaceholder")}/></label>
+    </>:<>
+      <label>{t("url")}<input value={url} onChange={e=>setUrl(e.target.value)} placeholder={t("urlPlaceholder")}/></label>
+      <label>{t("headers")}<textarea rows={3} value={headerText} onChange={e=>setHeaderText(e.target.value)} placeholder={t("headersPlaceholder")}/></label>
+    </>}
+    {error&&<div className="pane-error">{error}</div>}
+    <div className="dialog-actions"><button type="button" className="outline" onClick={onBack}>{t("cancel")}</button><button className="primary" disabled={busy||!name.trim()||(transport==="stdio"?!command.trim():!url.trim())}>{busy?t("connecting"):t("connectMcp")}</button></div>
+  </form>
+}
+
 function EmptyComputer({state}:{state:ComputerStatus["state"]}){const loading=state==="booting";return <div className="empty-computer">{loading?<UseAnimations animation={loading2} size={38} wrapperStyle={{display:"block"}}/>:<Computer/>}<strong>{stateLabel(state)}</strong><span>{loading?t("preparingDesktop"):t("computerPreviewHint")}</span></div>}
-function ControlButtons({computer,busy,action,active,sessionId}:{computer:ComputerStatus;busy:boolean;action:(w:()=>Promise<unknown>)=>Promise<void>;active:Bot;sessionId?:string|null}){const working=Boolean(computer.busyBotName);if(computer.state!=="running")return <button className="primary" disabled={busy||computer.state==="booting"} onClick={()=>action(()=>api(`/api/computer/${active.id}/boot`,{method:"POST",body:"{}"}))}>{(busy||computer.state==="booting")&&<UseAnimations animation={loading} size={17} wrapperStyle={{display:"inline-block",verticalAlign:"middle",marginRight:7}}/>}{computer.state==="booting"?t("bootingProgress"):t("openComputer")}</button>;if(working)return <button className="outline" disabled={busy} onClick={()=>action(async()=>{if(sessionId)await api(`/api/sessions/${sessionId}/stop`,{method:"POST",body:"{}"});else await api(`/api/bots/${active.id}/stop`,{method:"POST",body:"{}"});if(computer.takeoverRequested)await api(`/api/computer/${active.id}/takeover`,{method:"POST",body:"{}"})})}><Square/>{computer.takeoverRequested?t("stopAndTakeOver"):t("stopTask")}</button>;if(computer.controlHolder==="user")return <button className="outline" disabled={busy} onClick={()=>action(()=>api(`/api/computer/${active.id}/release`,{method:"POST",body:"{}"}))}>{t("releaseControl")}</button>;return <button className="primary" disabled={busy} onClick={()=>action(()=>api(`/api/computer/${active.id}/takeover`,{method:"POST",body:"{}"}))}>{t("takeControl")}</button>}
-function ControlBar(props:{active:Bot;computer:ComputerStatus;busy:boolean;action:(w:()=>Promise<unknown>)=>Promise<void>;paste:()=>void;copy:()=>void;sessionId?:string|null}){const interactive=props.computer.controlHolder==="user";return <div className="control-bar"><ControlButtons {...props}/><button className="icon-button" disabled={!interactive} onClick={props.paste}><ClipboardPaste/></button><button className="icon-button" disabled={!interactive} onClick={props.copy}><UseAnimations animation={copy} size={18} strokeColor="#dfdfe2"/></button></div>}
+function ControlButtons({computer,busy,action,active,sessionId,onBoot,onRestart}:{computer:ComputerStatus;busy:boolean;action:(w:()=>Promise<unknown>)=>Promise<void>;active:Bot;sessionId?:string|null;onBoot?:()=>Promise<void>;onRestart?:()=>Promise<void>}){const working=Boolean(computer.busyBotName);const restart=<button className="outline restart-computer" disabled={busy} title={t("restartDocker")} onClick={()=>void action(onRestart||(()=>api(`/api/computer/${active.id}/restart`,{method:"POST",body:"{}"})))}><RefreshCw/> {t("restartDocker")}</button>;if(computer.state!=="running")return <div className="computer-actions"><button className="primary" disabled={busy||computer.state==="booting"} onClick={()=>void action(onBoot||(()=>api(`/api/computer/${active.id}/boot`,{method:"POST",body:"{}"})))}>{(busy||computer.state==="booting")&&<UseAnimations animation={loading} size={17} wrapperStyle={{display:"inline-block",verticalAlign:"middle",marginRight:7}}/>}{computer.state==="booting"?t("bootingProgress"):t("openComputer")}</button>{(computer.state==="booting"||computer.state==="error")&&restart}</div>;if(working)return <div className="computer-actions"><button className="primary" disabled={busy} onClick={()=>action(()=>api(`/api/computer/${active.id}/takeover`,{method:"POST",body:"{}"}))}>{t("takeOverNow")}</button><button className="outline" disabled={busy} onClick={()=>action(async()=>{if(sessionId)await api(`/api/sessions/${sessionId}/stop`,{method:"POST",body:"{}"});else await api(`/api/bots/${active.id}/stop`,{method:"POST",body:"{}"});})}><Square/>{t("stopTask")}</button>{restart}</div>;if(computer.controlHolder==="user")return <div className="computer-actions"><button className="outline" disabled={busy} onClick={()=>action(()=>api(`/api/computer/${active.id}/release`,{method:"POST",body:"{}"}))}>{t("releaseControl")}</button>{restart}</div>;return <div className="computer-actions"><button className="primary" disabled={busy} onClick={()=>action(()=>api(`/api/computer/${active.id}/takeover`,{method:"POST",body:"{}"}))}>{t("takeControl")}</button>{restart}</div>}
+function ControlBar(props:{active:Bot;computer:ComputerStatus;busy:boolean;action:(w:()=>Promise<unknown>)=>Promise<void>;paste:()=>void;copy:()=>void;sessionId?:string|null;onBoot?:()=>Promise<void>;onRestart?:()=>Promise<void>}){const interactive=props.computer.controlHolder==="user";return <div className="control-bar"><ControlButtons {...props}/><button className="icon-button" disabled={!interactive} onClick={props.paste}><ClipboardPaste/></button><button className="icon-button" disabled={!interactive} onClick={props.copy}><UseAnimations animation={copy} size={18} strokeColor="#dfdfe2"/></button></div>}
 function ClipboardDialog({close,paste}:{close:()=>void;paste:(text:string)=>void}){const[text,setText]=useState("");return <div className="modal-backdrop"><div className="dialog compact"><div className="dialog-title"><h2>{t("pasteToRemoteComputer")}</h2><button onClick={close}><X/></button></div><p>{t("pasteRemoteHelp")}</p><textarea className="clipboard-text" autoFocus value={text} onChange={e=>setText(e.target.value)} placeholder={t("pasteTextPlaceholder")}/><div className="dialog-actions"><button className="outline" onClick={close}>{t("cancel")}</button><button className="primary" disabled={!text} onClick={()=>paste(text)}>{t("pasteIntoVnc")}</button></div></div></div>}
 function CreateDialog({close,created}:{close:()=>void;created:(bot:Bot)=>void}){const[name,setName]=useState("");const[mode,setMode]=useState<ComputerMode>("team");const[busy,setBusy]=useState(false);return <div className="modal-backdrop"><form className="dialog" onSubmit={async e=>{e.preventDefault();if(!name.trim())return;setBusy(true);try{created(await api<Bot>("/api/bots",{method:"POST",body:JSON.stringify({name:name.trim(),computerMode:mode})}))}finally{setBusy(false)}}}><div className="dialog-title"><h2>{t("addBot")}</h2><button type="button" onClick={close}><X/></button></div><label>{t("name")}<input autoFocus value={name} onChange={e=>setName(e.target.value)} placeholder={t("botNamePlaceholder")}/></label><div className="mode-grid"><button type="button" className={mode==="team"?"picked":""} onClick={()=>setMode("team")}><BotIcon/><strong>{t("sharedComputer")}</strong><small>{t("sharedComputerHint")}</small></button><button type="button" className={mode==="dedicated"?"picked":""} onClick={()=>setMode("dedicated")}><Computer/><strong>{t("privateComputer")}</strong><small>{t("privateComputerHint")}</small></button></div><div className="dialog-actions"><button type="button" className="outline" onClick={close}>{t("cancel")}</button><button className="primary" disabled={busy||!name.trim()}>{t("create")}</button></div></form></div>}
-function CreateGroupDialog({bots,close,created}:{bots:Bot[];close:()=>void;created:(room:Room)=>void}){const[name,setName]=useState("");const[selected,setSelected]=useState<string[]>([]);const[busy,setBusy]=useState(false);const visible=bots.filter(bot=>!bot.hidden);return <div className="modal-backdrop"><form className="dialog" onSubmit={async e=>{e.preventDefault();const groupName=name.trim();if(!groupName||selected.length<2)return;setBusy(true);try{created(await api<Room>("/api/rooms",{method:"POST",body:JSON.stringify({name:groupName,memberIds:selected})}))}finally{setBusy(false)}}}><div className="dialog-title"><h2>{t("addGroup")}</h2><button type="button" onClick={close}><X/></button></div><p className="dialog-lead">{t("groupDescription")}</p><label>{t("groupName")}<input autoFocus value={name} maxLength={30} onChange={e=>setName(e.target.value)} placeholder={t("groupNamePlaceholder")}/></label><fieldset className="group-picker"><legend>{t("chooseBots")}</legend>{visible.map(bot=><label key={bot.id}><input type="checkbox" checked={selected.includes(bot.id)} onChange={()=>setSelected(ids=>ids.includes(bot.id)?ids.filter(id=>id!==bot.id):[...ids,bot.id])}/><Avatar name={bot.name} color={bot.avatarColor} shape={bot.avatarShape} online/><span>{bot.name}</span></label>)}</fieldset><div className="dialog-actions"><button type="button" className="outline" onClick={close}>{t("cancel")}</button><button className="primary" disabled={busy||!name.trim()||selected.length<2}>{busy?t("creating"):t("createGroup")}</button></div></form></div>}
+function CreateGroupDialog({bots,close,created}:{bots:Bot[];close:()=>void;created:(room:Room)=>void}){const[name,setName]=useState("");const[selected,setSelected]=useState<string[]>([]);const[busy,setBusy]=useState(false);const visible=bots.filter(bot=>!bot.hidden);return <div className="modal-backdrop"><form className="dialog" onSubmit={async e=>{e.preventDefault();const groupName=name.trim();if(!groupName||selected.length<2)return;setBusy(true);try{created(await api<Room>("/api/rooms",{method:"POST",body:JSON.stringify({name:groupName,memberIds:selected})}))}finally{setBusy(false)}}}><div className="dialog-title"><h2>{t("addGroup")}</h2><button type="button" onClick={close}><X/></button></div><p className="dialog-lead">{t("groupDescription")}</p><label>{t("groupName")}<input autoFocus value={name} maxLength={30} onChange={e=>setName(e.target.value)} placeholder={t("groupNamePlaceholder")}/></label><fieldset className="group-picker"><legend>{t("chooseBots")}</legend>{visible.map(bot=><label key={bot.id}><input type="checkbox" checked={selected.includes(bot.id)} onChange={()=>setSelected(ids=>ids.includes(bot.id)?ids.filter(id=>id!==bot.id):[...ids,bot.id])}/><Avatar lookId={bot.id} name={bot.name} color={bot.avatarColor} shape={bot.avatarShape} online/><span>{bot.name}</span></label>)}</fieldset><div className="dialog-actions"><button type="button" className="outline" onClick={close}>{t("cancel")}</button><button className="primary" disabled={busy||!name.trim()||selected.length<2}>{busy?t("creating"):t("createGroup")}</button></div></form></div>}
 function RoomContextMenu({context,close,onDelete}:{context:{room:Room;x:number;y:number};close:()=>void;onDelete:()=>void}){return <div className="context-menu" style={{left:Math.min(context.x,window.innerWidth-220),top:Math.min(context.y,window.innerHeight-160)}} onClick={e=>e.stopPropagation()}><button className="danger-item" onClick={onDelete}><UseAnimations animation={trash2} size={15} strokeColor="#ff7777"/>{t("deleteGroup")}</button><button className="context-close" onClick={close}><X/></button></div>}
 function ConfirmRoomDelete({room,close,confirm}:{room:Room;close:()=>void;confirm:()=>void}){return <div className="modal-backdrop"><div className="dialog compact"><h2>{t("deleteNamed",{name:room.name})}</h2><p>{t("deleteGroupDescription")}</p><div className="dialog-actions"><button className="outline" onClick={close}>{t("cancel")}</button><button className="danger" onClick={confirm}>{t("deleteGroup")}</button></div></div></div>}
 function ConfirmDelete({bot,close,confirm}:{bot:Bot;close:()=>void;confirm:()=>void}){return <div className="modal-backdrop"><div className="dialog compact"><h2>{t("deleteNamed",{name:bot.name})}</h2><p>{bot.computerMode==="dedicated"?t("deleteDedicatedBotDescription"):t("deleteSharedBotDescription")}</p><div className="dialog-actions"><button className="outline" onClick={close}>{t("cancel")}</button><button className="danger" onClick={confirm}>{t("delete")}</button></div></div></div>}
@@ -371,6 +440,64 @@ function WorkspaceSettingsDialog({name,setName,showHidden,setShowHidden,rightCol
     <label className="memory-toggle"><input type="checkbox" checked={rightCollapsed} onChange={e=>setRightCollapsed(e.target.checked)}/> {t("collapseRightSidebar")}</label>
     <p className="dialog-lead">{t("workspaceSettingsHint")}</p>
     <div className="dialog-actions"><button type="button" className="outline" onClick={close}>{t("cancel")}</button><button className="primary">{t("save")}</button></div>
+  </form></div>
+}
+function ModelSettingsDialog({close}:{close:()=>void}){
+  const[settings,setSettings]=useState<WorkspaceSettings|null>(null);
+  const[provider,setProvider]=useState<ModelProviderId>("xai");
+  const[modelId,setModelId]=useState("");
+  const[baseUrl,setBaseUrl]=useState("");
+  const[apiKey,setApiKey]=useState("");
+  const[clearKey,setClearKey]=useState(false);
+  const[models,setModels]=useState<{id:string;name:string}[]>([]);
+  const[busy,setBusy]=useState(false);
+  const[error,setError]=useState("");
+  const current=settings?.providers.find(item=>item.id===provider);
+  useEffect(()=>{api<WorkspaceSettings>("/api/workspace/settings").then(value=>{setSettings(value);setProvider(value.provider);setModelId(value.modelId);setBaseUrl(value.baseUrl);setModels(value.models)}).catch(e=>setError(e instanceof Error?e.message:t("loadFailed")))},[]);
+  async function loadModels(nextProvider:ModelProviderId,nextBaseUrl:string){
+    if(nextProvider==="openai-compatible"&&!nextBaseUrl.trim()){setModels([]);return}
+    try{
+      const query=new URLSearchParams({provider:nextProvider});
+      if(nextBaseUrl.trim())query.set("baseUrl",nextBaseUrl.trim());
+      const result=await api<{models:{id:string;name:string}[]}>(`/api/workspace/models?${query}`);
+      setModels(result.models);
+      setModelId(current=>result.models.some(item=>item.id===current)?current:result.models[0]?.id||current);
+    }catch{if(nextProvider==="openai-compatible")setModels([])}
+  }
+  function pickProvider(id:ModelProviderId){
+    setProvider(id);
+    const info=settings?.providers.find(item=>item.id===id);
+    if(id==="openai-compatible"){
+      setModels([]);
+      setBaseUrl(current=>current.includes("opencode.ai")||current.includes("api.x.ai")?"":current);
+      if(info?.defaultModel)setModelId(info.defaultModel);else setModelId("");
+      return;
+    }
+    if(info?.defaultBaseUrl)setBaseUrl(info.defaultBaseUrl);
+    if(info?.defaultModel)setModelId(info.defaultModel);
+    void loadModels(id,info?.defaultBaseUrl||"");
+  }
+  return <div className="modal-backdrop"><form className="dialog settings-dialog" onSubmit={async e=>{e.preventDefault();setBusy(true);setError("");try{await api("/api/workspace/settings",{method:"PATCH",body:JSON.stringify({provider,modelId:modelId.trim(),baseUrl:baseUrl.trim()||null,apiKey:clearKey?"":apiKey.trim()||null,clearApiKey:clearKey})});close()}catch(e){setError(e instanceof Error?e.message:t("settingsFailed"))}finally{setBusy(false)}}}>
+    <div className="dialog-title"><h2>{t("modelSettings")}</h2><button type="button" onClick={close}><X/></button></div>
+    <p className="dialog-lead">{t("modelSettingsHint")}</p>
+    <fieldset className="provider-fieldset"><legend>{t("modelProvider")}</legend>
+      <div className="provider-grid">{(settings?.providers||[{id:"xai" as const,name:t("providerXai")},{id:"opencode-go" as const,name:t("providerOpencodeGo")},{id:"openai-compatible" as const,name:t("providerOpenaiCompatible")}]).map(item=><button type="button" key={item.id} className={provider===item.id?"picked":""} onClick={()=>pickProvider(item.id)}>{item.id==="xai"?t("providerXai"):item.id==="opencode-go"?t("providerOpencodeGo"):t("providerOpenaiCompatible")}</button>)}</div>
+      <p className="dialog-lead">{provider==="xai"?t("providerXaiHint"):provider==="opencode-go"?t("providerOpencodeGoHint"):t("providerOpenaiCompatibleHint")}</p>
+    </fieldset>
+    <label>{t("apiKey")}<input type="password" autoComplete="off" value={apiKey} onChange={e=>{setApiKey(e.target.value);setClearKey(false)}} placeholder={settings?.apiKeySet?t("apiKeyStored"):t("apiKeyPlaceholder")}/></label>
+    {settings?.envKeySet&&settings.provider===provider&&!apiKey&&!clearKey&&<p className="dialog-lead">{t("usingEnvKey",{name:settings.envKeyName})}</p>}
+    {settings?.apiKeySet&&<label className="memory-toggle"><input type="checkbox" checked={clearKey} onChange={e=>setClearKey(e.target.checked)}/> {t("clearApiKey")}</label>}
+    {(current?.needsBaseUrl||provider==="openai-compatible")&&<label>{t("baseUrl")}<input value={baseUrl} onChange={e=>setBaseUrl(e.target.value)} placeholder={t("baseUrlPlaceholder")}/><small>{t("baseUrlHint")}</small></label>}
+    <label>{t("modelId")}
+      {models.length>0?<select value={models.some(item=>item.id===modelId)?modelId:""} onChange={e=>setModelId(e.target.value)}>
+        {models.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}
+        {!models.some(item=>item.id===modelId)&&modelId?<option value={modelId}>{modelId}</option>:null}
+      </select>:<input value={modelId} onChange={e=>setModelId(e.target.value)} placeholder={t("modelIdPlaceholder")}/>}
+      {models.length>0&&<input value={modelId} onChange={e=>setModelId(e.target.value)} placeholder={t("modelIdPlaceholder")}/>}
+    </label>
+    <button type="button" className="outline" onClick={()=>void loadModels(provider,baseUrl)}>{t("reloadModels")}</button>
+    {error&&<div className="pane-error">{error}</div>}
+    <div className="dialog-actions"><button type="button" className="outline" onClick={close}>{t("cancel")}</button><button className="primary" disabled={busy||!modelId.trim()||(provider==="openai-compatible"&&!baseUrl.trim())}>{busy?t("saving"):t("save")}</button></div>
   </form></div>
 }
 function AboutDialog({close}:{close:()=>void}){

@@ -1,5 +1,5 @@
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -104,7 +104,10 @@ struct LoginInput {
 
 pub fn public_router(state: AppState) -> Router {
     Router::new()
-        .route("/api/session", axum::routing::get(session).post(login).delete(logout))
+        .route(
+            "/api/session",
+            axum::routing::get(session).post(login).delete(logout),
+        )
         .with_state(state)
 }
 
@@ -144,18 +147,12 @@ async fn logout() -> Response {
     let mut response = Json(json!({"ok": true})).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_static(
-            "lazyboy_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
-        ),
+        HeaderValue::from_static("lazyboy_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
     );
     response
 }
 
-pub async fn require_auth(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth(State(state): State<AppState>, request: Request, next: Next) -> Response {
     if state.auth.valid_session(request.headers()) {
         next.run(request).await
     } else {

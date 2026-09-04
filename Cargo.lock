@@ -2060,6 +2060,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hex",
+ "image",
  "lazyboy-contracts",
  "serde",
  "serde_json",

@@ -77,6 +77,32 @@ pub struct ActiveWindow {
     pub title: Option<String>,
 }
 
+/// A numbered on-screen target the model can click without guessing pixels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UiElement {
+    pub id: u32,
+    pub title: String,
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    /// CSS selector for in-page controls (Chromium CDP). Native windows leave this empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    /// "dom" for page controls, "window" for native windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+impl UiElement {
+    pub fn center(&self) -> (u32, u32) {
+        (
+            self.x.saturating_add(self.w / 2),
+            self.y.saturating_add(self.h / 2),
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComputerObservation {
     pub frame_id: String,
@@ -88,11 +114,13 @@ pub struct ComputerObservation {
     pub height: u32,
     pub cursor: Option<CursorPosition>,
     pub active_window: Option<ActiveWindow>,
+    #[serde(default)]
+    pub elements: Vec<UiElement>,
 }
 
 mod serde_bytes_opt {
-    use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {

@@ -30,7 +30,11 @@ impl RunStatus {
     pub fn is_active(self) -> bool {
         matches!(
             self,
-            Self::Queued | Self::Leased | Self::Running | Self::WaitingInput | Self::WaitingTakeover
+            Self::Queued
+                | Self::Leased
+                | Self::Running
+                | Self::WaitingInput
+                | Self::WaitingTakeover
         )
     }
 
@@ -52,8 +56,14 @@ impl RunStatus {
                         | Self::Cancelled
                         | Self::Leased
                 )
-                | (Self::WaitingInput, Self::Queued | Self::Leased | Self::Cancelled)
-                | (Self::WaitingTakeover, Self::Queued | Self::Leased | Self::Cancelled)
+                | (
+                    Self::WaitingInput,
+                    Self::Queued | Self::Leased | Self::Cancelled
+                )
+                | (
+                    Self::WaitingTakeover,
+                    Self::Queued | Self::Leased | Self::Cancelled
+                )
                 | (Self::Failed, Self::Queued)
         )
     }

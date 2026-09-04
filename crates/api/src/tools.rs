@@ -1,12 +1,16 @@
 use std::sync::Mutex;
 
-use lazyboy_contracts::{ComputerMode, ComputerObservation};
+use lazyboy_contracts::{
+    ComputerAction, ComputerMode, ComputerObservation, PointerType, UiElement,
+};
 use lazyboy_control::{
-    frames_match, parse_computer_actions, resolve_bot_workspace_cwd, resolve_bot_workspace_path,
-    ActionRequest, AdapterContext, CommandRequest, ComputerRef, SandboxProvider,
+    ActionError, ActionRequest, AdapterContext, CdpPage, CommandRequest, ComputerRef,
+    SandboxProvider, apply_element_targets, cdp_command_on, format_ui_elements, frames_match,
+    merge_page_elements, overlay_elements, parse_cdp_page, parse_computer_actions,
+    resolve_bot_workspace_cwd, resolve_bot_workspace_path,
 };
 use rig_core::completion::ToolDefinition;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -23,6 +27,9 @@ pub struct ToolCtx {
     pub vision: bool,
     pub gui_block: Option<String>,
     pub previous_frame: Mutex<Option<String>>,
+    pub elements: Mutex<Vec<UiElement>>,
+    pub miss_streak: Mutex<u32>,
+    pub click_misses: Mutex<u32>,
     pub takeover_requested: Mutex<bool>,
     pub pool: PgPool,
     pub memory: MemoryService,
@@ -37,12 +44,12 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
     let mut definitions = vec![
         ToolDefinition {
             name: "computer_observe".into(),
-            description: "Capture a fresh desktop screenshot. Frame metadata comes back as text; the image is attached to the next model turn.".into(),
+            description: "Capture a fresh desktop screenshot plus numbered targets. When Chromium is open this is the page DOM (click those ids); otherwise native windows. The image attaches only if the screen changed.".into(),
             parameters: json!({"type":"object","properties":{}}),
         },
         ToolDefinition {
             name: "computer_act".into(),
-            description: "Drive the desktop like a person: move to the target, click, type, drag, and scroll. Coordinates are 1280x800 from the top-left. Always include x,y for click/scroll/drag. Batch a whole gesture in one call. The resulting screenshot is attached to the next turn.".into(),
+            description: "Drive native desktop GUI (dialogs, canvas, XFCE). Prefer element id from the latest observation. For Chromium pages use the browser tool instead of clicking the window. x,y are 1280x800 fallback.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -52,6 +59,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
                             "type":"object",
                             "properties":{
                                 "kind":{"type":"string","enum":["click","move","down","up","hover","drag","type","key","scroll","wait","focus"]},
+                                "element":{"type":"number"},
                                 "title":{"type":"string"},
                                 "x2":{"type":"number"},
                                 "y2":{"type":"number"},
@@ -112,6 +120,23 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
             parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
         },
         ToolDefinition {
+            name: "browser".into(),
+            description: "Control Chromium through the page DOM. Prefer this over computer_act for anything in the browser. snapshot returns numbered elements and visible text (no screenshot). click/type/navigate by element id or CSS selector. The human still sees the live window.".into(),
+            parameters: json!({
+                "type":"object",
+                "properties":{
+                    "action":{"type":"string","enum":["snapshot","click","type","press","navigate","wait"]},
+                    "element":{"type":"number"},
+                    "selector":{"type":"string"},
+                    "text":{"type":"string"},
+                    "key":{"type":"string"},
+                    "url":{"type":"string"},
+                    "ms":{"type":"number"}
+                },
+                "required":["action"]
+            }),
+        },
+        ToolDefinition {
             name: "launch_app".into(),
             description: "Launch browser or terminal on the desktop.".into(),
             parameters: json!({
@@ -122,7 +147,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "request_takeover".into(),
-            description: "Ask the user to take over for passwords, 2FA, CAPTCHA, or protected input. Never ask them to paste secrets in chat.".into(),
+            description: "Ask the user to take over for passwords, 2FA, CAPTCHA, login walls, or when the right on-screen control cannot be found. Never ask them to paste secrets in chat.".into(),
             parameters: json!({"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}),
         },
     ];
@@ -173,6 +198,7 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
     match name {
         "computer_observe" => observe(ctx).await,
         "computer_act" => act(ctx, args).await,
+        "browser" => browser(ctx, args).await,
         "shell" => shell(ctx, args).await,
         "list_files" => list_files(ctx, args).await,
         "read_file" => read_file(ctx, args).await,
@@ -211,13 +237,24 @@ async fn remember(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         return text_outcome("memory is disabled for this agent");
     }
     let input = CreateMemoryInput {
-        content: args.get("content").and_then(Value::as_str).unwrap_or("").to_string(),
-        importance: args.get("importance").and_then(Value::as_f64).unwrap_or(0.5) as f32,
+        content: args
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        importance: args
+            .get("importance")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.5) as f32,
         session_id: Some(ctx.session_id.clone()),
         source_run_id: Some(ctx.run_id.clone()),
         source_message_id: None,
     };
-    match ctx.memory.remember(&ctx.pool, &ctx.actor, &ctx.bot_id, input).await {
+    match ctx
+        .memory
+        .remember(&ctx.pool, &ctx.actor, &ctx.bot_id, input)
+        .await
+    {
         Ok(item) => text_outcome(json!({"ok":true,"memory":item}).to_string()),
         Err(error) => text_outcome(error),
     }
@@ -229,7 +266,11 @@ async fn recall_memory(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     }
     let query = args.get("query").and_then(Value::as_str).unwrap_or("");
     let limit = args.get("limit").and_then(Value::as_i64);
-    match ctx.memory.recall(&ctx.pool, &ctx.actor, &ctx.bot_id, query, limit).await {
+    match ctx
+        .memory
+        .recall(&ctx.pool, &ctx.actor, &ctx.bot_id, query, limit)
+        .await
+    {
         Ok(items) => text_outcome(serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())),
         Err(error) => text_outcome(error),
     }
@@ -239,17 +280,29 @@ async fn forget_memory(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     if !ctx.memory_enabled {
         return text_outcome("memory is disabled for this agent");
     }
-    let Some(id) = args.get("memory_id").and_then(Value::as_str).and_then(|id| Uuid::parse_str(id).ok()) else {
+    let Some(id) = args
+        .get("memory_id")
+        .and_then(Value::as_str)
+        .and_then(|id| Uuid::parse_str(id).ok())
+    else {
         return text_outcome("memory_id must be a UUID");
     };
-    match ctx.memory.forget(&ctx.pool, &ctx.actor, &ctx.bot_id, id).await {
+    match ctx
+        .memory
+        .forget(&ctx.pool, &ctx.actor, &ctx.bot_id, id)
+        .await
+    {
         Ok(deleted) => text_outcome(json!({"ok":deleted}).to_string()),
         Err(error) => text_outcome(error),
     }
 }
 
 fn text_outcome(text: impl Into<String>) -> ToolOutcome {
-    ToolOutcome { text: text.into(), image: None, pause: false }
+    ToolOutcome {
+        text: text.into(),
+        image: None,
+        pause: false,
+    }
 }
 
 fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
@@ -272,9 +325,19 @@ fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
 }
 
 fn observation_text(note: &str, observation: &ComputerObservation, unchanged: bool) -> String {
+    let label = if observation
+        .elements
+        .iter()
+        .any(|element| element.kind.as_deref() == Some("dom"))
+    {
+        "Clickable page elements"
+    } else {
+        "Clickable windows"
+    };
     format!(
-        "{note}{}\n{}",
+        "{note}{}\n{label}: {}\n{}",
         if unchanged { " (screen unchanged)" } else { "" },
+        format_ui_elements(&observation.elements),
         json!({
             "frameId": observation.frame_id,
             "width": observation.width,
@@ -282,6 +345,7 @@ fn observation_text(note: &str, observation: &ComputerObservation, unchanged: bo
             "capturedAt": observation.captured_at,
             "cursor": observation.cursor,
             "activeWindow": observation.active_window,
+            "elements": observation.elements,
         })
     )
 }
@@ -291,7 +355,11 @@ async fn observe(ctx: &ToolCtx) -> ToolOutcome {
         return blocked;
     }
     match ctx.sandbox.observe(&ctx.computer, &ctx.context).await {
-        Ok(observation) => pack_observation(ctx, "computer observed", observation),
+        Ok(observation) => {
+            let (observation, note) =
+                attach_page_elements(ctx, observation, "computer observed").await;
+            pack_observation(ctx, &note, observation)
+        }
         Err(error) => ToolOutcome {
             text: error.to_string(),
             image: None,
@@ -300,9 +368,187 @@ async fn observe(ctx: &ToolCtx) -> ToolOutcome {
     }
 }
 
+async fn attach_page_elements(
+    ctx: &ToolCtx,
+    mut observation: ComputerObservation,
+    note: &str,
+) -> (ComputerObservation, String) {
+    let Some(page) = cdp_snapshot(ctx, false).await else {
+        return (observation, note.to_string());
+    };
+    observation.elements = merge_page_elements(observation.elements, &page.elements);
+    let mut note = note.to_string();
+    if !page.url.is_empty() || !page.title.is_empty() {
+        note.push_str(&format!("\nPage: {} {}", page.title, page.url));
+    }
+    if !page.text.is_empty() {
+        note.push_str("\nVisible text:\n");
+        note.push_str(&page.text);
+    }
+    (observation, note)
+}
+
+async fn cdp_snapshot(ctx: &ToolCtx, ensure: bool) -> Option<CdpPage> {
+    let page = cdp_call(ctx, json!({"action": "snapshot", "ensure": ensure})).await;
+    if page.ok { Some(page) } else { None }
+}
+
+async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
+    let display = ctx.context.display.as_deref().unwrap_or(":1");
+    let argv = cdp_command_on(display, ctx.context.profile_path.as_deref(), &request);
+    match ctx
+        .sandbox
+        .execute(
+            &ctx.computer,
+            CommandRequest {
+                argv,
+                cwd: None,
+                timeout_ms: Some(20_000),
+            },
+            &ctx.context,
+        )
+        .await
+    {
+        Ok(result) => {
+            let raw = if result.stdout.trim().is_empty() {
+                result.stderr
+            } else {
+                result.stdout
+            };
+            parse_cdp_page(&raw)
+        }
+        Err(error) => CdpPage {
+            ok: false,
+            error: Some(error.to_string()),
+            ..CdpPage::default()
+        },
+    }
+}
+
+async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    if let Some(blocked) = vision_guard(ctx) {
+        return blocked;
+    }
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("snapshot");
+    let mut request = json!({
+        "action": action,
+        "ensure": true,
+    });
+    for key in ["url", "text", "key", "ms", "selector"] {
+        if let Some(value) = args.get(key) {
+            request[key] = value.clone();
+        }
+    }
+    if request.get("selector").and_then(Value::as_str).is_none() {
+        if let Some(id) = args.get("element").and_then(Value::as_u64) {
+            let elements = ctx.elements.lock().unwrap().clone();
+            match elements
+                .iter()
+                .find(|element| u64::from(element.id) == id)
+                .and_then(|element| element.selector.clone())
+            {
+                Some(selector) => request["selector"] = json!(selector),
+                None if matches!(action, "click" | "type") => {
+                    return pause_unknown_element(ctx, id as u32, &elements);
+                }
+                None => {}
+            }
+        }
+    }
+    if matches!(action, "click") && request.get("selector").and_then(Value::as_str).is_none() {
+        return text_outcome(
+            "browser click needs element id or selector. Call browser snapshot first.",
+        );
+    }
+    let page = cdp_call(ctx, request).await;
+    if !page.ok {
+        return text_outcome(page.error.unwrap_or_else(|| "browser failed".into()));
+    }
+    if !page.elements.is_empty() {
+        *ctx.elements.lock().unwrap() = page.elements.clone();
+    }
+    let text = browser_result_text(action, &page);
+    if action == "snapshot" {
+        return ToolOutcome {
+            text,
+            image: None,
+            pause: false,
+        };
+    }
+    match ctx.sandbox.observe(&ctx.computer, &ctx.context).await {
+        Ok(observation) => {
+            let (observation, note) = attach_page_elements(ctx, observation, &text).await;
+            pack_observation(ctx, &note, observation)
+        }
+        Err(_) => ToolOutcome {
+            text,
+            image: None,
+            pause: false,
+        },
+    }
+}
+
+fn browser_result_text(action: &str, page: &CdpPage) -> String {
+    if matches!(action, "snapshot" | "navigate") {
+        format!(
+            "browser {action}\nPage: {} {}\nClickable page elements: {}\nVisible text:\n{}",
+            page.title,
+            page.url,
+            format_ui_elements(&page.elements),
+            page.text
+        )
+    } else {
+        format!("browser {action} ok")
+    }
+}
+
 async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     if let Some(blocked) = vision_guard(ctx) {
         return blocked;
+    }
+    let mut args = args.clone();
+    let elements = ctx.elements.lock().unwrap().clone();
+    if let Some(actions) = args.get_mut("actions") {
+        if let Err(error) = apply_element_targets(actions, &elements) {
+            if let ActionError::UnknownElement(id) = error {
+                return pause_unknown_element(ctx, id, &elements);
+            }
+            return text_outcome(error.to_string());
+        }
+        if let Some(items) = actions.as_array_mut() {
+            for item in items {
+                let Some(kind) = item.get("kind").and_then(Value::as_str) else {
+                    continue;
+                };
+                if kind != "click" {
+                    continue;
+                }
+                let Some(id) = item.get("element").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let Some(selector) = elements
+                    .iter()
+                    .find(|element| u64::from(element.id) == id)
+                    .and_then(|element| element.selector.clone())
+                else {
+                    continue;
+                };
+                let page = cdp_call(
+                    ctx,
+                    json!({"action":"click","selector":selector,"ensure":false}),
+                )
+                .await;
+                if page.ok {
+                    if let Some(object) = item.as_object_mut() {
+                        object.insert("kind".into(), json!("wait"));
+                        object.insert("ms".into(), json!(80));
+                    }
+                }
+            }
+        }
     }
     let actions = match parse_computer_actions(args.get("actions").unwrap_or(&Value::Null)) {
         Ok(actions) => actions,
@@ -314,6 +560,7 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             };
         }
     };
+    let had_click = actions.iter().any(action_is_click);
     match ctx
         .sandbox
         .act(
@@ -331,11 +578,15 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     {
         Ok(result) => {
             if let Some(observation) = result.observation {
-                pack_observation(
+                let unchanged =
+                    frames_match(ctx.previous_frame.lock().unwrap().as_deref(), &observation);
+                let mut outcome = pack_observation(
                     ctx,
                     &format!("completed {} computer action(s)", result.completed),
                     observation,
-                )
+                );
+                note_click_result(ctx, had_click, unchanged, &mut outcome);
+                outcome
             } else {
                 ToolOutcome {
                     text: json!({"ok": true, "completed": result.completed}).to_string(),
@@ -352,12 +603,59 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     }
 }
 
+fn action_is_click(action: &ComputerAction) -> bool {
+    matches!(
+        action,
+        ComputerAction::Pointer {
+            pointer_type: PointerType::Click | PointerType::Down,
+            ..
+        }
+    )
+}
+
+fn pause_unknown_element(ctx: &ToolCtx, id: u32, elements: &[UiElement]) -> ToolOutcome {
+    *ctx.takeover_requested.lock().unwrap() = true;
+    ToolOutcome {
+        text: format!(
+            "找不到畫面上的元素 {id}。目前可見：{}。請接手操作，完成後釋放控制權，我會從目前畫面繼續。",
+            format_ui_elements(elements)
+        ),
+        image: None,
+        pause: true,
+    }
+}
+
+fn note_click_result(ctx: &ToolCtx, had_click: bool, unchanged: bool, outcome: &mut ToolOutcome) {
+    if !had_click {
+        return;
+    }
+    let mut streak = ctx.miss_streak.lock().unwrap();
+    if unchanged {
+        *streak += 1;
+        *ctx.click_misses.lock().unwrap() += 1;
+        if *streak >= 2 {
+            *ctx.takeover_requested.lock().unwrap() = true;
+            outcome.pause = true;
+            outcome.text.push_str(
+                "\n連續兩次點擊後畫面沒有變化。請接手確認，完成後釋放控制權，我會從目前畫面繼續。",
+            );
+        }
+    } else {
+        *streak = 0;
+    }
+}
+
 fn pack_observation(ctx: &ToolCtx, note: &str, observation: ComputerObservation) -> ToolOutcome {
     let unchanged = frames_match(ctx.previous_frame.lock().unwrap().as_deref(), &observation);
     *ctx.previous_frame.lock().unwrap() = Some(observation.frame_id.clone());
+    *ctx.elements.lock().unwrap() = observation.elements.clone();
     ToolOutcome {
         text: observation_text(note, &observation, unchanged),
-        image: if unchanged { None } else { Some(observation.image) },
+        image: if unchanged {
+            None
+        } else {
+            Some(overlay_elements(&observation.image, &observation.elements))
+        },
         pause: false,
     }
 }
@@ -406,7 +704,11 @@ async fn list_files(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             };
         }
     };
-    match ctx.sandbox.list_files(&ctx.computer, &stored, &ctx.context).await {
+    match ctx
+        .sandbox
+        .list_files(&ctx.computer, &stored, &ctx.context)
+        .await
+    {
         Ok(entries) => ToolOutcome {
             text: serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into()),
             image: None,
@@ -432,7 +734,11 @@ async fn read_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             };
         }
     };
-    match ctx.sandbox.read_file(&ctx.computer, &stored, &ctx.context).await {
+    match ctx
+        .sandbox
+        .read_file(&ctx.computer, &stored, &ctx.context)
+        .await
+    {
         Ok(bytes) => ToolOutcome {
             text: String::from_utf8_lossy(&bytes).into_owned(),
             image: None,
@@ -447,7 +753,10 @@ async fn read_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
 }
 
 async fn write_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
-    let requested = args.get("path").and_then(Value::as_str).unwrap_or("notes.txt");
+    let requested = args
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("notes.txt");
     let content = args.get("content").and_then(Value::as_str).unwrap_or("");
     let stored = match resolve_bot_workspace_path(ctx.mode, &ctx.bot_id, requested) {
         Ok(path) => path,
@@ -520,7 +829,10 @@ async fn launch_app(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     if let Some(blocked) = vision_guard(ctx) {
         return blocked;
     }
-    let application = args.get("application").and_then(Value::as_str).unwrap_or("browser");
+    let application = args
+        .get("application")
+        .and_then(Value::as_str)
+        .unwrap_or("browser");
     let uri = args.get("uri").and_then(Value::as_str).map(str::to_string);
     match ctx
         .sandbox

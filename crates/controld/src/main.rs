@@ -7,8 +7,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use lazyboy_contracts::ComputerAction;
 use lazyboy_control::{
-    action_pause_ms, launch_argv_on, normalize_display, open_argv_on, parse_pointer_state,
-    pointer_state_command_on, screenshot_command_on, xdotool_argv_on, ActionRequest, PRIMARY_DISPLAY,
+    ActionRequest, PRIMARY_DISPLAY, action_pause_ms, launch_argv_on, normalize_display,
+    open_argv_on, parse_pointer_state, parse_ui_elements, pointer_state_command_on,
+    screenshot_command_on, window_list_command_on, xdotool_argv_on,
 };
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -48,7 +49,10 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
 }
 
 fn header_value<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
-    headers.get(name).and_then(|value| value.to_str().ok()).filter(|value| !value.is_empty())
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
 }
 
 fn display_of(headers: &HeaderMap, fallback: Option<&str>) -> String {
@@ -67,7 +71,10 @@ fn profile_of(headers: &HeaderMap, fallback: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn observe(State(app): State<App>, headers: HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+async fn observe(
+    State(app): State<App>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     if !authorized(&headers, &app.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -114,15 +121,22 @@ async fn act(
     Ok(Json(body))
 }
 
-async fn apply_action(display: &str, profile: Option<&str>, action: &ComputerAction) -> Result<(), String> {
+async fn apply_action(
+    display: &str,
+    profile: Option<&str>,
+    action: &ComputerAction,
+) -> Result<(), String> {
     match action {
         ComputerAction::Wait { ms } => {
             sleep(Duration::from_millis(*ms as u64)).await;
             Ok(())
         }
-        ComputerAction::Open { path } => spawn_detached(&open_argv_on(display, profile, path)).await,
+        ComputerAction::Open { path } => {
+            spawn_detached(&open_argv_on(display, profile, path)).await
+        }
         ComputerAction::Focus { .. } => {
-            let argv = xdotool_argv_on(display, action).ok_or_else(|| "unsupported action".to_string())?;
+            let argv =
+                xdotool_argv_on(display, action).ok_or_else(|| "unsupported action".to_string())?;
             let output = Command::new(&argv[0])
                 .args(&argv[1..])
                 .output()
@@ -140,7 +154,8 @@ async fn apply_action(display: &str, profile: Option<&str>, action: &ComputerAct
             spawn_detached(&argv).await
         }
         other => {
-            let argv = xdotool_argv_on(display, other).ok_or_else(|| "unsupported action".to_string())?;
+            let argv =
+                xdotool_argv_on(display, other).ok_or_else(|| "unsupported action".to_string())?;
             let output = Command::new(&argv[0])
                 .args(&argv[1..])
                 .output()
@@ -178,7 +193,20 @@ async fn observation_json(display: &str, png: Vec<u8>) -> serde_json::Value {
     if let Some(window) = window {
         body["activeWindow"] = serde_json::json!({ "id": window.id, "title": window.title });
     }
+    let elements = run_window_list(display).await;
+    if !elements.is_empty() {
+        body["elements"] = serde_json::to_value(elements).unwrap_or(serde_json::json!([]));
+    }
     body
+}
+
+async fn run_window_list(display: &str) -> Vec<lazyboy_contracts::UiElement> {
+    let argv = window_list_command_on(display);
+    let output = Command::new(&argv[0]).args(&argv[1..]).output().await.ok();
+    let Some(output) = output else {
+        return Vec::new();
+    };
+    parse_ui_elements(&String::from_utf8_lossy(&output.stdout))
 }
 
 async fn run_pointer_state(

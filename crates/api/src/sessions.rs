@@ -10,7 +10,7 @@ use futures_util::stream;
 use lazyboy_contracts::{
     CreateSessionInput, SendSessionMessageInput, Session, SessionMessage, UpdateSessionInput,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::db::Actor;
@@ -20,10 +20,15 @@ type ApiError = (StatusCode, Json<Value>);
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/bots/{id}/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/api/bots/{id}/sessions",
+            get(list_sessions).post(create_session),
+        )
         .route(
             "/api/sessions/{id}",
-            get(get_session).patch(update_session).delete(delete_session),
+            get(get_session)
+                .patch(update_session)
+                .delete(delete_session),
         )
         .route(
             "/api/sessions/{id}/messages",
@@ -79,17 +84,19 @@ async fn list_sessions(
     Path(bot_id): Path<String>,
 ) -> Result<Json<Vec<Session>>, ApiError> {
     let actor = actor(&state).await?;
-    let exists: Option<i32> = sqlx::query_scalar(
-        "SELECT 1 FROM bots WHERE id=$1 AND space_id=$2 AND user_id=$3",
-    )
-    .bind(&bot_id)
-    .bind(&actor.space_id)
-    .bind(&actor.user_id)
-    .fetch_optional(state.pool())
-    .await
-    .map_err(|error| internal(error.to_string()))?;
+    let exists: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM bots WHERE id=$1 AND space_id=$2 AND user_id=$3")
+            .bind(&bot_id)
+            .bind(&actor.space_id)
+            .bind(&actor.user_id)
+            .fetch_optional(state.pool())
+            .await
+            .map_err(|error| internal(error.to_string()))?;
     if exists.is_none() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"bot not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"bot not found"})),
+        ));
     }
     let rows = sqlx::query_as(
         "SELECT id, bot_id, title, status, created_at, updated_at, next_message_seq,
@@ -113,17 +120,19 @@ async fn create_session(
     Json(input): Json<CreateSessionInput>,
 ) -> Result<(StatusCode, Json<Session>), ApiError> {
     let actor = actor(&state).await?;
-    let exists: Option<i32> = sqlx::query_scalar(
-        "SELECT 1 FROM bots WHERE id=$1 AND space_id=$2 AND user_id=$3",
-    )
-    .bind(&bot_id)
-    .bind(&actor.space_id)
-    .bind(&actor.user_id)
-    .fetch_optional(state.pool())
-    .await
-    .map_err(|error| internal(error.to_string()))?;
+    let exists: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM bots WHERE id=$1 AND space_id=$2 AND user_id=$3")
+            .bind(&bot_id)
+            .bind(&actor.space_id)
+            .bind(&actor.user_id)
+            .fetch_optional(state.pool())
+            .await
+            .map_err(|error| internal(error.to_string()))?;
     if exists.is_none() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"bot not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"bot not found"})),
+        ));
     }
     let title = normalized_title(&input.title);
     let row = sqlx::query_as(
@@ -150,7 +159,12 @@ async fn get_session(
     let actor = actor(&state).await?;
     let row = scoped_session_row(&state, &actor, &id)
         .await?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"message":"session not found"})),
+            )
+        })?;
     Ok(Json(session_from_row(row)))
 }
 
@@ -165,7 +179,10 @@ async fn update_session(
         .as_deref()
         .is_some_and(|status| !matches!(status, "active" | "archived"))
     {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"message":"invalid status"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message":"invalid status"})),
+        ));
     }
     let title = input.title.as_deref().map(normalized_title);
     let row = sqlx::query_as(
@@ -183,7 +200,12 @@ async fn update_session(
     .fetch_optional(state.pool())
     .await
     .map_err(|error| internal(error.to_string()))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))))?;
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"session not found"})),
+        )
+    })?;
     Ok(Json(session_from_row(row)))
 }
 
@@ -193,12 +215,19 @@ async fn delete_session(
 ) -> Result<StatusCode, ApiError> {
     let actor = actor(&state).await?;
     if scoped_session_row(&state, &actor, &id).await?.is_none() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"session not found"})),
+        ));
     }
     cancel_session_runs(&state, &id)
         .await
         .map_err(|error| internal(error))?;
-    let mut tx = state.pool().begin().await.map_err(|error| internal(error.to_string()))?;
+    let mut tx = state
+        .pool()
+        .begin()
+        .await
+        .map_err(|error| internal(error.to_string()))?;
     let bot_id: Option<String> = sqlx::query_scalar(
         "DELETE FROM threads WHERE id=$1 AND space_id=$2 AND user_id=$3 RETURNING bot_id",
     )
@@ -209,7 +238,10 @@ async fn delete_session(
     .await
     .map_err(|error| internal(error.to_string()))?;
     let Some(bot_id) = bot_id else {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"session not found"})),
+        ));
     };
     let remaining: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM threads WHERE bot_id=$1)")
@@ -229,7 +261,9 @@ async fn delete_session(
         .await
         .map_err(|error| internal(error.to_string()))?;
     }
-    tx.commit().await.map_err(|error| internal(error.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|error| internal(error.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -247,12 +281,19 @@ async fn clear_messages(
 ) -> Result<Json<Value>, ApiError> {
     let actor = actor(&state).await?;
     if scoped_session_row(&state, &actor, &id).await?.is_none() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"session not found"})),
+        ));
     }
     cancel_session_runs(&state, &id)
         .await
         .map_err(|error| internal(error))?;
-    let mut tx = state.pool().begin().await.map_err(|error| internal(error.to_string()))?;
+    let mut tx = state
+        .pool()
+        .begin()
+        .await
+        .map_err(|error| internal(error.to_string()))?;
     sqlx::query("DELETE FROM messages WHERE thread_id=$1")
         .bind(&id)
         .execute(&mut *tx)
@@ -270,7 +311,9 @@ async fn clear_messages(
     .execute(&mut *tx)
     .await
     .map_err(|error| internal(error.to_string()))?;
-    tx.commit().await.map_err(|error| internal(error.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|error| internal(error.to_string()))?;
     let _ = append_event(&state, &id, "session.cleared", json!({"sessionId":id})).await;
     Ok(Json(json!({"ok":true})))
 }
@@ -282,11 +325,19 @@ async fn send_message(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let actor = actor(&state).await?;
     if input.text.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"message":"empty message"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message":"empty message"})),
+        ));
     }
     let session = scoped_session_row(&state, &actor, &id)
         .await?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"message":"session not found"})),
+            )
+        })?;
     let result = crate::runs::send(
         &state,
         &actor,
@@ -307,7 +358,10 @@ async fn stop_session(
 ) -> Result<Json<Value>, ApiError> {
     let actor = actor(&state).await?;
     if scoped_session_row(&state, &actor, &id).await?.is_none() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"session not found"})),
+        ));
     }
     cancel_session_runs(&state, &id)
         .await
@@ -322,52 +376,52 @@ async fn events(
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let actor = actor(&state).await?;
     if scoped_session_row(&state, &actor, &id).await?.is_none() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"message":"session not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"session not found"})),
+        ));
     }
     let after = headers
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<i32>().ok())
         .unwrap_or(0);
-    let stream_state = (
-        state,
-        id,
-        actor,
-        after,
-        Vec::<(i32, String, Value)>::new(),
-    );
-    let output = stream::unfold(stream_state, |(state, id, actor, mut after, mut pending)| async move {
-        loop {
-            if let Some((seq, kind, payload)) = pending.pop() {
-                after = seq;
-                let event = Event::default()
-                    .id(seq.to_string())
-                    .event(kind)
-                    .json_data(payload)
-                    .unwrap_or_else(|_| Event::default().event("error").data("{}"));
-                return Some((Ok(event), (state, id, actor, after, pending)));
-            }
-            match sqlx::query_as::<_, (i32, String, Value)>(
-                "SELECT e.seq,e.type,e.payload FROM events e
+    let stream_state = (state, id, actor, after, Vec::<(i32, String, Value)>::new());
+    let output = stream::unfold(
+        stream_state,
+        |(state, id, actor, mut after, mut pending)| async move {
+            loop {
+                if let Some((seq, kind, payload)) = pending.pop() {
+                    after = seq;
+                    let event = Event::default()
+                        .id(seq.to_string())
+                        .event(kind)
+                        .json_data(payload)
+                        .unwrap_or_else(|_| Event::default().event("error").data("{}"));
+                    return Some((Ok(event), (state, id, actor, after, pending)));
+                }
+                match sqlx::query_as::<_, (i32, String, Value)>(
+                    "SELECT e.seq,e.type,e.payload FROM events e
                  JOIN threads t ON t.id=e.thread_id
                  WHERE e.thread_id=$1 AND e.seq>$2 AND t.space_id=$3 AND t.user_id=$4
                  ORDER BY e.seq ASC LIMIT 100",
-            )
-            .bind(&id)
-            .bind(after)
-            .bind(&actor.space_id)
-            .bind(&actor.user_id)
-            .fetch_all(state.pool())
-            .await
-            {
-                Ok(mut rows) if !rows.is_empty() => {
-                    rows.reverse();
-                    pending = rows;
+                )
+                .bind(&id)
+                .bind(after)
+                .bind(&actor.space_id)
+                .bind(&actor.user_id)
+                .fetch_all(state.pool())
+                .await
+                {
+                    Ok(mut rows) if !rows.is_empty() => {
+                        rows.reverse();
+                        pending = rows;
+                    }
+                    Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(750)).await,
                 }
-                Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(750)).await,
             }
-        }
-    });
+        },
+    );
     Ok(Sse::new(output).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(15))
@@ -538,7 +592,10 @@ pub(crate) fn title_from_first_message(text: &str) -> String {
     }
 }
 
-pub(crate) async fn cancel_session_runs(state: &AppState, thread_id: &str) -> Result<Vec<String>, String> {
+pub(crate) async fn cancel_session_runs(
+    state: &AppState,
+    thread_id: &str,
+) -> Result<Vec<String>, String> {
     let run_ids: Vec<String> = sqlx::query_scalar(
         "UPDATE runs SET status='cancelled', completed_at=now(), updated_at=now()
          WHERE thread_id=$1 AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
