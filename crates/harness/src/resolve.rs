@@ -113,6 +113,13 @@ fn rewrite_loopback_host(url: &str) -> String {
 pub enum DynModel {
     Xai(xai::completion::CompletionModel),
     OpenAi(openai::completion::CompletionModel),
+    OpenAiResponses(openai::responses_api::ResponsesCompletionModel),
+}
+
+fn uses_responses_api(provider: ModelProvider, model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    provider == ModelProvider::OpencodeGo
+        && (id.starts_with("gpt-") || id.starts_with("grok-") || id.starts_with("muse-"))
 }
 
 pub fn connect_model(backend: &ResolvedBackend) -> Result<DynModel, ModelError> {
@@ -128,12 +135,23 @@ pub fn connect_model(backend: &ResolvedBackend) -> Result<DynModel, ModelError> 
             } else {
                 backend.api_key.as_str()
             };
-            let client = openai::CompletionsClient::builder()
-                .api_key(key.to_string())
-                .base_url(&backend.base_url)
-                .build()
-                .map_err(|error| ModelError::ProviderClient(error.to_string()))?;
-            Ok(DynModel::OpenAi(client.completion_model(&backend.model_id)))
+            if uses_responses_api(backend.provider, &backend.model_id) {
+                let client = openai::Client::builder()
+                    .api_key(key.to_string())
+                    .base_url(&backend.base_url)
+                    .build()
+                    .map_err(|error| ModelError::ProviderClient(error.to_string()))?;
+                Ok(DynModel::OpenAiResponses(
+                    client.completion_model(&backend.model_id),
+                ))
+            } else {
+                let client = openai::CompletionsClient::builder()
+                    .api_key(key.to_string())
+                    .base_url(&backend.base_url)
+                    .build()
+                    .map_err(|error| ModelError::ProviderClient(error.to_string()))?;
+                Ok(DynModel::OpenAi(client.completion_model(&backend.model_id)))
+            }
         }
         other => Err(ModelError::UnsupportedProvider {
             provider: other.as_str().to_string(),
@@ -259,6 +277,20 @@ mod tests {
         assert_eq!(backend.model_id, "glm-5.1");
         assert_eq!(backend.base_url, "https://opencode.ai/zen/go/v1");
         assert!(connect_model(&backend).is_ok());
+    }
+
+    #[test]
+    fn opencode_routes_responses_models_to_the_responses_api() {
+        assert!(uses_responses_api(
+            ModelProvider::OpencodeGo,
+            "gpt-5.6-luna"
+        ));
+        assert!(uses_responses_api(ModelProvider::OpencodeGo, "grok-4.6"));
+        assert!(!uses_responses_api(ModelProvider::OpencodeGo, "glm-5.1"));
+        assert!(!uses_responses_api(
+            ModelProvider::OpenaiCompatible,
+            "gpt-5.6-luna"
+        ));
     }
 
     #[test]

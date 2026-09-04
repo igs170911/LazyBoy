@@ -222,6 +222,16 @@ def evaluate(ws, expression, args=None):
         raise RuntimeError(str(result["exceptionDetails"]))
     return val
 
+def wait_for_visual_update(ws):
+    # CDP input and DOM clicks can complete before Chromium commits the next
+    # painted frame. The caller captures X11 immediately after this process
+    # exits, so wait for two animation frames to keep that screenshot aligned
+    # with the framebuffer streamed by VNC.
+    try:
+        evaluate(ws, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    except Exception:
+        pass
+
 def snapshot(ws):
     val = evaluate(ws, SNAP_JS) or {}
     return {
@@ -328,6 +338,7 @@ def main():
             if not val.get("ok"):
                 fail(val.get("error") or "click failed")
             pointer(display, val.get("x") or 0, val.get("y") or 0)
+            wait_for_visual_update(ws)
             print(json.dumps({"ok": True, "action": "click", "selector": sel, "restarted": restarted}))
             return
         if action == "type":
@@ -339,11 +350,13 @@ def main():
                     pointer(display, val.get("x") or 0, val.get("y") or 0)
             if text:
                 ws.call("Input.insertText", {"text": text})
+            wait_for_visual_update(ws)
             print(json.dumps({"ok": True, "action": "type", "restarted": restarted}))
             return
         if action == "press":
             key = req.get("key") or "Return"
             press(ws, key)
+            wait_for_visual_update(ws)
             print(json.dumps({"ok": True, "action": "press", "key": key, "restarted": restarted}))
             return
         if action == "wait":

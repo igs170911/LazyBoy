@@ -257,16 +257,18 @@ pub async fn worker_loop(state: AppState) {
             .await
             {
                 tracing::error!("run {run_id} failed: {error}");
+                let retryable = retryable_run_error(&error);
                 let next_status: Option<String> = sqlx::query_scalar(
                     "UPDATE runs
-                     SET status=CASE WHEN retry_count < max_retries THEN 'queued' ELSE 'failed' END,
-                         error=$2, completed_at=CASE WHEN retry_count < max_retries THEN NULL ELSE now() END,
+                     SET status=CASE WHEN $4 AND retry_count < max_retries THEN 'queued' ELSE 'failed' END,
+                         error=$2, completed_at=CASE WHEN $4 AND retry_count < max_retries THEN NULL ELSE now() END,
                          lease_owner=NULL, lease_expires_at=NULL, updated_at=now()
                      WHERE id=$1 AND lease_owner=$3 AND status IN ('leased','running') RETURNING status",
                 )
                     .bind(&run_id)
                     .bind(&error)
                     .bind(&owner)
+                    .bind(retryable)
                     .fetch_optional(state.pool())
                     .await
                     .ok()
@@ -800,7 +802,20 @@ async fn complete_once(
     match model {
         DynModel::Xai(model) => complete_with(model, pending, preamble, history, defs).await,
         DynModel::OpenAi(model) => complete_with(model, pending, preamble, history, defs).await,
+        DynModel::OpenAiResponses(model) => {
+            complete_with(model, pending, preamble, history, defs).await
+        }
     }
+}
+
+fn retryable_run_error(error: &str) -> bool {
+    let Some((_, suffix)) = error.split_once("status ") else {
+        return true;
+    };
+    let Some(code) = suffix.get(..3).and_then(|value| value.parse::<u16>().ok()) else {
+        return true;
+    };
+    !matches!(code, 400..=499 if !matches!(code, 408 | 409 | 425 | 429))
 }
 
 async fn complete_with<M>(
@@ -1046,7 +1061,9 @@ async fn record_run_metrics(
 
 #[cfg(test)]
 mod tests {
-    use super::{RunHalt, halt_from_status, history_window_start, screenshot_parts};
+    use super::{
+        RunHalt, halt_from_status, history_window_start, retryable_run_error, screenshot_parts,
+    };
     use rig_core::completion::message::UserContent;
 
     #[test]
@@ -1076,5 +1093,19 @@ mod tests {
         );
         assert_eq!(halt_from_status(Some("running")), None);
         assert_eq!(halt_from_status(None), None);
+    }
+
+    #[test]
+    fn permanent_provider_errors_are_not_retried() {
+        assert!(!retryable_run_error(
+            "ProviderResponseError: status 403 Forbidden"
+        ));
+        assert!(!retryable_run_error(
+            "ProviderResponseError: status 422 Unprocessable"
+        ));
+        assert!(retryable_run_error(
+            "ProviderResponseError: status 429 Too Many Requests"
+        ));
+        assert!(retryable_run_error("connection reset"));
     }
 }
