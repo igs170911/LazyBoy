@@ -42,6 +42,10 @@ pub struct SessionMessage {
     pub run_id: Option<String>,
     pub client_nonce: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub speaker_bot_id: Option<String>,
+    pub speaker_name: Option<String>,
+    pub speaker_color: Option<String>,
+    pub speaker_shape: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,4 +55,16 @@ pub struct SendSessionMessageInput {
     pub client_nonce: Option<String>,
     #[serde(default)]
     pub blocks: Vec<Value>,
+    #[serde(default)]
+    pub attachments: Vec<SessionAttachment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAttachment {
+    pub name: String,
+    #[serde(default)]
+    pub mime_type: String,
+    #[serde(alias = "contentBase64")]
+    pub content: String,
 }

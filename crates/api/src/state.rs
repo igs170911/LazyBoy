@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use lazyboy_control::SandboxProvider;
 use lazyboy_sandbox::{DockerSandbox, FakeSandbox};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 
-use crate::db::{Actor, Db};
 use crate::auth::AuthConfig;
+use crate::db::{Actor, Db};
+use crate::mcp::McpHub;
 use crate::memory::MemoryService;
 
 #[derive(Clone)]
@@ -16,6 +17,7 @@ pub struct AppState {
     pub data_dir: String,
     pub auth: AuthConfig,
     pub memory: MemoryService,
+    pub mcp: McpHub,
 }
 
 impl AppState {
@@ -36,6 +38,7 @@ impl AppState {
             data_dir: std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".into()),
             auth: AuthConfig::from_env(),
             memory: MemoryService::from_env(),
+            mcp: McpHub::new(),
         })
     }
 
@@ -49,7 +52,10 @@ impl AppState {
 }
 
 fn sandbox_from_env() -> Arc<dyn SandboxProvider> {
-    match std::env::var("SANDBOX_PROVIDER").unwrap_or_else(|_| "docker".into()).as_str() {
+    match std::env::var("SANDBOX_PROVIDER")
+        .unwrap_or_else(|_| "docker".into())
+        .as_str()
+    {
         "fake" => Arc::new(FakeSandbox::new()),
         _ => {
             let url = std::env::var("SANDBOX_SUPERVISOR_URL")

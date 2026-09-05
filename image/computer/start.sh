@@ -11,6 +11,7 @@ export LANG="${LANG:-zh_TW.UTF-8}"
 export LC_ALL="${LC_ALL:-zh_TW.UTF-8}"
 export LANGUAGE="${LANGUAGE:-zh_TW:zh:en}"
 mkdir -p "$HOME" /tmp/lazyboy /tmp/.X11-unix
+rm -f /tmp/lazyboy/ready
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 cd "$HOME"
 
@@ -23,6 +24,7 @@ if command -v dbus-launch >/dev/null 2>&1; then
 fi
 
 lazyboy-screen boot-primary || exit 1
+touch /tmp/lazyboy/ready
 pid=""
 if [[ -f /tmp/lazyboy/xvfb-1.pid ]]; then
   pid="$(cat /tmp/lazyboy/xvfb-1.pid)"

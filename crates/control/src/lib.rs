@@ -1,6 +1,8 @@
 mod actions;
+mod cdp;
 mod lease;
 mod observe;
+mod overlay;
 mod path;
 mod sandbox;
 mod screen;
@@ -8,8 +10,10 @@ mod takeover;
 mod x11;
 
 pub use actions::*;
+pub use cdp::*;
 pub use lease::*;
 pub use observe::*;
+pub use overlay::*;
 pub use path::*;
 pub use sandbox::*;
 pub use screen::*;

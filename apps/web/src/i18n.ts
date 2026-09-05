@@ -1,25 +1,18 @@
+import { zhTW } from "./locales/zh-TW";
+
 export const supportedLocales = ["zh-TW"] as const;
 export type Locale = (typeof supportedLocales)[number];
 
-const messages = {
-  "zh-TW": {
-    search: "搜尋",
-    sharedComputer: "共用電腦",
-    privateComputer: "私人電腦",
-    stopped: "已關閉",
-    booting: "啟動中",
-    running: "執行中",
-    suspended: "休眠中",
-    error: "發生錯誤",
-    openComputer: "開啟電腦",
-    stopTask: "停止任務",
-    takeControl: "取得控制權",
-    releaseControl: "交還控制",
-    done: "完成",
-    skip: "略過",
-  },
-} as const;
+const messages = { "zh-TW": zhTW } as const;
 
 export const locale: Locale = "zh-TW";
-export type MessageKey = keyof (typeof messages)["zh-TW"];
-export function t(key: MessageKey): string { return messages[locale][key]; }
+export type MessageKey = keyof typeof zhTW;
+export type MessageParams = Record<string, string | number>;
+
+export function t(key: MessageKey, params?: MessageParams): string {
+  const message: string = messages[locale][key];
+  if (!params) return message;
+  return message.replace(/\{(\w+)\}/g, (match, name: string) =>
+    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match,
+  );
+}

@@ -184,6 +184,19 @@ pub struct ComputerStatus {
     pub screen_height: u32,
     pub home_revision: Option<String>,
     pub busy_bot_name: Option<String>,
+    pub busy_session_id: Option<String>,
+    pub busy_run_id: Option<String>,
+    /// What the active run is doing right now ("思考中", "browser: click #12"…).
+    #[serde(default)]
+    pub busy_step: Option<String>,
+    /// Run paused in `waiting_takeover` (bot asked for, or user forced, control).
+    #[serde(default)]
+    pub waiting_run_id: Option<String>,
+    #[serde(default)]
+    pub waiting_session_id: Option<String>,
+    /// Messages queued behind the active/paused run for this bot.
+    #[serde(default)]
+    pub queued_runs: u32,
     pub multi_screen: bool,
     pub screen_id: Option<String>,
     pub display: Option<String>,
@@ -195,8 +208,10 @@ pub const DEFAULT_SCREEN_HEIGHT: u32 = 800;
 pub const TEAM_SCREEN_LIMIT: u32 = 8;
 
 pub const MULTI_SCREEN_UNAVAILABLE: &str = "This computer does not support multiple screens. Desktop tools are already in use on the shared display. File and shell tools still work.";
-pub const TEAM_SCREENS_FULL: &str = "This Team computer has no free screens left. File and shell tools still work.";
-pub const PROFILE_LOCKED: &str = "Another bot is using this shared browser profile. File and shell tools still work.";
+pub const TEAM_SCREENS_FULL: &str =
+    "This Team computer has no free screens left. File and shell tools still work.";
+pub const PROFILE_LOCKED: &str =
+    "Another bot is using this shared browser profile. File and shell tools still work.";
 
 #[cfg(test)]
 mod tests {

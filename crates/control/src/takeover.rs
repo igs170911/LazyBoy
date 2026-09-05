@@ -1,23 +1,16 @@
 use chrono::{DateTime, Utc};
 use lazyboy_contracts::RunStatus;
 
-/// Mirrors computer.takeover: an execution lease blocks user control unless
-/// the run is waiting for a human.
+/// Humans may take the pointer during a live run. The worker pauses at the
+/// next turn boundary (or aborts the in-flight model/tool call) instead of
+/// competing for the mouse.
 pub fn execution_blocks_user_takeover(
-    has_lease: bool,
-    lease_expires_at: Option<DateTime<Utc>>,
-    run_status: Option<RunStatus>,
-    now: DateTime<Utc>,
+    _has_lease: bool,
+    _lease_expires_at: Option<DateTime<Utc>>,
+    _run_status: Option<RunStatus>,
+    _now: DateTime<Utc>,
 ) -> bool {
-    if !has_lease {
-        return false;
-    }
-    if run_status == Some(RunStatus::WaitingTakeover) {
-        return false;
-    }
-    let lease_active = lease_expires_at.is_some_and(|expires| expires > now);
-    let run_active = run_status.is_some_and(RunStatus::is_active);
-    lease_active || run_active
+    false
 }
 
 pub fn user_holds_control(
@@ -44,8 +37,8 @@ mod tests {
     }
 
     #[test]
-    fn live_run_blocks_takeover() {
-        assert!(execution_blocks_user_takeover(
+    fn live_run_does_not_block_takeover() {
+        assert!(!execution_blocks_user_takeover(
             true,
             Some(now() + Duration::minutes(4)),
             Some(RunStatus::Running),

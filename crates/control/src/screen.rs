@@ -1,8 +1,8 @@
+pub use lazyboy_contracts::TEAM_SCREEN_LIMIT;
 use lazyboy_contracts::{
     BrowserProfileMode, ComputerCapabilities, MULTI_SCREEN_UNAVAILABLE, PROFILE_LOCKED,
     TEAM_SCREENS_FULL,
 };
-pub use lazyboy_contracts::TEAM_SCREEN_LIMIT;
 use thiserror::Error;
 
 use crate::HOME;
@@ -66,7 +66,11 @@ pub fn allocate_slot(used: &[u32]) -> Option<u32> {
     (0..TEAM_SCREEN_LIMIT).find(|slot| !used.contains(slot))
 }
 
-pub fn browser_profile_path(mode: BrowserProfileMode, bot_id: &str, run_id: Option<&str>) -> String {
+pub fn browser_profile_path(
+    mode: BrowserProfileMode,
+    bot_id: &str,
+    run_id: Option<&str>,
+) -> String {
     match mode {
         BrowserProfileMode::Shared => format!("{HOME}/.browser-profiles/chromium"),
         BrowserProfileMode::PerBot => format!("{HOME}/.browser-profiles/bots/{bot_id}"),
@@ -82,7 +86,10 @@ pub fn profile_lock_key(mode: BrowserProfileMode, bot_id: &str, run_id: Option<&
         BrowserProfileMode::Shared => "shared".into(),
         BrowserProfileMode::PerBot => format!("bot:{bot_id}"),
         BrowserProfileMode::PerTask => {
-            format!("task:{}", run_id.filter(|value| !value.is_empty()).unwrap_or("task"))
+            format!(
+                "task:{}",
+                run_id.filter(|value| !value.is_empty()).unwrap_or("task")
+            )
         }
     }
 }
@@ -132,7 +139,9 @@ pub fn admit_new_screen(
         return Ok(slot);
     }
     if !capabilities.multi_screen && !used_slots.is_empty() {
-        return Err(GuiBlock::MultiScreenUnavailable { busy_bot_name: None });
+        return Err(GuiBlock::MultiScreenUnavailable {
+            busy_bot_name: None,
+        });
     }
     allocate_slot(used_slots).ok_or(GuiBlock::ScreensFull)
 }
@@ -163,10 +172,16 @@ impl Default for ScreenTarget {
 }
 
 impl ScreenTarget {
-    pub fn from_parts(display: Option<&str>, profile_path: Option<&str>, slot: Option<u32>) -> Self {
+    pub fn from_parts(
+        display: Option<&str>,
+        profile_path: Option<&str>,
+        slot: Option<u32>,
+    ) -> Self {
         Self {
             display: normalize_display(display.unwrap_or_default()).to_string(),
-            profile_path: profile_path.filter(|value| !value.is_empty()).map(str::to_string),
+            profile_path: profile_path
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             slot: slot.unwrap_or(0),
         }
     }
@@ -222,7 +237,9 @@ mod tests {
 
     #[test]
     fn multi_screen_false_blocks_a_second_bot_gui_only() {
-        let caps = ComputerCapabilities { multi_screen: false };
+        let caps = ComputerCapabilities {
+            multi_screen: false,
+        };
         let err = admit_new_screen(&caps, &[0], None).unwrap_err();
         assert!(matches!(err, GuiBlock::MultiScreenUnavailable { .. }));
         assert!(admit_new_screen(&caps, &[0], Some(0)).is_ok());

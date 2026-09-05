@@ -147,7 +147,11 @@ pub trait SandboxProvider: Send + Sync {
         context: &AdapterContext,
     ) -> Result<ComputerRef, SandboxError>;
 
-    async fn prepare(&self, computer: &ComputerRef, context: &AdapterContext) -> Result<(), SandboxError> {
+    async fn prepare(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
         let _ = (computer, context);
         Ok(())
     }
@@ -185,7 +189,11 @@ pub trait SandboxProvider: Send + Sync {
         self.provision(request, context).await
     }
 
-    async fn suspend(&self, computer: &ComputerRef, context: &AdapterContext) -> Result<(), SandboxError> {
+    async fn suspend(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
         self.stop(computer, context).await
     }
 
@@ -246,7 +254,15 @@ pub trait SandboxProvider: Send + Sync {
         context: &AdapterContext,
     ) -> Result<(), SandboxError>;
 
-    async fn stop(&self, computer: &ComputerRef, context: &AdapterContext) -> Result<(), SandboxError>;
+    async fn stop(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError>;
 
-    async fn destroy(&self, computer: &ComputerRef, context: &AdapterContext) -> Result<(), SandboxError>;
+    async fn destroy(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError>;
 }

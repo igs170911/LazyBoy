@@ -14,3 +14,4 @@ sha2.workspace = true
 hex.workspace = true
 chrono.workspace = true
 async-trait = "0.1"
+image.workspace = true

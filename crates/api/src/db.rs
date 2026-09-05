@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use lazyboy_contracts::{
-    computer_home_key, computer_scope_key, Bot, BrowserProfileMode, ComputerMode, ComputerState,
-    ControlHolder, RunStatus, SandboxKind,
+    Bot, BrowserProfileMode, ComputerMode, ComputerState, ControlHolder, RunStatus, SandboxKind,
+    computer_home_key, computer_scope_key,
 };
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
@@ -85,6 +85,18 @@ pub struct BotRow {
     pub memory_enabled: bool,
 }
 
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct SpaceRow {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub default_model_provider: String,
+    pub default_model_id: String,
+    pub default_model_base_url: Option<String>,
+    pub default_model_api_key: Option<String>,
+}
+
 impl Db {
     pub async fn ensure_local_actor(&self) -> Result<Actor, sqlx::Error> {
         let user_id = "local-user";
@@ -110,13 +122,72 @@ impl Db {
         })
     }
 
-    pub async fn list_bots(&self, actor: &Actor) -> Result<Vec<(BotRow, String, ComputerRow)>, sqlx::Error> {
+    pub async fn get_space(&self, actor: &Actor) -> Result<Option<SpaceRow>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id, user_id, name, default_model_provider, default_model_id,
+                    default_model_base_url, default_model_api_key
+             FROM spaces WHERE id = $1 AND user_id = $2",
+        )
+        .bind(&actor.space_id)
+        .bind(&actor.user_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn update_workspace_model(
+        &self,
+        actor: &Actor,
+        provider: &str,
+        model_id: &str,
+        base_url: Option<&str>,
+        api_key: Option<Option<&str>>,
+    ) -> Result<SpaceRow, sqlx::Error> {
+        match api_key {
+            Some(key) => {
+                sqlx::query(
+                    "UPDATE spaces
+                     SET default_model_provider = $3, default_model_id = $4,
+                         default_model_base_url = $5, default_model_api_key = $6
+                     WHERE id = $1 AND user_id = $2",
+                )
+                .bind(&actor.space_id)
+                .bind(&actor.user_id)
+                .bind(provider)
+                .bind(model_id)
+                .bind(base_url)
+                .bind(key)
+                .execute(&self.pool)
+                .await?;
+            }
+            None => {
+                sqlx::query(
+                    "UPDATE spaces
+                     SET default_model_provider = $3, default_model_id = $4,
+                         default_model_base_url = $5
+                     WHERE id = $1 AND user_id = $2",
+                )
+                .bind(&actor.space_id)
+                .bind(&actor.user_id)
+                .bind(provider)
+                .bind(model_id)
+                .bind(base_url)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+        self.get_space(actor).await?.ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn list_bots(
+        &self,
+        actor: &Actor,
+    ) -> Result<Vec<(BotRow, String, ComputerRow)>, sqlx::Error> {
         let bots: Vec<BotRow> = sqlx::query_as(
             "SELECT b.id, b.space_id, b.user_id, b.name, b.title, b.description, b.avatar_color, b.avatar_shape, b.tags,
                     b.pinned, b.hidden, b.group_name,
                     (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
-                     WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
-                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
+                     WHERE t.bot_id=b.id AND t.room_id IS NULL AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
+                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id AND t.room_id IS NULL) AS last_message_at,
                     b.instructions, b.computer_id, b.model_provider, b.model_id, b.memory_enabled
              FROM bots b WHERE b.space_id = $1 AND b.user_id = $2 ORDER BY b.pinned DESC, b.created_at DESC",
         )
@@ -126,18 +197,19 @@ impl Db {
         .await?;
         let mut out = Vec::new();
         for bot in bots {
-            let thread_id: (String,) =
-                sqlx::query_as(
-                    "SELECT id FROM threads
-                     WHERE bot_id = $1 AND space_id = $2 AND user_id = $3
+            let thread_id: (String,) = sqlx::query_as(
+                "SELECT id FROM threads
+                     WHERE bot_id = $1 AND space_id = $2 AND user_id = $3 AND room_id IS NULL
                      ORDER BY updated_at DESC, created_at ASC LIMIT 1",
-                )
-                    .bind(&bot.id)
-                    .bind(&actor.space_id)
-                    .bind(&actor.user_id)
-                    .fetch_one(&self.pool)
-                    .await?;
-            let computer = self.get_computer(bot.computer_id.as_deref().unwrap_or("")).await?;
+            )
+            .bind(&bot.id)
+            .bind(&actor.space_id)
+            .bind(&actor.user_id)
+            .fetch_one(&self.pool)
+            .await?;
+            let computer = self
+                .get_computer(bot.computer_id.as_deref().unwrap_or(""))
+                .await?;
             if let Some(computer) = computer {
                 out.push((bot, thread_id.0, computer));
             }
@@ -145,13 +217,17 @@ impl Db {
         Ok(out)
     }
 
-    pub async fn get_bot(&self, actor: &Actor, bot_id: &str) -> Result<Option<BotRow>, sqlx::Error> {
+    pub async fn get_bot(
+        &self,
+        actor: &Actor,
+        bot_id: &str,
+    ) -> Result<Option<BotRow>, sqlx::Error> {
         sqlx::query_as(
             "SELECT b.id, b.space_id, b.user_id, b.name, b.title, b.description, b.avatar_color, b.avatar_shape, b.tags,
                     b.pinned, b.hidden, b.group_name,
                     (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id=m.thread_id
-                     WHERE t.bot_id=b.id AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
-                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id) AS last_message_at,
+                     WHERE t.bot_id=b.id AND t.room_id IS NULL AND m.role='assistant' AND m.created_at>b.last_read_at) AS unread_count,
+                    (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.bot_id=b.id AND t.room_id IS NULL) AS last_message_at,
                     b.instructions, b.computer_id, b.model_provider, b.model_id, b.memory_enabled
              FROM bots b WHERE b.id = $1 AND b.space_id = $2 AND b.user_id = $3",
         )
@@ -162,7 +238,10 @@ impl Db {
         .await
     }
 
-    pub async fn get_computer(&self, computer_id: &str) -> Result<Option<ComputerRow>, sqlx::Error> {
+    pub async fn get_computer(
+        &self,
+        computer_id: &str,
+    ) -> Result<Option<ComputerRow>, sqlx::Error> {
         sqlx::query_as(
             "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
                     control_holder, control_lease_id, control_lease_expires_at, control_bot_id, control_run_id,
@@ -214,7 +293,7 @@ impl Db {
         .bind(memory_enabled)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("INSERT INTO threads (id, space_id, bot_id, user_id) VALUES ($1,$2,$3,$4)")
+        sqlx::query("INSERT INTO threads (id, space_id, bot_id, user_id, title) VALUES ($1,$2,$3,$4,'新對話')")
             .bind(&thread_id)
             .bind(&actor.space_id)
             .bind(&bot_id)
@@ -246,7 +325,11 @@ impl Db {
         })
     }
 
-    pub async fn get_screen(&self, computer_id: &str, bot_id: &str) -> Result<Option<ScreenRow>, sqlx::Error> {
+    pub async fn get_screen(
+        &self,
+        computer_id: &str,
+        bot_id: &str,
+    ) -> Result<Option<ScreenRow>, sqlx::Error> {
         sqlx::query_as(
             "SELECT id, computer_id, bot_id, slot, display, view_port, profile_mode, profile_path,
                     control_holder, control_lease_id, control_lease_expires_at, execution_run_id,
@@ -278,9 +361,12 @@ impl Db {
         .await
     }
 
-    pub async fn active_run(&self, bot_id: &str) -> Result<Option<(String, String)>, sqlx::Error> {
+    pub async fn active_run(
+        &self,
+        bot_id: &str,
+    ) -> Result<Option<(String, String, String)>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT id, status FROM runs
+            "SELECT id, status, thread_id FROM runs
              WHERE bot_id = $1
                AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
              ORDER BY created_at DESC LIMIT 1",

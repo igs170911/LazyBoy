@@ -1,6 +1,6 @@
 use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequest, Path, Request, State};
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -66,7 +66,10 @@ async fn viewer_page() -> Response {
         Err(_) => include_str!("../../../apps/web/vnc.html").to_string(),
     };
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "text/html; charset=utf-8".parse().unwrap());
+    headers.insert(
+        header::CONTENT_TYPE,
+        "text/html; charset=utf-8".parse().unwrap(),
+    );
     headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
     (StatusCode::OK, headers, html).into_response()
@@ -123,13 +126,16 @@ async fn upstream_port(state: &AppState, bot_id: &str, ensure: bool) -> Result<u
 
 fn rewrite_upstream(url: &str) -> String {
     let host = std::env::var("LAZYBOY_SCREEN_UPSTREAM").unwrap_or_else(|_| "127.0.0.1".into());
-    url.replace("127.0.0.1", &host)
-        .replace("localhost", &host)
+    url.replace("127.0.0.1", &host).replace("localhost", &host)
 }
 
 async fn http_proxy(port: u16, rest: &str, req: Request) -> Response {
     let host = std::env::var("LAZYBOY_SCREEN_UPSTREAM").unwrap_or_else(|_| "127.0.0.1".into());
-    let path = if rest.is_empty() { "vnc_lite.html" } else { rest };
+    let path = if rest.is_empty() {
+        "vnc_lite.html"
+    } else {
+        rest
+    };
     let query = req.uri().query().unwrap_or_default();
     let url = if query.is_empty() {
         format!("http://{host}:{port}/{path}")
@@ -137,10 +143,12 @@ async fn http_proxy(port: u16, rest: &str, req: Request) -> Response {
         format!("http://{host}:{port}/{path}?{query}")
     };
     let client = reqwest::Client::new();
-    let method = reqwest::Method::from_bytes(req.method().as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+    let method = reqwest::Method::from_bytes(req.method().as_str().as_bytes())
+        .unwrap_or(reqwest::Method::GET);
     match client.request(method, url).send().await {
         Ok(upstream) => {
-            let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let content_type = upstream
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
@@ -169,7 +177,11 @@ async fn http_proxy(port: u16, rest: &str, req: Request) -> Response {
 
 async fn proxy_socket(mut client: WebSocket, port: u16, rest: String) {
     let host = std::env::var("LAZYBOY_SCREEN_UPSTREAM").unwrap_or_else(|_| "127.0.0.1".into());
-    let path = if rest.is_empty() { "websockify".into() } else { rest };
+    let path = if rest.is_empty() {
+        "websockify".into()
+    } else {
+        rest
+    };
     let url = format!("ws://{host}:{port}/{path}");
     let Ok((upstream, _)) = tokio_tungstenite::connect_async(url).await else {
         let _ = client.send(AxumMessage::Close(None)).await;
@@ -217,4 +229,3 @@ async fn proxy_socket(mut client: WebSocket, port: u16, rest: String) {
         }
     }
 }
-

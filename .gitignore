@@ -8,3 +8,4 @@ image/computer/lazyboy-controld
 node_modules
 dist
 .DS_Store
+.gstack/

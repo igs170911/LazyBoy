@@ -3,22 +3,22 @@ use std::default::Default;
 use std::path::PathBuf;
 
 use base64::Engine;
+use bollard::Docker;
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions, StartContainerOptions,
-    StopContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    StartContainerOptions, StopContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::{HostConfig, PortBinding};
 use bollard::network::CreateNetworkOptions;
-use bollard::Docker;
 use futures_util::StreamExt;
 use lazyboy_control::{
-    action_pause_ms, launch_argv_on, normalize_display, normalize_workspace_path, open_argv_on,
-    pointer_state_command_on, screen_layout, screenshot_command_on, xdotool_argv_on, ActionRequest,
-    CommandRequest, CommandResult, EnsureScreenRequest, EnsureScreenResult, ScreenTarget, HOME,
-    TEAM_SCREEN_LIMIT,
+    ActionRequest, CommandRequest, CommandResult, EnsureScreenRequest, EnsureScreenResult, HOME,
+    ScreenTarget, TEAM_SCREEN_LIMIT, action_pause_ms, launch_argv_on, normalize_display,
+    normalize_workspace_path, open_argv_on, pointer_state_command_on, screen_layout,
+    screenshot_command_on, window_list_command_on, xdotool_argv_on,
 };
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 const SCREEN_PORT_COUNT: u16 = TEAM_SCREEN_LIMIT as u16;
 
@@ -83,6 +83,7 @@ impl DockerHost {
                     .await
                     .ok();
                 self.wait_running(&existing).await?;
+                self.wait_ready(&existing).await?;
                 let screen_url = self.screen_url(&existing, false).await.ok();
                 return Ok(Provisioned {
                     id: existing,
@@ -108,7 +109,7 @@ impl DockerHost {
                 port.clone(),
                 Some(vec![PortBinding {
                     host_ip: Some("127.0.0.1".into()),
-                    host_port: None,
+                    host_port: Some("0".into()),
                 }]),
             );
             exposed.insert(port, HashMap::new());
@@ -185,6 +186,11 @@ impl DockerHost {
             .await
             .map_err(|error| error.to_string())?;
         self.wait_running(&created.id).await?;
+        // The container is reported as running before its primary desktop has
+        // finished booting.  Returning sooner lets an API ensure-screen call
+        // win the screen lock, which makes the container's own startup time
+        // out and exit.  Wait for the entrypoint's readiness marker first.
+        self.wait_ready(&created.id).await?;
         let screen_url = self.screen_url(&created.id, false).await.ok();
         Ok(Provisioned {
             id: created.id,
@@ -211,7 +217,8 @@ impl DockerHost {
         } else {
             request.argv
         };
-        self.exec_argv(id, &argv, Some(&cwd), &ScreenTarget::default()).await
+        self.exec_argv(id, &argv, Some(&cwd), &ScreenTarget::default())
+            .await
     }
 
     pub async fn exec_on(
@@ -241,41 +248,86 @@ impl DockerHost {
     }
 
     pub async fn observe(&self, id: &str) -> Result<Vec<u8>, String> {
-        Ok(self.observe_payload(id, &ScreenTarget::default()).await?.png)
+        Ok(self
+            .observe_payload(id, &ScreenTarget::default())
+            .await?
+            .png)
     }
 
-    pub async fn observe_payload(&self, id: &str, target: &ScreenTarget) -> Result<ObservePayload, String> {
-        if let Ok(value) = self.control_observe_json(id, target).await {
-            return ObservePayload::from_json(value);
-        }
-        let (stdout, stderr, code) = self
-            .exec_raw(id, &screenshot_command_on(&target.display), None, target)
-            .await?;
-        if code != 0 {
-            return Err(String::from_utf8_lossy(&stderr).into_owned());
-        }
-        let mut body = serde_json::json!({
-            "png_base64": base64::engine::general_purpose::STANDARD.encode(&stdout)
-        });
-        if let Ok(meta) = self.pointer_state(id, target).await {
-            if let serde_json::Value::Object(map) = meta {
-                if let Some(obj) = body.as_object_mut() {
-                    if let (Some(x), Some(y)) = (map.get("x"), map.get("y")) {
-                        obj.insert("cursor".into(), serde_json::json!({ "x": x, "y": y }));
-                    }
-                    if map.get("id").and_then(serde_json::Value::as_str).is_some_and(|id| !id.is_empty()) {
-                        obj.insert(
-                            "activeWindow".into(),
-                            serde_json::json!({ "id": map.get("id"), "title": map.get("title") }),
-                        );
+    pub async fn observe_payload(
+        &self,
+        id: &str,
+        target: &ScreenTarget,
+    ) -> Result<ObservePayload, String> {
+        let mut body = if let Ok(value) = self.control_observe_json(id, target).await {
+            value
+        } else {
+            let (stdout, stderr, code) = self
+                .exec_raw(id, &screenshot_command_on(&target.display), None, target)
+                .await?;
+            if code != 0 {
+                return Err(String::from_utf8_lossy(&stderr).into_owned());
+            }
+            let mut body = serde_json::json!({
+                "png_base64": base64::engine::general_purpose::STANDARD.encode(&stdout)
+            });
+            if let Ok(meta) = self.pointer_state(id, target).await {
+                if let serde_json::Value::Object(map) = meta {
+                    if let Some(obj) = body.as_object_mut() {
+                        if let (Some(x), Some(y)) = (map.get("x"), map.get("y")) {
+                            obj.insert("cursor".into(), serde_json::json!({ "x": x, "y": y }));
+                        }
+                        if map
+                            .get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|id| !id.is_empty())
+                        {
+                            obj.insert(
+                                "activeWindow".into(),
+                                serde_json::json!({ "id": map.get("id"), "title": map.get("title") }),
+                            );
+                        }
                     }
                 }
             }
-        }
+            body
+        };
+        self.attach_window_elements(id, target, &mut body).await;
         ObservePayload::from_json(body)
     }
 
-    async fn pointer_state(&self, id: &str, target: &ScreenTarget) -> Result<serde_json::Value, String> {
+    async fn attach_window_elements(
+        &self,
+        id: &str,
+        target: &ScreenTarget,
+        body: &mut serde_json::Value,
+    ) {
+        if body
+            .get("elements")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            return;
+        }
+        let Ok(result) = self
+            .exec_argv(id, &window_list_command_on(&target.display), None, target)
+            .await
+        else {
+            return;
+        };
+        if result.code != 0 {
+            return;
+        }
+        if let Ok(elements) = serde_json::from_str::<serde_json::Value>(&result.stdout) {
+            body["elements"] = elements;
+        }
+    }
+
+    async fn pointer_state(
+        &self,
+        id: &str,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
         let result = self
             .exec_argv(id, &pointer_state_command_on(&target.display), None, target)
             .await?;
@@ -354,26 +406,47 @@ impl DockerHost {
         self.screen_url_for(id, 0, interactive).await
     }
 
-    pub async fn screen_url_for(&self, id: &str, slot: u32, interactive: bool) -> Result<String, String> {
+    pub async fn screen_url_for(
+        &self,
+        id: &str,
+        slot: u32,
+        interactive: bool,
+    ) -> Result<String, String> {
         let layout = screen_layout(slot).map_err(|error| error.to_string())?;
-        let key = format!("{}/tcp", layout.view_port);
-        let info = self
-            .docker
-            .inspect_container(id, None)
-            .await
-            .map_err(|error| error.to_string())?;
-        let port = info
-            .network_settings
-            .and_then(|settings| settings.ports)
-            .and_then(|ports| ports.get(&key).cloned())
-            .and_then(|bindings| bindings)
-            .and_then(|bindings| bindings.into_iter().next())
-            .and_then(|binding| binding.host_port)
-            .ok_or_else(|| format!("screen port {} is not published", layout.view_port))?;
+        let port = self.published_host_port(id, layout.view_port).await?;
         let view = if interactive { "false" } else { "true" };
         Ok(format!(
             "http://127.0.0.1:{port}/vnc_lite.html?resize=scale&view_only={view}"
         ))
+    }
+
+    async fn published_host_port(&self, id: &str, view_port: u16) -> Result<String, String> {
+        let key = format!("{view_port}/tcp");
+        for _ in 0..20 {
+            let info = self
+                .docker
+                .inspect_container(id, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            let running = info.state.as_ref().and_then(|state| state.running) == Some(true);
+            if !running {
+                let exit = info.state.and_then(|state| state.exit_code).unwrap_or(1);
+                return Err(format!("computer is not running (exit {exit})"));
+            }
+            if let Some(port) = info
+                .network_settings
+                .and_then(|settings| settings.ports)
+                .and_then(|ports| ports.get(&key).cloned())
+                .flatten()
+                .and_then(|bindings| bindings.into_iter().next())
+                .and_then(|binding| binding.host_port)
+                .filter(|port| !port.is_empty())
+            {
+                return Ok(port);
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        Err(format!("screen port {view_port} is not published"))
     }
 
     pub async fn ensure_screen(
@@ -478,7 +551,12 @@ PY"#,
             "python3 -c \"import os,base64,sys; p=sys.argv[1]; os.makedirs(os.path.dirname(p) or '.', exist_ok=True); open(p,'wb').write(base64.b64decode(sys.argv[2]))\" {target:?} {encoded:?}"
         );
         let result = self
-            .exec_argv(id, &["bash".into(), "-lc".into(), script], None, &ScreenTarget::default())
+            .exec_argv(
+                id,
+                &["bash".into(), "-lc".into(), script],
+                None,
+                &ScreenTarget::default(),
+            )
             .await?;
         if result.code != 0 {
             Err(result.stderr)
@@ -538,7 +616,11 @@ PY"#,
             return Ok(false);
         }
         let running = info.state.as_ref().and_then(|state| state.running) == Some(true);
-        let exit = info.state.as_ref().and_then(|state| state.exit_code).unwrap_or(0);
+        let exit = info
+            .state
+            .as_ref()
+            .and_then(|state| state.exit_code)
+            .unwrap_or(0);
         if !running && exit != 0 {
             return Ok(false);
         }
@@ -592,6 +674,33 @@ PY"#,
         Err("container failed to start".into())
     }
 
+    async fn wait_ready(&self, id: &str) -> Result<(), String> {
+        for _ in 0..160 {
+            let info = self
+                .docker
+                .inspect_container(id, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            if info.state.as_ref().and_then(|state| state.running) != Some(true) {
+                let exit = info.state.and_then(|state| state.exit_code).unwrap_or(1);
+                return Err(format!("computer exited during startup with code {exit}"));
+            }
+            match self
+                .exec_argv(
+                    id,
+                    &["test".into(), "-f".into(), "/tmp/lazyboy/ready".into()],
+                    None,
+                    &ScreenTarget::default(),
+                )
+                .await
+            {
+                Ok(result) if result.code == 0 => return Ok(()),
+                Ok(_) | Err(_) => sleep(Duration::from_millis(250)).await,
+            }
+        }
+        Err("computer desktop failed to become ready".into())
+    }
+
     async fn exec_argv(
         &self,
         id: &str,
@@ -643,14 +752,23 @@ PY"#,
         let mut stderr = Vec::new();
         if let StartExecResults::Attached { mut output, .. } = self
             .docker
-            .start_exec(&exec.id, Some(StartExecOptions { ..Default::default() }))
+            .start_exec(
+                &exec.id,
+                Some(StartExecOptions {
+                    ..Default::default()
+                }),
+            )
             .await
             .map_err(|error| error.to_string())?
         {
             while let Some(chunk) = output.next().await {
                 match chunk.map_err(|error| error.to_string())? {
-                    bollard::container::LogOutput::StdOut { message } => stdout.extend_from_slice(&message),
-                    bollard::container::LogOutput::StdErr { message } => stderr.extend_from_slice(&message),
+                    bollard::container::LogOutput::StdOut { message } => {
+                        stdout.extend_from_slice(&message)
+                    }
+                    bollard::container::LogOutput::StdErr { message } => {
+                        stderr.extend_from_slice(&message)
+                    }
                     _ => {}
                 }
             }
@@ -663,11 +781,14 @@ PY"#,
         Ok((stdout, stderr, inspect.exit_code.unwrap_or(1) as i32))
     }
 
-    async fn control_observe_json(&self, id: &str, target: &ScreenTarget) -> Result<serde_json::Value, String> {
+    async fn control_observe_json(
+        &self,
+        id: &str,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
         let script = format!(
             "curl -fsS -H 'Authorization: Bearer {}' -H 'x-lazyboy-display: {}' http://127.0.0.1:7070/observe",
-            self.control_token,
-            target.display
+            self.control_token, target.display
         );
         let result = self
             .exec_argv(id, &["bash".into(), "-lc".into(), script], None, target)
@@ -709,7 +830,9 @@ PY"#,
 fn image_ids_match(wanted: &str, have: &str) -> bool {
     let wanted = wanted.trim_start_matches("sha256:");
     let have = have.trim_start_matches("sha256:");
-    !wanted.is_empty() && !have.is_empty() && (wanted == have || wanted.starts_with(have) || have.starts_with(wanted))
+    !wanted.is_empty()
+        && !have.is_empty()
+        && (wanted == have || wanted.starts_with(have) || have.starts_with(wanted))
 }
 
 fn host_bind_path(path: &str) -> String {

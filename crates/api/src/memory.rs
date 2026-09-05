@@ -8,7 +8,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
@@ -94,7 +94,9 @@ impl MemoryService {
         let model = self.model.clone();
         let cache_dir = self.cache_dir.clone();
         match tokio::task::spawn_blocking(move || {
-            let mut state = model.lock().map_err(|_| "embedding model lock poisoned".to_string())?;
+            let mut state = model
+                .lock()
+                .map_err(|_| "embedding model lock poisoned".to_string())?;
             if matches!(*state, ModelState::Uninitialized) {
                 let options = TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
                     .with_cache_dir(cache_dir)
@@ -113,7 +115,9 @@ impl MemoryService {
             let mut values = embedding
                 .embed(vec![text], None)
                 .map_err(|error| error.to_string())?;
-            let value = values.pop().ok_or_else(|| "FastEmbed returned no vector".to_string())?;
+            let value = values
+                .pop()
+                .ok_or_else(|| "FastEmbed returned no vector".to_string())?;
             if value.len() != EMBEDDING_DIMENSION {
                 return Err(format!(
                     "embedding dimension {} does not match schema {}",
@@ -262,7 +266,11 @@ impl MemoryService {
     ) -> Result<Option<MemoryItem>, String> {
         let content = validate_content(&input.content)?;
         validate_importance(input.importance)?;
-        let vector = self.embed(content.clone()).await.as_ref().map(vector_literal);
+        let vector = self
+            .embed(content.clone())
+            .await
+            .as_ref()
+            .map(vector_literal);
         let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
         let item: Option<MemoryItem> = sqlx::query_as(
             "UPDATE memory_items SET content=$1,importance=$2,embedding=$3::vector,
@@ -316,12 +324,7 @@ impl MemoryService {
         Ok(item.is_some())
     }
 
-    pub async fn clear(
-        &self,
-        pool: &PgPool,
-        actor: &Actor,
-        bot_id: &str,
-    ) -> Result<u64, String> {
+    pub async fn clear(&self, pool: &PgPool, actor: &Actor, bot_id: &str) -> Result<u64, String> {
         let ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM memory_items
              WHERE bot_id=$1 AND space_id=$2 AND user_id=$3 AND deleted_at IS NULL",
@@ -377,7 +380,11 @@ async fn insert_revision(
 fn vector_literal(vector: &Vec<f32>) -> String {
     format!(
         "[{}]",
-        vector.iter().map(f32::to_string).collect::<Vec<_>>().join(",")
+        vector
+            .iter()
+            .map(f32::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
@@ -395,7 +402,9 @@ pub fn validate_content(value: &str) -> Result<String, String> {
         return Err("memory content must contain 1 to 16000 bytes".into());
     }
     if looks_like_secret(content) {
-        return Err("refusing to store a password, token, private key, or other obvious secret".into());
+        return Err(
+            "refusing to store a password, token, private key, or other obvious secret".into(),
+        );
     }
     Ok(content.to_string())
 }
@@ -403,9 +412,19 @@ pub fn validate_content(value: &str) -> Result<String, String> {
 pub fn looks_like_secret(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     let labels = [
-        "password=", "password:", "passwd=", "passwd:", "api_key=", "api key:",
-        "apikey=", "access_token=", "access token:", "refresh_token=", "bearer ",
-        "client_secret=", "client secret:",
+        "password=",
+        "password:",
+        "passwd=",
+        "passwd:",
+        "api_key=",
+        "api key:",
+        "apikey=",
+        "access_token=",
+        "access token:",
+        "refresh_token=",
+        "bearer ",
+        "client_secret=",
+        "client secret:",
     ];
     labels.iter().any(|label| lower.contains(label))
         || lower.contains("-----begin private key-----")
@@ -441,60 +460,126 @@ pub fn memory_block(items: &[MemoryItem], budget: usize) -> String {
 fn env_bool(name: &str, default: bool) -> bool {
     std::env::var(name)
         .ok()
-        .map(|value| !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"))
+        .map(|value| {
+            !matches!(
+                value.to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
         .unwrap_or(default)
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/bots/{bot_id}/memories", get(list_memories).post(create_memory).delete(clear_memories))
-        .route("/api/bots/{bot_id}/memories/{memory_id}", delete(delete_memory).patch(update_memory))
+        .route(
+            "/api/bots/{bot_id}/memories",
+            get(list_memories)
+                .post(create_memory)
+                .delete(clear_memories),
+        )
+        .route(
+            "/api/bots/{bot_id}/memories/{memory_id}",
+            delete(delete_memory).patch(update_memory),
+        )
 }
 
 async fn scoped_actor(state: &AppState, bot_id: &str) -> Result<Actor, StatusCode> {
-    let actor = state.bootstrap().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    state.db.get_bot(&actor, bot_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    let actor = state
+        .bootstrap()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .db
+        .get_bot(&actor, bot_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(actor)
 }
 
-async fn list_memories(State(state): State<AppState>, Path(bot_id): Path<String>) -> Result<Json<Vec<MemoryItem>>, StatusCode> {
+async fn list_memories(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+) -> Result<Json<Vec<MemoryItem>>, StatusCode> {
     let actor = scoped_actor(&state, &bot_id).await?;
-    state.memory.list(state.pool(), &actor, &bot_id).await.map(Json)
+    state
+        .memory
+        .list(state.pool(), &actor, &bot_id)
+        .await
+        .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn create_memory(State(state): State<AppState>, Path(bot_id): Path<String>, Json(input): Json<CreateMemoryInput>) -> Result<Json<MemoryItem>, (StatusCode, Json<Value>)> {
+async fn create_memory(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+    Json(input): Json<CreateMemoryInput>,
+) -> Result<Json<MemoryItem>, (StatusCode, Json<Value>)> {
     let actor = scoped_actor(&state, &bot_id).await.map_err(api_status)?;
-    state.memory.remember(state.pool(), &actor, &bot_id, input).await.map(Json).map_err(api_error)
+    state
+        .memory
+        .remember(state.pool(), &actor, &bot_id, input)
+        .await
+        .map(Json)
+        .map_err(api_error)
 }
 
-async fn update_memory(State(state): State<AppState>, Path((bot_id, memory_id)): Path<(String, Uuid)>, Json(input): Json<UpdateMemoryInput>) -> Result<Json<MemoryItem>, (StatusCode, Json<Value>)> {
+async fn update_memory(
+    State(state): State<AppState>,
+    Path((bot_id, memory_id)): Path<(String, Uuid)>,
+    Json(input): Json<UpdateMemoryInput>,
+) -> Result<Json<MemoryItem>, (StatusCode, Json<Value>)> {
     let actor = scoped_actor(&state, &bot_id).await.map_err(api_status)?;
-    state.memory.update(state.pool(), &actor, &bot_id, memory_id, input).await
-        .map_err(api_error)?.map(Json).ok_or_else(|| api_status(StatusCode::NOT_FOUND))
+    state
+        .memory
+        .update(state.pool(), &actor, &bot_id, memory_id, input)
+        .await
+        .map_err(api_error)?
+        .map(Json)
+        .ok_or_else(|| api_status(StatusCode::NOT_FOUND))
 }
 
-async fn delete_memory(State(state): State<AppState>, Path((bot_id, memory_id)): Path<(String, Uuid)>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+async fn delete_memory(
+    State(state): State<AppState>,
+    Path((bot_id, memory_id)): Path<(String, Uuid)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let actor = scoped_actor(&state, &bot_id).await.map_err(api_status)?;
-    if !state.memory.forget(state.pool(), &actor, &bot_id, memory_id).await.map_err(api_error)? {
+    if !state
+        .memory
+        .forget(state.pool(), &actor, &bot_id, memory_id)
+        .await
+        .map_err(api_error)?
+    {
         return Err(api_status(StatusCode::NOT_FOUND));
     }
     Ok(Json(json!({"ok":true})))
 }
 
-async fn clear_memories(State(state): State<AppState>, Path(bot_id): Path<String>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+async fn clear_memories(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let actor = scoped_actor(&state, &bot_id).await.map_err(api_status)?;
-    let deleted = state.memory.clear(state.pool(), &actor, &bot_id).await.map_err(api_error)?;
+    let deleted = state
+        .memory
+        .clear(state.pool(), &actor, &bot_id)
+        .await
+        .map_err(api_error)?;
     Ok(Json(json!({"ok":true,"deleted":deleted})))
 }
 
 fn api_status(status: StatusCode) -> (StatusCode, Json<Value>) {
-    (status, Json(json!({"message":status.canonical_reason().unwrap_or("request failed")})))
+    (
+        status,
+        Json(json!({"message":status.canonical_reason().unwrap_or("request failed")})),
+    )
 }
 
 fn api_error(error: String) -> (StatusCode, Json<Value>) {
@@ -504,7 +589,7 @@ fn api_error(error: String) -> (StatusCode, Json<Value>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_secret, memory_block, MemoryItem, MemoryService, ModelState};
+    use super::{MemoryItem, MemoryService, ModelState, looks_like_secret, memory_block};
     use crate::db::Actor;
     use chrono::Utc;
     use std::path::PathBuf;
@@ -513,23 +598,35 @@ mod tests {
 
     fn item(content: &str) -> MemoryItem {
         MemoryItem {
-            id: Uuid::new_v4(), session_id: None, source_run_id: None, source_message_id: None,
-            content: content.into(), importance: 0.5, revision: 1,
-            created_at: Utc::now(), updated_at: Utc::now(), deleted_at: None,
+            id: Uuid::new_v4(),
+            session_id: None,
+            source_run_id: None,
+            source_message_id: None,
+            content: content.into(),
+            importance: 0.5,
+            revision: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
         }
     }
 
     #[test]
     fn secret_guard_rejects_obvious_credentials_without_blocking_normal_preferences() {
         assert!(looks_like_secret("password=hunter2"));
-        assert!(looks_like_secret("Authorization: Bearer abcdefghijklmnopqrstuvwxyz"));
+        assert!(looks_like_secret(
+            "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"
+        ));
         assert!(looks_like_secret("-----BEGIN PRIVATE KEY-----"));
         assert!(!looks_like_secret("I prefer passkeys instead of passwords"));
     }
 
     #[test]
     fn durable_block_is_bounded_and_marks_memory_as_data() {
-        let block = memory_block(&[item("prefers concise replies"), item(&"x".repeat(1000))], 220);
+        let block = memory_block(
+            &[item("prefers concise replies"), item(&"x".repeat(1000))],
+            220,
+        );
         assert!(block.len() <= 220);
         assert!(block.contains("DATA ONLY"));
         assert!(block.contains("prefers concise replies"));
@@ -539,31 +636,62 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn database_enforces_agent_scope_and_queries_do_not_leak(pool: sqlx::PgPool) {
         sqlx::query("INSERT INTO users(id,name) VALUES ('u','test')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO spaces(id,user_id,name) VALUES ('s','u','test')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         for bot in ["a", "b"] {
             sqlx::query("INSERT INTO bots(id,space_id,user_id,name) VALUES ($1,'s','u',$1)")
-                .bind(bot).execute(&pool).await.unwrap();
+                .bind(bot)
+                .execute(&pool)
+                .await
+                .unwrap();
             sqlx::query("INSERT INTO threads(id,space_id,user_id,bot_id) VALUES ($1,'s','u',$2)")
-                .bind(format!("thread-{bot}")).bind(bot).execute(&pool).await.unwrap();
+                .bind(format!("thread-{bot}"))
+                .bind(bot)
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         let cross_scope = sqlx::query(
             "INSERT INTO memory_items(id,space_id,user_id,bot_id,session_id,content)
              VALUES ($1,'s','u','a','thread-b','must fail')",
-        ).bind(Uuid::new_v4()).execute(&pool).await;
+        )
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await;
         assert!(cross_scope.is_err());
 
         sqlx::query(
             "INSERT INTO memory_items(id,space_id,user_id,bot_id,session_id,content)
              VALUES ($1,'s','u','a','thread-a','only a'),($2,'s','u','b','thread-b','only b')",
-        ).bind(Uuid::new_v4()).bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
         let service = MemoryService {
-            enabled: false, top_k: 8, byte_budget: 6000, cache_dir: PathBuf::new(),
+            enabled: false,
+            top_k: 8,
+            byte_budget: 6000,
+            cache_dir: PathBuf::new(),
             model: Arc::new(Mutex::new(ModelState::Unavailable)),
         };
-        let rows = service.list(&pool, &Actor { user_id: "u".into(), space_id: "s".into() }, "a")
-            .await.unwrap();
+        let rows = service
+            .list(
+                &pool,
+                &Actor {
+                    user_id: "u".into(),
+                    space_id: "s".into(),
+                },
+                "a",
+            )
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].content, "only a");
     }

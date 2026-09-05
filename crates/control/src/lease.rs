@@ -39,7 +39,9 @@ pub fn can_take_screen_lease(existing: Option<&str>, incoming: Option<&str>) -> 
     match existing {
         None => true,
         Some(existing) if existing == incoming => true,
-        Some(existing) => parse_screen_lease_id(incoming).fence > parse_screen_lease_id(existing).fence,
+        Some(existing) => {
+            parse_screen_lease_id(incoming).fence > parse_screen_lease_id(existing).fence
+        }
     }
 }
 

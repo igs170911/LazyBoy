@@ -8,7 +8,8 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use docker::DockerHost;
 use lazyboy_control::{
-    normalize_workspace_path, ActionRequest, CommandRequest, EnsureScreenRequest, ScreenTarget, HOME,
+    ActionRequest, CommandRequest, EnsureScreenRequest, HOME, ScreenTarget,
+    normalize_workspace_path,
 };
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
@@ -34,13 +35,14 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
-    let token = std::env::var("SANDBOX_SUPERVISOR_TOKEN")
-        .expect("SANDBOX_SUPERVISOR_TOKEN must be set");
+    let token =
+        std::env::var("SANDBOX_SUPERVISOR_TOKEN").expect("SANDBOX_SUPERVISOR_TOKEN must be set");
     assert!(
         token.len() >= 32 && token != "dev-token",
         "SANDBOX_SUPERVISOR_TOKEN must be a non-default value of at least 32 characters"
     );
-    let image = std::env::var("LAZYBOY_COMPUTER_IMAGE").unwrap_or_else(|_| "lazyboy/computer:local".into());
+    let image =
+        std::env::var("LAZYBOY_COMPUTER_IMAGE").unwrap_or_else(|_| "lazyboy/computer:local".into());
     let docker = DockerHost::connect(image, token.clone())
         .await
         .expect("docker");
@@ -49,7 +51,10 @@ async fn main() {
         docker: Arc::new(docker),
     };
     let router = Router::new()
-        .route("/health", get(|| async { Json(serde_json::json!({"ok": true})) }))
+        .route(
+            "/health",
+            get(|| async { Json(serde_json::json!({"ok": true})) }),
+        )
         .route("/computers", post(provision))
         .route("/computers/{id}/exec", post(exec))
         .route("/computers/{id}/observe", post(observe))
@@ -120,15 +125,15 @@ async fn exec(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<CommandRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    require_token(&headers, &app.token)?;
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_token(&headers, &app.token).map_err(|status| (status, String::new()))?;
     let result = app
         .docker
         .exec_on(&id, body, &screen_target(&headers))
         .await
         .map_err(|error| {
             tracing::error!("exec: {error}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            (StatusCode::INTERNAL_SERVER_ERROR, error)
         })?;
     Ok(Json(serde_json::json!({
         "stdout": result.stdout,
@@ -190,7 +195,10 @@ async fn screen_mode(
     Json(body): Json<ScreenModeBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_token(&headers, &app.token)?;
-    let slot = body.slot.or(screen_target(&headers).slot.into()).unwrap_or(0);
+    let slot = body
+        .slot
+        .or(screen_target(&headers).slot.into())
+        .unwrap_or(0);
     let url = app
         .docker
         .screen_url_for(&id, slot, body.interactive)
@@ -286,7 +294,10 @@ async fn stop(
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     require_token(&headers, &app.token)?;
-    app.docker.stop(&id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    app.docker
+        .stop(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -296,7 +307,10 @@ async fn destroy(
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     require_token(&headers, &app.token)?;
-    app.docker.destroy(&id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    app.docker
+        .destroy(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

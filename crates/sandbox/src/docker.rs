@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use base64::Engine;
-use lazyboy_contracts::{ActiveWindow, ComputerObservation, CursorPosition, SandboxKind};
 use lazyboy_contracts::ComputerCapabilities;
+use lazyboy_contracts::{ActiveWindow, ComputerObservation, CursorPosition, SandboxKind};
 use lazyboy_control::{
-    observation_from_png, ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult,
-    ComputerRef, EnsureScreenRequest, EnsureScreenResult, FileEntry, ProvisionRequest, SandboxError,
-    SandboxProvider, ScreenSession,
+    ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult, ComputerRef,
+    EnsureScreenRequest, EnsureScreenResult, FileEntry, ProvisionRequest, SandboxError,
+    SandboxProvider, ScreenSession, observation_from_png, observation_with_elements,
+    parse_ui_elements,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -80,7 +81,9 @@ impl SandboxProvider for DockerSandbox {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(SandboxError::message(format!("provision failed: {status} {body}")));
+            return Err(SandboxError::message(format!(
+                "provision failed: {status} {body}"
+            )));
         }
         let body: Value = response
             .json()
@@ -125,14 +128,19 @@ impl SandboxProvider for DockerSandbox {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(SandboxError::message(format!("ensure screen failed: {status} {body}")));
+            return Err(SandboxError::message(format!(
+                "ensure screen failed: {status} {body}"
+            )));
         }
         let body: Value = response
             .json()
             .await
             .map_err(|error| SandboxError::message(error.to_string()))?;
         Ok(EnsureScreenResult {
-            slot: body.get("slot").and_then(Value::as_u64).unwrap_or(request.slot as u64) as u32,
+            slot: body
+                .get("slot")
+                .and_then(Value::as_u64)
+                .unwrap_or(request.slot as u64) as u32,
             display: body
                 .get("display")
                 .and_then(Value::as_str)
@@ -160,6 +168,13 @@ impl SandboxProvider for DockerSandbox {
             .send()
             .await
             .map_err(|error| SandboxError::message(error.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(SandboxError::message(format!(
+                "exec failed: {status} {body}"
+            )));
+        }
         response
             .json()
             .await
@@ -330,7 +345,11 @@ impl SandboxProvider for DockerSandbox {
         }
     }
 
-    async fn stop(&self, computer: &ComputerRef, context: &AdapterContext) -> Result<(), SandboxError> {
+    async fn stop(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
         self.client
             .post(self.url(&format!("/computers/{}/stop", computer.id)))
             .headers(self.headers(context))
@@ -340,7 +359,11 @@ impl SandboxProvider for DockerSandbox {
         Ok(())
     }
 
-    async fn destroy(&self, computer: &ComputerRef, context: &AdapterContext) -> Result<(), SandboxError> {
+    async fn destroy(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
         self.client
             .delete(self.url(&format!("/computers/{}", computer.id)))
             .headers(self.headers(context))
@@ -382,5 +405,12 @@ fn decode_observation(body: &Value) -> Result<ComputerObservation, SandboxError>
                     .map(str::to_string),
             })
         });
-    Ok(observation_from_png(png, 1280, 800, cursor, window))
+    let elements = body
+        .get("elements")
+        .map(|value| parse_ui_elements(&value.to_string()))
+        .unwrap_or_default();
+    Ok(observation_with_elements(
+        observation_from_png(png, 1280, 800, cursor, window),
+        elements,
+    ))
 }

@@ -26,6 +26,7 @@ sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 rig-core = "0.42"
 async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "fs", "signal", "time"] }

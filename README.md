@@ -2,6 +2,39 @@
 
 Create a bot in the browser, give it a Team or Private computer, and let it drive a Linux desktop.
 
+## Run (full Docker, recommended)
+
+Everything (postgres, desktop image build, supervisor, API + web UI) runs in
+Docker Compose, driven by the Makefile:
+
+```bash
+make env   # creates .env with two generated 64-hex tokens (no-op if .env exists)
+# then set XAI_API_KEY in .env
+make up    # builds all images and starts the stack
+make health
+```
+
+Open `http://127.0.0.1:3101` and sign in with `LAZYBOY_APP_TOKEN`.
+
+Useful targets (see `make help`):
+
+| target | what it does |
+| --- | --- |
+| `make up` / `make down` / `make purge` | start / stop (keep data) / stop + delete postgres volume |
+| `make logs`, `make ps`, `make health` | observe the stack |
+| `make computer` | build only the heavy desktop image `lazyboy/computer:local` |
+| `make postgres`, `make postgres-down` | start/stop just the database on `127.0.0.1:5434` |
+| `make build`, `make fmt`, `make clippy`, `make test` | cargo workspace tasks |
+| `make web` | build `apps/web` with npm (needs node) |
+| `make dev`, `make dev-supervisor`, `make dev-api` | local dev: postgres in Docker, Rust services on the host in two terminals |
+
+Without make, the full-stack equivalent is:
+
+```bash
+cp .env.example .env   # fill in the two tokens + XAI_API_KEY
+docker compose up -d --build
+```
+
 ## Run (local)
 
 Postgres is on `127.0.0.1:5434` so it does not collide with other stacks.
@@ -36,4 +69,4 @@ For frontend development, run `npm install && npm run dev` in `apps/web`, then o
 
 The standalone supervisor listens on `127.0.0.1:7091` by default. Docker Compose reaches it internally as `supervisor:7091`; there is intentionally no host port `7092`.
 
-Model providers: v1 talks to xAI (`XAI_API_KEY`). `openai` / `anthropic` / `openrouter` are reserved on the factory and return `unsupported_provider`.
+Model providers: set the workspace default in 本機工作區 → 設定. v1 supports xAI (`XAI_API_KEY`), OpenCode Go (`OPENCODE_GO_API_KEY` or a key saved in settings), and a self-hosted OpenAI-compatible endpoint (base URL + optional key). Keys saved in the UI are stored on the local workspace and take precedence over env vars.
