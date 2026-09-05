@@ -166,6 +166,24 @@ impl SandboxProvider for FakeSandbox {
         Ok(())
     }
 
+    async fn suspend(
+        &self,
+        _computer: &ComputerRef,
+        _context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
+        Ok(())
+    }
+
+    async fn resume(
+        &self,
+        request: ProvisionRequest,
+        context: &AdapterContext,
+    ) -> Result<ComputerRef, SandboxError> {
+        let mut computer = self.provision(request, context).await?;
+        computer.fresh = false;
+        Ok(computer)
+    }
+
     async fn stop(
         &self,
         _computer: &ComputerRef,

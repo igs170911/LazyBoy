@@ -4,3 +4,13 @@ data
 reference
 **/*.md
 apps/web/node_modules
+
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/node_modules
+apps/web/dist
+**/__pycache__
+.DS_Store

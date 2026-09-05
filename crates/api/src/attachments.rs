@@ -5,7 +5,7 @@
 //! mounted home and delete anything older than [`INBOX_TTL`].
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use base64::Engine;
 use lazyboy_contracts::SessionAttachment;
@@ -13,7 +13,6 @@ use lazyboy_control::resolve_bot_workspace_path;
 use rig_core::completion::message::{ImageDetail, ImageMediaType, UserContent};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::fs;
 
 use crate::computer;
 use crate::db::{Actor, parse_mode};
@@ -41,6 +40,7 @@ pub struct StoredAttachment {
 #[derive(Debug, Clone)]
 pub struct DecodedAttachment {
     pub name: String,
+    pub stored_name: String,
     pub mime_type: String,
     pub bytes: Vec<u8>,
 }
@@ -68,8 +68,11 @@ pub fn decode_incoming(items: &[IncomingAttachment]) -> Result<Vec<DecodedAttach
         if total > MAX_TOTAL_BYTES {
             return Err("附件合計超過 20 MB".into());
         }
+        let (stem, ext) = split_ext(&name);
+        let stored_name = format!("{stem}-{}{ext}", uuid::Uuid::new_v4());
         out.push(DecodedAttachment {
             name,
+            stored_name,
             mime_type: mime,
             bytes,
         });
@@ -86,7 +89,7 @@ pub fn stored_blocks(files: &[DecodedAttachment]) -> Vec<Value> {
                 "name": file.name,
                 "mimeType": file.mime_type,
                 "size": file.bytes.len(),
-                "path": format!("inbox/{}", file.name),
+                "path": format!("inbox/{}", file.stored_name),
             })
         })
         .collect()
@@ -117,15 +120,30 @@ pub async fn stage_for_bots(
         let Some(dir) = inbox_dir_for_bot(state, actor, bot_id).await? else {
             continue;
         };
-        fs::create_dir_all(&dir)
-            .await
-            .map_err(|error| error.to_string())?;
-        for file in files {
-            let path = unique_path(&dir, &file.name).await;
-            fs::write(&path, &file.bytes)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
+        let root = PathBuf::from(&state.data_dir).join("homes");
+        let relative = dir
+            .strip_prefix(&root)
+            .map_err(|_| "invalid inbox root")?
+            .to_path_buf();
+        let files = files.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            use std::io::Write;
+            let root = cap_std::fs::Dir::open_ambient_dir(root, cap_std::ambient_authority())
+                .map_err(|e| e.to_string())?;
+            root.create_dir_all(&relative).map_err(|e| e.to_string())?;
+            let inbox = root.open_dir(&relative).map_err(|e| e.to_string())?;
+            for file in files {
+                let mut opts = cap_std::fs::OpenOptions::new();
+                opts.write(true).create_new(true);
+                let mut output = inbox
+                    .open_with(&file.stored_name, &opts)
+                    .map_err(|e| e.to_string())?;
+                output.write_all(&file.bytes).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     }
     Ok(())
 }
@@ -151,8 +169,8 @@ pub async fn llm_parts(
     }
     for (stored, bytes) in files {
         notes.push(format!(
-            "- {} ({}, {} bytes) at inbox/{}",
-            stored.name, stored.mime_type, stored.size, stored.name
+            "- {} ({}, {} bytes) at {}",
+            stored.name, stored.mime_type, stored.size, stored.path
         ));
         if is_image(&stored.mime_type) {
             if vision {
@@ -189,21 +207,52 @@ pub async fn llm_parts(
 
 pub async fn sweep_all_inboxes(data_dir: &str) {
     let homes = PathBuf::from(data_dir).join("homes");
-    let Ok(mut spaces) = fs::read_dir(&homes).await else {
+    let _ = tokio::task::spawn_blocking(move || {
+        let Ok(root) = cap_std::fs::Dir::open_ambient_dir(homes, cap_std::ambient_authority())
+        else {
+            return;
+        };
+        let Ok(entries) = root.entries() else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(home) = root.open_dir(entry.file_name()) else {
+                continue;
+            };
+            sweep_cap_inbox(&home, "inbox");
+            if let Ok(bots) = home.open_dir("bots") {
+                if let Ok(entries) = bots.entries() {
+                    for bot in entries.flatten() {
+                        if let Ok(dir) = bots.open_dir(bot.file_name()) {
+                            sweep_cap_inbox(&dir, "inbox");
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await;
+}
+
+fn sweep_cap_inbox(root: &cap_std::fs::Dir, path: &str) {
+    let Ok(dir) = root.open_dir(path) else {
         return;
     };
-    while let Ok(Some(entry)) = spaces.next_entry().await {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        sweep_dir(&path.join("inbox")).await;
-        let bots = path.join("bots");
-        let Ok(mut bots_dir) = fs::read_dir(&bots).await else {
+    let Ok(entries) = dir.entries() else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
             continue;
         };
-        while let Ok(Some(bot)) = bots_dir.next_entry().await {
-            sweep_dir(&bot.path().join("inbox")).await;
+        if meta.is_file()
+            && meta
+                .modified()
+                .ok()
+                .and_then(|t| t.into_std().elapsed().ok())
+                .is_some_and(|age| age > INBOX_TTL)
+        {
+            let _ = dir.remove_file(entry.file_name());
         }
     }
 }
@@ -256,8 +305,31 @@ async fn load_from_blocks(
         let Some(file) = parse_stored(block) else {
             continue;
         };
-        let path = dir.join(&file.name);
-        let bytes = fs::read(&path).await.ok();
+        let root = PathBuf::from(&state.data_dir).join("homes");
+        let stored = file.path.strip_prefix("inbox/").unwrap_or(&file.name);
+        let relative = dir.strip_prefix(&root).ok().map(|p| p.join(stored));
+        let bytes = if let Some(relative) = relative {
+            tokio::task::spawn_blocking(move || {
+                use std::io::Read;
+                let root =
+                    cap_std::fs::Dir::open_ambient_dir(root, cap_std::ambient_authority()).ok()?;
+                let input = root.open(relative).ok()?;
+                if !input.metadata().ok()?.is_file() {
+                    return None;
+                }
+                let mut bytes = Vec::new();
+                input
+                    .take(MAX_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .ok()?;
+                (bytes.len() <= MAX_BYTES).then_some(bytes)
+            })
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
         out.push((file, bytes));
     }
     out
@@ -269,6 +341,23 @@ fn parse_stored(value: &Value) -> Option<StoredAttachment> {
         return None;
     }
     let name = value.get("name").and_then(Value::as_str)?;
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let path = value.get("path").and_then(Value::as_str).unwrap_or("");
+    if !path.is_empty() {
+        let Some(stored) = path.strip_prefix("inbox/") else {
+            return None;
+        };
+        if stored.is_empty() || stored == "." || stored == ".." || stored.contains(['/', '\\']) {
+            return None;
+        }
+    }
     Some(StoredAttachment {
         kind: if kind == "image" { "image" } else { "file" },
         name: name.to_string(),
@@ -284,41 +373,6 @@ fn parse_stored(value: &Value) -> Option<StoredAttachment> {
             .unwrap_or("")
             .to_string(),
     })
-}
-
-async fn sweep_dir(dir: &Path) {
-    let Ok(mut entries) = fs::read_dir(dir).await else {
-        return;
-    };
-    let cutoff = SystemTime::now() - INBOX_TTL;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        let Ok(meta) = fs::metadata(&path).await else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
-        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        if modified < cutoff {
-            let _ = fs::remove_file(&path).await;
-        }
-    }
-}
-
-async fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if fs::metadata(&candidate).await.is_err() {
-        return candidate;
-    }
-    let (stem, ext) = split_ext(name);
-    for n in 2..1000 {
-        let next = dir.join(format!("{stem}-{n}{ext}"));
-        if fs::metadata(&next).await.is_err() {
-            return next;
-        }
-    }
-    dir.join(format!("{stem}-{}.bin", uuid::Uuid::new_v4()))
 }
 
 fn split_ext(name: &str) -> (String, String) {
@@ -459,6 +513,7 @@ mod tests {
     fn stored_blocks_drop_bytes() {
         let files = [DecodedAttachment {
             name: "a.png".into(),
+            stored_name: "a.png".into(),
             mime_type: "image/png".into(),
             bytes: vec![1, 2, 3],
         }];
@@ -477,5 +532,32 @@ mod tests {
         };
         let many = vec![item; 5];
         assert!(decode_incoming(&many).is_err());
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    #[test]
+    fn stored_metadata_cannot_escape_inbox() {
+        for name in ["../secret", "/etc/passwd", "..", "x\\secret"] {
+            assert!(parse_stored(&json!({"kind":"file","name":name})).is_none());
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlink_from_computer_home_cannot_read_host_secret() {
+        let base = std::env::temp_dir().join(format!("lazyboy-boundary-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(base.join("homes")).unwrap();
+        std::fs::write(base.join("secret"), b"private").unwrap();
+        std::os::unix::fs::symlink(base.join("secret"), base.join("homes/link")).unwrap();
+        let root =
+            cap_std::fs::Dir::open_ambient_dir(base.join("homes"), cap_std::ambient_authority())
+                .unwrap();
+        assert!(root.read("link").is_err());
+        assert!(root.write("link", b"overwritten").is_err());
+        assert_eq!(std::fs::read(base.join("secret")).unwrap(), b"private");
+        drop(root);
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

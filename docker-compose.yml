@@ -1,12 +1,15 @@
 services:
   postgres:
+    restart: unless-stopped
+    networks: [database]
+    logging: &bounded-logs
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: lazyboy
-      POSTGRES_PASSWORD: lazyboy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lazyboy}
       POSTGRES_DB: lazyboy
-    ports:
-      - "127.0.0.1:5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,6 +28,19 @@ services:
     network_mode: none
 
   supervisor:
+    restart: unless-stopped
+    init: true
+    networks: [control]
+    logging: *bounded-logs
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    read_only: true
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/lazyboy-supervisor", "--healthcheck"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
     build:
       context: .
       dockerfile: image/supervisor/Dockerfile
@@ -33,7 +49,7 @@ services:
       LAZYBOY_COMPUTER_IMAGE: lazyboy/computer:local
       SUPERVISOR_BIND: 0.0.0.0:7091
       DATA_DIR: /data
-      HOST_DATA_DIR: ${PWD}/data
+      HOST_DATA_DIR: ${LAZYBOY_HOST_DATA_DIR:-${PWD}/data}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/data
@@ -44,18 +60,26 @@ services:
         condition: service_completed_successfully
 
   api:
+    restart: unless-stopped
+    init: true
+    networks: [database, control, egress]
+    logging: *bounded-logs
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 256
     build:
       context: .
       dockerfile: image/api/Dockerfile
     environment:
-      DATABASE_URL: postgres://lazyboy:lazyboy@postgres:5432/lazyboy
+      DATABASE_URL: postgres://lazyboy:${POSTGRES_PASSWORD:-lazyboy}@postgres:5432/lazyboy
       SANDBOX_SUPERVISOR_URL: http://supervisor:7091
       SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:?Set SANDBOX_SUPERVISOR_TOKEN in .env}
-      LAZYBOY_APP_TOKEN: ${LAZYBOY_APP_TOKEN:-}
+      LAZYBOY_APP_TOKEN: ${LAZYBOY_APP_TOKEN:?Set LAZYBOY_APP_TOKEN in .env}
+      LAZYBOY_VAULT_KEY: ${LAZYBOY_VAULT_KEY:-}
       LAZYBOY_SECURE_COOKIE: ${LAZYBOY_SECURE_COOKIE:-false}
       SANDBOX_PROVIDER: docker
       DATA_DIR: /data
-      HOST_DATA_DIR: ${PWD}/data
+      HOST_DATA_DIR: ${LAZYBOY_HOST_DATA_DIR:-${PWD}/data}
       API_BIND: 0.0.0.0:3100
       XAI_API_KEY: ${XAI_API_KEY:-}
       OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
@@ -67,7 +91,7 @@ services:
       LAZYBOY_WEB_DIR: /web
       LAZYBOY_SCREEN_UPSTREAM: host.docker.internal
     ports:
-      - "3101:3100"
+      - "${LAZYBOY_BIND_IP:-127.0.0.1}:3101:3100"
     volumes:
       - ./data:/data
     extra_hosts:
@@ -76,7 +100,14 @@ services:
       postgres:
         condition: service_healthy
       supervisor:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   pgdata:
+
+networks:
+  database:
+    internal: true
+  control:
+    internal: true
+  egress: {}

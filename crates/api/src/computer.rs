@@ -19,6 +19,10 @@ use crate::db::{
 };
 use crate::state::AppState;
 
+pub const STEP_BOOTING: &str = "電腦啟動中";
+pub const STEP_WAKING: &str = "喚醒中";
+pub const STEP_HANDOFF: &str = "換手中";
+
 pub fn status_from(
     bot_id: &str,
     computer: &ComputerRow,
@@ -55,6 +59,7 @@ pub fn status_from(
         busy_session_id: None,
         busy_run_id: None,
         busy_step: None,
+        using_computer: false,
         waiting_run_id: None,
         waiting_session_id: None,
         queued_runs: 0,
@@ -320,6 +325,7 @@ async fn probe_computer_container(
                 ],
                 cwd: None,
                 timeout_ms: Some(5_000),
+                stdin: None,
             },
             &adapter_context(actor, bot_id, "probe"),
         )
@@ -500,6 +506,21 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
         .await
         .map_err(|error| error.to_string())?;
     }
+    if computer.state == "suspended" && computer.provider_ref.is_some() {
+        match resume_paused(state, actor, bot_id, &computer).await {
+            Ok(status) => return Ok(status),
+            Err(error) => {
+                tracing::warn!("computer {computer_id} resume failed: {error}");
+                let _ = sqlx::query(
+                    "UPDATE computers SET state = 'stopped', updated_at = now()
+                     WHERE id = $1 AND state = 'suspended'",
+                )
+                .bind(&computer_id)
+                .execute(state.pool())
+                .await;
+            }
+        }
+    }
     let claimed = sqlx::query(
         "UPDATE computers SET state = 'booting', updated_at = now()
          WHERE id = $1 AND state IN ('stopped','suspended','error')",
@@ -563,6 +584,7 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
                     argv: vec!["mkdir".into(), "-p".into(), "shared".into(), folder],
                     cwd: None,
                     timeout_ms: Some(10_000),
+                    stdin: None,
                 },
                 &ctx,
             ),
@@ -596,6 +618,71 @@ pub async fn boot(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
         .await
         .map_err(|error| error.to_string())?
         .unwrap();
+    let screen = ensure_bot_screen(state, actor, bot_id, &computer, None)
+        .await
+        .ok()
+        .and_then(|bound| bound.row);
+    restore_computer_screens(state, actor, &computer, bot_id).await;
+    Ok(status_from(bot_id, &computer, screen.as_ref(), None))
+}
+
+async fn resume_paused(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+    computer: &ComputerRow,
+) -> Result<ComputerStatus, String> {
+    let ctx = adapter_context(actor, bot_id, "resume");
+    let home = home_path(&state.data_dir, &computer.home_key);
+    let resumed = match tokio::time::timeout(
+        Duration::from_secs(20),
+        state.sandbox.resume(
+            ProvisionRequest {
+                home_key: computer.home_key.clone(),
+                home_path: home.to_string_lossy().into_owned(),
+                provider_ref: computer.provider_ref.clone(),
+            },
+            &ctx,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(resumed)) => resumed,
+        Ok(Err(error)) => return Err(error.to_string()),
+        Err(_) => return Err("computer resume timed out after 20 seconds".into()),
+    };
+    let running = sqlx::query(
+        "UPDATE computers SET state = 'running', provider_ref = $2, kind = $3, updated_at = now()
+         WHERE id = $1 AND state = 'suspended'",
+    )
+    .bind(&computer.id)
+    .bind(&resumed.provider_ref)
+    .bind(resumed.kind.as_str())
+    .execute(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    if running.rows_affected() != 1 {
+        let current = state
+            .db
+            .get_computer(&computer.id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "computer not found".to_string())?;
+        if current.state == "running" {
+            let screen = ensure_bot_screen(state, actor, bot_id, &current, None)
+                .await
+                .ok()
+                .and_then(|bound| bound.row);
+            return Ok(status_from(bot_id, &current, screen.as_ref(), None));
+        }
+        return Err("computer resume was superseded".into());
+    }
+    let computer = state
+        .db
+        .get_computer(&computer.id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "computer not found".to_string())?;
     let screen = ensure_bot_screen(state, actor, bot_id, &computer, None)
         .await
         .ok()
@@ -813,6 +900,7 @@ pub async fn takeover(
     .await
     .map_err(|error| error.to_string())?;
     for (run_id, thread_id) in paused {
+        crate::runs::set_run_step(state, &run_id, STEP_HANDOFF).await;
         let _ = crate::runs::append_bot_message(
             state,
             &thread_id,
@@ -878,6 +966,11 @@ pub async fn heartbeat(state: &AppState, actor: &Actor, bot_id: &str) -> Result<
         return Ok(());
     };
     let expires = Utc::now() + TimeDelta::minutes(15);
+    sqlx::query("UPDATE computers SET updated_at = now() WHERE id = $1")
+        .bind(&computer_id)
+        .execute(state.pool())
+        .await
+        .map_err(|error| error.to_string())?;
     sqlx::query(
         "UPDATE computer_screens SET control_lease_expires_at = $2, updated_at = now()
          WHERE computer_id = $1 AND bot_id = $3 AND control_holder = 'user'",
@@ -933,61 +1026,102 @@ pub async fn idle_loop(state: AppState) {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
         crate::attachments::sweep_all_inboxes(&state.data_dir).await;
-        let cutoff = Utc::now() - TimeDelta::minutes(10);
-        let rows = sqlx::query_as::<_, ComputerRow>(
-            "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
-                    control_holder, control_lease_id, control_lease_expires_at, control_bot_id, control_run_id,
-                    execution_run_id, execution_bot_id, execution_lease_expires_at, execution_fence,
-                    browser_profile_mode
-             FROM computers WHERE state = 'running' AND updated_at < $1",
-        )
-        .bind(cutoff)
-        .fetch_all(state.pool())
-        .await;
-        let Ok(rows) = rows else { continue };
-        for computer in rows {
-            let active: Result<Option<(i64,)>, _> = sqlx::query_as(
-                "SELECT 1 FROM runs WHERE status IN ('queued','leased','running','waiting_input','waiting_takeover')
-                 AND bot_id IN (SELECT id FROM bots WHERE computer_id = $1)
-                 UNION ALL
-                 SELECT 1 FROM taught_skills WHERE status IN ('recording','drafting')
-                 AND bot_id IN (SELECT id FROM bots WHERE computer_id = $1)
-                 LIMIT 1",
-            )
-            .bind(&computer.id)
-            .fetch_optional(state.pool())
-            .await;
-            if matches!(active, Ok(Some(_))) {
+        pause_idle_computers(&state).await;
+        stop_parked_computers(&state).await;
+    }
+}
+
+async fn computer_has_active_work(state: &AppState, computer_id: &str) -> bool {
+    let active: Result<Option<(i64,)>, _> = sqlx::query_as(
+        "SELECT 1 FROM runs WHERE status IN ('queued','leased','running','waiting_input','waiting_takeover')
+         AND bot_id IN (SELECT id FROM bots WHERE computer_id = $1)
+         UNION ALL
+         SELECT 1 FROM taught_skills WHERE status IN ('recording','drafting')
+         AND bot_id IN (SELECT id FROM bots WHERE computer_id = $1)
+         LIMIT 1",
+    )
+    .bind(computer_id)
+    .fetch_optional(state.pool())
+    .await;
+    matches!(active, Ok(Some(_)))
+}
+
+fn idle_adapter(computer: &ComputerRow, operation: &str) -> AdapterContext {
+    AdapterContext {
+        operation_id: operation.into(),
+        space_id: computer.space_id.clone(),
+        user_id: computer.user_id.clone(),
+        ..Default::default()
+    }
+}
+
+async fn pause_idle_computers(state: &AppState) {
+    let cutoff = Utc::now() - TimeDelta::minutes(10);
+    let rows = sqlx::query_as::<_, ComputerRow>(
+        "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
+                control_holder, control_lease_id, control_lease_expires_at, control_bot_id, control_run_id,
+                execution_run_id, execution_bot_id, execution_lease_expires_at, execution_fence,
+                browser_profile_mode
+         FROM computers WHERE state = 'running' AND updated_at < $1",
+    )
+    .bind(cutoff)
+    .fetch_all(state.pool())
+    .await;
+    let Ok(rows) = rows else { return };
+    for computer in rows {
+        if computer_has_active_work(state, &computer.id).await {
+            continue;
+        }
+        if let Some(computer_ref) = computer_ref(&computer) {
+            if state
+                .sandbox
+                .suspend(&computer_ref, &idle_adapter(&computer, "idle"))
+                .await
+                .is_err()
+            {
                 continue;
             }
-            if let Some(provider_ref) = &computer.provider_ref {
-                let ctx = AdapterContext {
-                    operation_id: "idle".into(),
-                    space_id: computer.space_id.clone(),
-                    user_id: computer.user_id.clone(),
-                    ..Default::default()
-                };
-                let _ = state
-                    .sandbox
-                    .stop(
-                        &lazyboy_control::ComputerRef {
-                            id: provider_ref.clone(),
-                            home_key: computer.home_key.clone(),
-                            kind: parse_kind(&computer.kind),
-                            provider_ref: provider_ref.clone(),
-                            fresh: false,
-                        },
-                        &ctx,
-                    )
-                    .await;
-            }
-            let _ = sqlx::query(
-                "UPDATE computers SET state = 'stopped', updated_at = now() WHERE id = $1",
-            )
-            .bind(&computer.id)
-            .execute(state.pool())
-            .await;
         }
+        let _ = sqlx::query(
+            "UPDATE computers SET state = 'suspended', updated_at = now()
+             WHERE id = $1 AND state = 'running'",
+        )
+        .bind(&computer.id)
+        .execute(state.pool())
+        .await;
+    }
+}
+
+async fn stop_parked_computers(state: &AppState) {
+    let cutoff = Utc::now() - TimeDelta::hours(6);
+    let rows = sqlx::query_as::<_, ComputerRow>(
+        "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
+                control_holder, control_lease_id, control_lease_expires_at, control_bot_id, control_run_id,
+                execution_run_id, execution_bot_id, execution_lease_expires_at, execution_fence,
+                browser_profile_mode
+         FROM computers WHERE state = 'suspended' AND updated_at < $1",
+    )
+    .bind(cutoff)
+    .fetch_all(state.pool())
+    .await;
+    let Ok(rows) = rows else { return };
+    for computer in rows {
+        if computer_has_active_work(state, &computer.id).await {
+            continue;
+        }
+        if let Some(computer_ref) = computer_ref(&computer) {
+            let _ = state
+                .sandbox
+                .stop(&computer_ref, &idle_adapter(&computer, "parked"))
+                .await;
+        }
+        let _ = sqlx::query(
+            "UPDATE computers SET state = 'stopped', updated_at = now()
+             WHERE id = $1 AND state = 'suspended'",
+        )
+        .bind(&computer.id)
+        .execute(state.pool())
+        .await;
     }
 }
 
@@ -1069,6 +1203,11 @@ pub async fn current_status(
         status.busy_run_id = Some(run.id.clone());
         status.busy_session_id = Some(run.thread_id.clone());
         status.busy_step = run.step.clone();
+        status.using_computer = screen
+            .as_ref()
+            .and_then(|row| row.execution_run_id.as_deref())
+            == Some(run.id.as_str())
+            || computer.execution_run_id.as_deref() == Some(run.id.as_str());
     }
     if let Some(run) = waiting {
         status.waiting_run_id = Some(run.id.clone());

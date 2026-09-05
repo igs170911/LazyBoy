@@ -19,6 +19,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::mcp::router())
         .merge(crate::workspace::router())
         .merge(crate::skills::router())
+        .merge(crate::vault::router())
+        .merge(crate::schedules::router())
         .route("/api/bots", get(list_bots).post(create_bot))
         .route(
             "/api/bots/{id}",
@@ -649,7 +651,7 @@ async fn screen_url(
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(Json(json!({
-        "url": format!("/view/{id}/vnc.html?view_only={}", !interactive)
+        "url": format!("/view/{id}/vnc.html")
     })))
 }
 
@@ -722,6 +724,39 @@ async fn input(
         return Err(StatusCode::CONFLICT);
     }
     let computer_ref = computer::computer_ref(&computer).ok_or(StatusCode::BAD_REQUEST)?;
+    if body.kind == "clipboard" || body.kind == "copy" {
+        let text = body.text.unwrap_or_default();
+        if text.len() > 1024 * 1024 {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        let context =
+            computer::adapter_context_for(&actor, &id, "clipboard", screen.as_ref(), None);
+        let mut argv =
+            lazyboy_control::paste_command_on(context.display.as_deref().unwrap_or(":1"));
+        if body.kind == "copy" {
+            argv.push("copy".into());
+        }
+        let result = state
+            .sandbox
+            .execute(
+                &computer_ref,
+                lazyboy_control::CommandRequest {
+                    argv,
+                    cwd: None,
+                    timeout_ms: Some(10_000),
+                    stdin: Some(text),
+                },
+                &context,
+            )
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        if result.code != 0 {
+            return Err(StatusCode::BAD_GATEWAY);
+        }
+        return Ok(Json(
+            json!({"ok":true,"text":if body.kind=="copy" {Some(result.stdout)} else {None}}),
+        ));
+    }
     let action = match body.kind.as_str() {
         "key" => lazyboy_contracts::ComputerAction::Key {
             key: body.key.unwrap_or_default(),

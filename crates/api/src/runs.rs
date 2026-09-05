@@ -20,14 +20,24 @@ use crate::tools::{ToolCtx, dispatch, tool_definitions};
 
 const SCREENSHOT_CAPTION: &str = "Desktop screenshot (1280x800) with yellow numbered marks. Click by those element ids. The live VNC view has no marks.";
 
-const SYSTEM: &str = "You operate this bot's Linux desktop. The human watches the same live screen you act on. Only the latest screenshot you received is current; the human may have interacted with the screen since, so call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
+const SYSTEM_CHAT: &str = "You are this bot's assistant. This message is conversation — a greeting, small talk, a question you can answer from knowledge, planning, or explaining.
 
-Prefer the fast path, in this order:
-1) shell, list_files, read_file, write_file
-2) MCP tools when they match the task
-3) browser for anything in Chromium: snapshot (page text + numbered elements), click/type/press by element id, navigate by URL. Do not pixel-click the Chromium window.
-4) launch_app / open_path to open a site or file
-5) computer_act only for native GUI that has no DOM (dialogs, canvas, XFCE)
+Reply in text only. Do not try to use the desktop, browser, files, or shell, and do not narrate that you are checking a screen. You have a Linux desktop for later if the user asks you to operate it; this turn does not need it.
+
+Be brief and friendly. If they ask who you are, say you can chat and also do work on a computer when they want that.";
+
+const SYSTEM: &str = "You are this bot's assistant. You have a Linux desktop you can use, but most conversation does not need it.
+
+Reply in text — no tools — for greetings, small talk, questions you can answer from knowledge, planning, or explaining. Do not call computer_observe, computer_act, browser, launch_app, open_path, wait, list_files, or shell just to check the screen or because a desktop exists. A hello does not need a screenshot or a file listing.
+
+Use tools only when the user wants something done on the computer: open a site, click through a UI, run a command, read/write workspace files, or follow a taught skill. Route directly by task:
+1) Website, video, search, email, or anything in Chromium: use browser first. Navigate directly, then snapshot/click/type/press by element id. Do not use shell/curl or pixel clicks to inspect a web page.
+2) Workspace files or commands: use list_files, read_file, write_file, or shell.
+3) Connected services: use an MCP tool when it directly matches the task.
+4) Opening a local file or non-browser app: use open_path or launch_app.
+5) Native GUI with no DOM (dialogs, file manager, XFCE): use computer_act by element id. Those ids are AT-SPI controls, not window boxes.
+
+When you ARE using the desktop: the human watches the same live screen. Only the latest screenshot you received is current; they may have interacted since. Call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
 
 When you use the browser tool:
 - snapshot first; click {\"action\":\"click\",\"element\":N}; type {\"action\":\"type\",\"element\":N,\"text\":\"...\"}; open a URL with navigate.
@@ -44,11 +54,12 @@ Waiting is a tool call, never a reply. Ending your turn with \"waiting for X\" s
 
 Multi-step tasks and taught skills: you are done only when the playbook's check passes (for example the course shows completed, the form shows a confirmation). Do not stop with a status sentence in the middle; keep calling tools until the check passes or you are truly blocked, then say exactly why. Never repeat an earlier reply word for word; describe the current screen.
 
-Call request_takeover only for passwords, 2FA, CAPTCHA, payment, or a decision only the human can make. Never call it just because a click missed. When you do call it, say exactly what the human must do.
+Never ask for passwords, codes, or tokens in chat. At a login wall: call list_accounts, then use_saved_login {accountId} when a saved account matches. If none matches, or 2FA/CAPTCHA appears, call request_takeover with site and why so the human signs in on YOUR screen. Recurring work uses create_schedule (five-field cron, Asia/Taipei unless told otherwise).
 
 computer_act examples (native windows only):
 - {\"kind\":\"click\",\"element\":1}
-- {\"kind\":\"click\",\"x\":N,\"y\":N}
+- {\"kind\":\"type\",\"element\":1,\"text\":\"filename.pdf\"}
+- {\"kind\":\"click\",\"x\":N,\"y\":N} (canvas / no numbered control)
 - {\"kind\":\"type\",\"text\":\"...\"}
 - {\"kind\":\"key\",\"key\":\"Return\"}
 - {\"kind\":\"focus\",\"title\":\"Open File\"}
@@ -238,6 +249,8 @@ pub async fn worker_loop(state: AppState) {
     let lease_owner = format!("api-{}", Uuid::new_v4());
     loop {
         tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = sqlx::query("UPDATE runs SET status='failed',error='Worker interrupted after tool execution; inspect current state before continuing.',completed_at=now(),lease_owner=NULL,lease_expires_at=NULL WHERE status IN ('leased','running') AND lease_expires_at<now() AND COALESCE((checkpoint->>'toolsStarted')::boolean,false)")
+            .execute(state.pool()).await;
         let Ok(permit) = inflight.clone().try_acquire_owned() else {
             continue;
         };
@@ -292,8 +305,8 @@ pub async fn worker_loop(state: AppState) {
                 let retryable = retryable_run_error(&error);
                 let next_status: Option<String> = sqlx::query_scalar(
                     "UPDATE runs
-                     SET status=CASE WHEN $4 AND retry_count < max_retries THEN 'queued' ELSE 'failed' END,
-                         error=$2, completed_at=CASE WHEN $4 AND retry_count < max_retries THEN NULL ELSE now() END,
+                     SET status=CASE WHEN $4 AND retry_count < max_retries AND NOT COALESCE((checkpoint->>'toolsStarted')::boolean,false) THEN 'queued' ELSE 'failed' END,
+                         error=$2, completed_at=CASE WHEN $4 AND retry_count < max_retries AND NOT COALESCE((checkpoint->>'toolsStarted')::boolean,false) THEN NULL ELSE now() END,
                          lease_owner=NULL, lease_expires_at=NULL, updated_at=now()
                      WHERE id=$1 AND lease_owner=$3 AND status IN ('leased','running') RETURNING status",
                 )
@@ -368,7 +381,6 @@ async fn execute_run(
     let _ = crate::sessions::append_event(state, thread_id, "run.started", json!({"runId":run_id}))
         .await;
 
-    computer::boot(state, actor, bot_id).await?;
     let bot = state
         .db
         .get_bot(actor, bot_id)
@@ -381,36 +393,28 @@ async fn execute_run(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "computer not found".to_string())?;
-    let computer_ref =
-        computer::computer_ref(&computer).ok_or_else(|| "computer is not running".to_string())?;
-    let bound = computer::ensure_bot_screen(state, actor, bot_id, &computer, Some(run_id)).await?;
-    let mut gui_block = bound.gui_block;
-    let screen = if let Some(row) = bound.row {
-        let row = computer::take_screen_execution(state, &row, run_id).await?;
-        if gui_block.is_none() {
-            gui_block =
-                computer::take_profile_lock(state, &computer, bot_id, &bot.name, run_id, &row)
-                    .await?;
-        }
-        Some(row)
-    } else {
-        None
-    };
 
     let (model, vision) = bot_model(state, actor, &bot).await?;
     let skills = crate::skills::saved_skills(state.pool(), bot_id).await;
 
     let ctx = Arc::new(ToolCtx {
         sandbox: state.sandbox.clone(),
-        computer: computer_ref,
-        context: adapter_context_for(actor, bot_id, "run", screen.as_ref(), Some(run_id)),
+        computer: std::sync::Mutex::new(None),
+        context: std::sync::Mutex::new(adapter_context_for(
+            actor,
+            bot_id,
+            "run",
+            None,
+            Some(run_id),
+        )),
         mode: parse_mode(&computer.scope),
         bot_id: bot_id.to_string(),
         vision,
-        gui_block,
+        gui_block: std::sync::Mutex::new(None),
         previous_frame: std::sync::Mutex::new(None),
         elements: std::sync::Mutex::new(Vec::new()),
         miss_streak: std::sync::Mutex::new(0),
+        last_click_key: std::sync::Mutex::new(None),
         click_misses: std::sync::Mutex::new(0),
         takeover_requested: std::sync::Mutex::new(false),
         pool: state.pool().clone(),
@@ -511,8 +515,10 @@ async fn execute_run(
     } else {
         vec![UserContent::text(prompt)]
     };
-    if !resume_after_takeover {
-        let blocks: Value = sqlx::query_scalar(
+    let blocks: Vec<Value> = if resume_after_takeover {
+        Vec::new()
+    } else {
+        let raw: Value = sqlx::query_scalar(
             "SELECT blocks FROM messages WHERE thread_id=$1 AND seq=$2 AND role='user'",
         )
         .bind(thread_id)
@@ -522,7 +528,9 @@ async fn execute_run(
         .ok()
         .flatten()
         .unwrap_or(json!([]));
-        let blocks = blocks.as_array().cloned().unwrap_or_default();
+        raw.as_array().cloned().unwrap_or_default()
+    };
+    if !resume_after_takeover {
         first.extend(crate::attachments::llm_parts(state, actor, bot_id, &blocks, vision).await);
     }
     let mut skill_check: Option<String> = None;
@@ -546,13 +554,37 @@ async fn execute_run(
             "Earlier chat history is intentionally omitted for this skill run. Work only from the playbook above and the current screen.",
         ));
     }
+    let workspace_file = blocks
+        .iter()
+        .any(|block| block.get("kind").and_then(Value::as_str) == Some("file"));
+    // Greetings and small talk must not even *see* desktop tools: models
+    // otherwise "check the screen" or `ls` the home on "hi" and boot Docker.
+    let chat_only =
+        !resume_after_takeover && skill_check.is_none() && !workspace_file && is_plain_chat(prompt);
+    if chat_only {
+        // Memory is recalled separately and injected into the preamble below.
+        // Do not expose even memory tools here: a plain greeting must be one
+        // model call with no chance of accidentally invoking any capability.
+        defs.clear();
+        tracing::info!(run_id, "chat-only turn: all tools withheld");
+    }
     // Taught skills run long (a 24-page course is 24 clicks); plain chats stay
     // bounded tighter so a confused model cannot burn budget for as long.
-    let max_turns = if skill_check.is_some() { 80 } else { 40 };
+    let max_turns: u32 = if skill_check.is_some() {
+        80
+    } else if chat_only {
+        4
+    } else {
+        40
+    };
     let mut nudges: u8 = 0;
     let mut screenshots: u32 = 0;
     let mut screenshot_bytes: u64 = 0;
-    if resume_after_takeover && ctx.gui_block.is_none() {
+    if resume_after_takeover {
+        set_run_step(state, run_id, computer::STEP_HANDOFF).await;
+        prepare_run_computer(state, actor, bot_id, run_id, &ctx, true).await?;
+    }
+    if resume_after_takeover && ctx.gui_block.lock().unwrap().is_none() {
         let outcome = dispatch(&ctx, "computer_observe", &json!({})).await;
         first.push(UserContent::text(outcome.text));
         if let Some(image) = outcome.image {
@@ -562,8 +594,30 @@ async fn execute_run(
         }
     }
     let mut pending = Message::User { content: first };
+    if !resume_after_takeover {
+        if let (Some(saved_history), Some(saved_pending)) = (
+            checkpoint.get("harnessHistory"),
+            checkpoint.get("harnessPending"),
+        ) {
+            if let (Ok(restored), Ok(mut next)) = (
+                serde_json::from_value::<Vec<Message>>(saved_history.clone()),
+                serde_json::from_value::<Message>(saved_pending.clone()),
+            ) {
+                history = restored;
+                if let Message::User { content } = &mut next {
+                    content.push(UserContent::text("Resumed after a completed tool batch. Do not repeat completed actions. Observe current browser/desktop before any new mutation; prior element references may be stale."));
+                }
+                pending = next;
+            }
+        }
+    }
+
     let mut final_text = String::new();
-    let mut turns: u32 = 0;
+    let mut turns: u32 = checkpoint
+        .get("harnessTurns")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
     let mut used_gui = false;
     let memory = if ctx.memory_enabled {
         match state
@@ -580,11 +634,12 @@ async fn execute_run(
     } else {
         String::new()
     };
+    let system = if chat_only { SYSTEM_CHAT } else { SYSTEM };
     let mut preamble = if bot.instructions.trim().is_empty() {
-        SYSTEM.to_string()
+        system.to_string()
     } else {
         format!(
-            "{SYSTEM}\n\nBot-specific instructions:\n{}",
+            "{system}\n\nBot-specific instructions:\n{}",
             bot.instructions.trim()
         )
     };
@@ -622,12 +677,26 @@ async fn execute_run(
         preamble.push_str("\n\n");
         preamble.push_str(&memory);
     }
-    if let Some(index) = crate::skills::skills_preamble(&skills) {
-        preamble.push_str("\n\n");
-        preamble.push_str(&index);
+    if !chat_only {
+        if let Some(index) = crate::skills::skills_preamble(&skills) {
+            preamble.push_str("\n\n");
+            preamble.push_str(&index);
+        }
+        if let Ok(accounts) = crate::vault::list_on(state.pool(), actor, bot_id).await {
+            if !accounts.is_empty() {
+                let names = accounts
+                    .iter()
+                    .map(|item| format!("{} ({})", item.site, item.username))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                preamble.push_str(&format!(
+                    "\n\nSaved logins (passwords are not shown): {names}. At a login wall call use_saved_login with the matching accountId from list_accounts."
+                ));
+            }
+        }
     }
 
-    for _ in 0..max_turns {
+    for _ in turns..max_turns {
         turns += 1;
         if let Some(halt) = renew_or_halt(state, run_id, lease_owner).await? {
             return finish_halt(
@@ -661,7 +730,7 @@ async fn execute_run(
                 )
                 .await;
             }
-            result = complete_once(&model, pending.clone(), &preamble, &history, &defs) => result
+            result = complete_with_retry(&model, pending.clone(), &preamble, &history, &defs) => result
         }?;
         let assistant = Message::Assistant {
             id: None,
@@ -715,7 +784,12 @@ async fn execute_run(
                     earlier_replies.push(final_text.trim().to_string());
                     final_text.clear();
                     let mut content = vec![UserContent::text(text)];
-                    if ctx.gui_block.is_none() {
+                    if used_gui || skill_check.is_some() {
+                        prepare_run_computer(state, actor, bot_id, run_id, &ctx, true).await?;
+                    }
+                    if (used_gui || skill_check.is_some())
+                        && ctx.gui_block.lock().unwrap().is_none()
+                    {
                         set_run_step(state, run_id, "computer_observe: 重新確認畫面").await;
                         let outcome = dispatch(&ctx, "computer_observe", &json!({})).await;
                         content.push(UserContent::text(outcome.text));
@@ -750,6 +824,21 @@ async fn execute_run(
                 .await;
             }
             let name = call.function.name.clone();
+            if !defs.iter().any(|tool| tool.name == name) {
+                results.push(UserContent::tool_result_for(
+                    call.id.clone(),
+                    call.provider.clone(),
+                    name,
+                    vec![ToolResultContent::text(
+                        "This turn is conversation only; the desktop is not available. Reply in text.",
+                    )],
+                ));
+                continue;
+            }
+            if tool_needs_sandbox(&name) {
+                prepare_run_computer(state, actor, bot_id, run_id, &ctx, tool_needs_gui(&name))
+                    .await?;
+            }
             used_gui |= matches!(
                 name.as_str(),
                 "computer_observe"
@@ -758,9 +847,16 @@ async fn execute_run(
                     | "launch_app"
                     | "browser"
                     | "wait"
+                    | "use_saved_login"
+                    | "request_takeover"
             );
             let step = describe_step(&name, &call.function.arguments);
             set_run_step(state, run_id, &step).await;
+            let fence=sqlx::query("UPDATE runs SET checkpoint=COALESCE(checkpoint,'{}'::jsonb)||jsonb_build_object('toolsStarted',true) WHERE id=$1 AND lease_owner=$2 AND status='running'")
+                .bind(run_id).bind(lease_owner).execute(state.pool()).await.map_err(|e| e.to_string())?;
+            if fence.rows_affected() != 1 {
+                return Err("run lease lost before tool dispatch".into());
+            }
             let tool_started = std::time::Instant::now();
             let outcome = tokio::select! {
                 halt = wait_for_halt(state, run_id) => {
@@ -782,11 +878,7 @@ async fn execute_run(
                     dispatch(&ctx, &name, &call.function.arguments),
                 ) => match outcome {
                     Ok(outcome) => outcome,
-                    Err(_) => crate::tools::ToolOutcome {
-                        text: format!("工具 {name} 執行逾時（150 秒），請稍後重試。"),
-                        image: None,
-                        pause: false,
-                    },
+                    Err(_) => return Err(format!("tool {name} timed out; its effects are unknown. Inspect the current state before continuing")),
                 }
             };
             tracing::info!(
@@ -797,7 +889,6 @@ async fn execute_run(
                 result_chars = outcome.text.chars().count(),
                 screenshot = outcome.image.is_some(),
                 pause = outcome.pause,
-                result = %outcome.text.chars().take(160).collect::<String>().replace('\n', " "),
                 "tool call"
             );
             // xAI rejects images inside tool results. Attach a changed
@@ -811,6 +902,17 @@ async fn execute_run(
                 name,
                 vec![ToolResultContent::text(&outcome.text)],
             ));
+            if !outcome.blocks.is_empty() && !outcome.pause {
+                let _ = append_bot_message_with(
+                    state,
+                    thread_id,
+                    run_id,
+                    bot_id,
+                    &outcome.text,
+                    json!(outcome.blocks.clone()),
+                )
+                .await;
+            }
             if outcome.pause {
                 sqlx::query(
                     "UPDATE runs SET status = 'waiting_takeover',
@@ -823,7 +925,16 @@ async fn execute_run(
                 .execute(state.pool())
                 .await
                 .map_err(|error| error.to_string())?;
-                append_bot_message(state, thread_id, run_id, bot_id, &outcome.text).await?;
+                let _ = computer::takeover(state, actor, bot_id).await;
+                append_bot_message_with(
+                    state,
+                    thread_id,
+                    run_id,
+                    bot_id,
+                    &outcome.text,
+                    json!(outcome.blocks),
+                )
+                .await?;
                 let click_misses = *ctx.click_misses.lock().unwrap();
                 record_run_metrics(
                     state,
@@ -847,6 +958,7 @@ async fn execute_run(
             results.extend(screenshot_parts(png));
         }
         pending = Message::User { content: results };
+        save_harness_checkpoint(state, run_id, lease_owner, &history, &pending, turns).await?;
     }
 
     let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
@@ -976,6 +1088,37 @@ fn retryable_run_error(error: &str) -> bool {
     !matches!(code, 400..=499 if !matches!(code, 408 | 409 | 425 | 429))
 }
 
+async fn complete_with_retry(
+    model: &DynModel,
+    pending: Message,
+    preamble: &str,
+    history: &[Message],
+    defs: &[ToolDefinition],
+) -> Result<Vec<AssistantContent>, String> {
+    let mut last = String::new();
+    for attempt in 0..3 {
+        let result = tokio::time::timeout(
+            Duration::from_secs(60),
+            complete_once(model, pending.clone(), preamble, history, defs),
+        )
+        .await;
+        match result {
+            Ok(Ok(content)) => return Ok(content),
+            Ok(Err(error)) => {
+                if !retryable_run_error(&error) {
+                    return Err(error);
+                }
+                last = error;
+            }
+            Err(_) => last = "model request timed out after 60 seconds".into(),
+        }
+        if attempt < 2 {
+            tokio::time::sleep(Duration::from_millis(500 * (1 << attempt))).await;
+        }
+    }
+    Err(last)
+}
+
 async fn complete_with<M>(
     model: &M,
     pending: Message,
@@ -1049,6 +1192,37 @@ fn assistant_texts(history: &[Message]) -> Vec<String> {
         .collect()
 }
 
+async fn save_harness_checkpoint(
+    state: &AppState,
+    run_id: &str,
+    owner: &str,
+    history: &[Message],
+    pending: &Message,
+    turns: u32,
+) -> Result<(), String> {
+    let mut history = history.to_vec();
+    let mut pending = pending.clone();
+    for message in history.iter_mut().chain(std::iter::once(&mut pending)) {
+        if let Message::User { content } = message {
+            content.retain(|part| {
+                !matches!(part, UserContent::Image(_))
+                    && !matches!(part,UserContent::Text(text) if text.text==SCREENSHOT_CAPTION)
+            });
+        }
+    }
+    let value = json!({"harnessHistory":history,"harnessPending":pending,"toolsStarted":false,"harnessTurns":turns});
+    // Large/unsupported checkpoints fail closed: keep the uncertain-effects flag.
+    if value.to_string().len() > 1024 * 1024 {
+        return Ok(());
+    }
+    let result=sqlx::query("UPDATE runs SET checkpoint=COALESCE(checkpoint,'{}'::jsonb)||$3,updated_at=now() WHERE id=$1 AND lease_owner=$2 AND status='running'")
+        .bind(run_id).bind(owner).bind(value).execute(state.pool()).await.map_err(|e|e.to_string())?;
+    if result.rows_affected() != 1 {
+        return Err("run lease lost while checkpointing".into());
+    }
+    Ok(())
+}
+
 fn drop_history_screenshots(history: &mut [Message], pending: &Message) {
     let keep = if has_screenshot(pending) {
         None
@@ -1107,6 +1281,17 @@ pub(crate) async fn append_bot_message(
     bot_id: &str,
     body: &str,
 ) -> Result<(), String> {
+    append_bot_message_with(state, thread_id, run_id, bot_id, body, json!([])).await
+}
+
+pub(crate) async fn append_bot_message_with(
+    state: &AppState,
+    thread_id: &str,
+    run_id: &str,
+    bot_id: &str,
+    body: &str,
+    blocks: Value,
+) -> Result<(), String> {
     let mut tx = state
         .pool()
         .begin()
@@ -1122,13 +1307,14 @@ pub(crate) async fn append_bot_message(
     .map_err(|error| error.to_string())?;
     let message_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO messages (id,thread_id,seq,role,body,run_id,speaker_bot_id)
-         VALUES ($1,$2,$3,'assistant',$4,$5,$6)",
+        "INSERT INTO messages (id,thread_id,seq,role,body,blocks,run_id,speaker_bot_id)
+         VALUES ($1,$2,$3,'assistant',$4,$5,$6,$7)",
     )
     .bind(&message_id)
     .bind(thread_id)
     .bind(seq)
     .bind(body)
+    .bind(&blocks)
     .bind(run_id)
     .bind(bot_id)
     .execute(&mut *tx)
@@ -1254,6 +1440,603 @@ async fn renew_lease(state: &AppState, run_id: &str, lease_owner: &str) -> Resul
     }
 }
 
+fn is_punct(c: char) -> bool {
+    matches!(
+        c,
+        '!' | '?'
+            | '.'
+            | ','
+            | ';'
+            | ':'
+            | '~'
+            | '"'
+            | '\''
+            | '('
+            | ')'
+            | '！'
+            | '？'
+            | '。'
+            | '，'
+            | '、'
+            | '；'
+            | '：'
+            | '～'
+            | '…'
+            | '・'
+            | '·'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+            | '（'
+            | '）'
+            | '【'
+            | '】'
+            | '《'
+            | '》'
+    )
+}
+
+fn normalize_prompt(prompt: &str) -> String {
+    let lowered = prompt.trim().to_lowercase();
+    let mut out = String::new();
+    let mut pending_space = false;
+    for c in lowered.chars() {
+        if c.is_whitespace() || is_punct(c) {
+            if !out.is_empty() {
+                pending_space = true;
+            }
+            continue;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn first_token(text: &str) -> &str {
+    text.split_whitespace().next().unwrap_or("")
+}
+
+fn looks_like_url(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    if lower.contains("://") || lower.contains("www.") {
+        return true;
+    }
+    lower.split_whitespace().any(|token| {
+        let host = token.split('/').next().unwrap_or(token);
+        let host = host.split('?').next().unwrap_or(host);
+        let Some((_, tld)) = host.rsplit_once('.') else {
+            return false;
+        };
+        matches!(
+            tld,
+            "com"
+                | "org"
+                | "net"
+                | "io"
+                | "ai"
+                | "app"
+                | "dev"
+                | "co"
+                | "edu"
+                | "gov"
+                | "tv"
+                | "me"
+                | "cc"
+                | "info"
+                | "xyz"
+                | "tw"
+                | "cn"
+                | "hk"
+                | "jp"
+        ) && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    })
+}
+
+fn is_text_only_request(normalized: &str) -> bool {
+    const PHRASES: &[&str] = &[
+        "what is ",
+        "what are ",
+        "who is ",
+        "why ",
+        "how does ",
+        "how do ",
+        "tell me about ",
+        "explain ",
+        "can you explain ",
+        "could you explain ",
+        "please explain ",
+        "是什麼",
+        "是什么",
+        "什麼是",
+        "什么是",
+        "為什麼",
+        "为什么",
+        "請解釋",
+        "请解释",
+        "幫我解釋",
+        "帮我解释",
+        "請說明",
+        "请说明",
+    ];
+    PHRASES.iter().any(|phrase| normalized.contains(phrase))
+}
+
+fn prompt_needs_memory(prompt: &str) -> bool {
+    let normalized = normalize_prompt(prompt);
+    const PHRASES: &[&str] = &[
+        "remember ",
+        "remember that",
+        "do you remember",
+        "forget ",
+        "記住",
+        "记住",
+        "記得",
+        "记得",
+        "忘記",
+        "忘记",
+    ];
+    PHRASES.iter().any(|phrase| normalized.contains(phrase))
+}
+
+fn prompt_needs_desktop(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if looks_like_url(trimmed) {
+        return true;
+    }
+    let lower = trimmed.to_lowercase();
+    let normalized = normalize_prompt(trimmed);
+    // Mentioning a site or app in an informational question is not a request
+    // to operate it ("YouTube 是什麼？", "how do I open Chrome?").
+    if is_text_only_request(&normalized) {
+        return false;
+    }
+    const MARKERS: &[&str] = &[
+        "open ",
+        "open the",
+        "launch",
+        "click",
+        "browser",
+        "chrome",
+        "chromium",
+        "firefox",
+        "desktop",
+        "screenshot",
+        "terminal",
+        "xterm",
+        "install ",
+        "download",
+        "upload",
+        "type into",
+        "navigate",
+        "visit ",
+        "go to ",
+        "google ",
+        "youtube",
+        "video",
+        "watch ",
+        "email",
+        "gmail",
+        "on the computer",
+        "on my computer",
+        "use the computer",
+        "use the desktop",
+        "file manager",
+        "run this",
+        "run the ",
+        "打開",
+        "开启",
+        "開啟",
+        "启动",
+        "啟動",
+        "點擊",
+        "点击",
+        "點一下",
+        "点一下",
+        "瀏覽器",
+        "浏览器",
+        "桌面",
+        "電腦",
+        "电脑",
+        "螢幕",
+        "屏幕",
+        "截圖",
+        "截图",
+        "終端",
+        "终端",
+        "安裝",
+        "安装",
+        "下載",
+        "下载",
+        "上傳",
+        "上传",
+        "檔案",
+        "档案",
+        "資料夾",
+        "文件夹",
+        "網頁",
+        "网页",
+        "網站",
+        "网站",
+        "上網",
+        "上网",
+        "搜尋",
+        "搜索",
+        "登入",
+        "登录",
+        "進電腦",
+        "进电脑",
+        "操作電腦",
+        "操作电脑",
+        "用電腦",
+        "用电脑",
+        "看畫面",
+        "看画面",
+        "看一下影片",
+        "看一下視頻",
+        "看一下视频",
+        "影片",
+        "視頻",
+        "视频",
+        "幫我開",
+        "帮我开",
+        "幫我點",
+        "帮我点",
+        "幫我搜",
+        "帮我搜",
+        "執行指令",
+        "执行指令",
+        "在電腦",
+        "在电脑",
+        "到網站",
+        "到网站",
+        "去網站",
+        "去网站",
+        "執行「",
+        "执行「",
+        "執行\"",
+        "执行\"",
+        "排程",
+        "以後每天",
+        "以后每天",
+        "每個工作日",
+        "每个工作日",
+        "every day",
+        "weekdays",
+        "every monday",
+        "schedule",
+    ];
+    if MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return true;
+    }
+    if trimmed.contains('?') || trimmed.contains('？') {
+        return false;
+    }
+    const SHELL: &[&str] = &[
+        "ls", "pwd", "cd", "cat", "chmod", "chown", "rm", "mv", "cp", "mkdir", "touch", "htop",
+        "top", "ps", "df", "du", "whoami", "uname", "curl", "wget", "git", "npm", "npx", "pip",
+        "pip3", "python", "python3", "node", "cargo", "make", "docker", "apt", "apt-get", "sudo",
+        "bash", "sh", "zsh",
+    ];
+    SHELL.contains(&first_token(&normalized))
+}
+
+fn is_follow_up_task(normalized: &str) -> bool {
+    const FOLLOW: &[&str] = &[
+        "繼續",
+        "继续",
+        "接著",
+        "接着",
+        "接著做",
+        "接着做",
+        "再來",
+        "再来",
+        "然後",
+        "然后",
+        "continue",
+        "keep going",
+        "go on",
+        "go ahead",
+        "resume",
+        "keep at it",
+        "從畫面",
+        "从画面",
+    ];
+    FOLLOW
+        .iter()
+        .any(|item| normalized == *item || normalized.starts_with(&format!("{item} ")))
+}
+
+fn has_task_verb(normalized: &str) -> bool {
+    const VERBS: &[&str] = &[
+        "幫我",
+        "帮我",
+        "幫忙",
+        "帮忙",
+        "請你",
+        "请你",
+        "請幫",
+        "请帮",
+        "please",
+        "can you",
+        "could you",
+        "would you",
+        "will you",
+    ];
+    VERBS.iter().any(|verb| normalized.contains(verb))
+}
+
+fn is_greeting(normalized: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "hi",
+        "hi hi",
+        "hii",
+        "hiii",
+        "hey",
+        "hey there",
+        "hey hey",
+        "hello",
+        "hello there",
+        "hello hi",
+        "hi hello",
+        "yo",
+        "sup",
+        "howdy",
+        "hiya",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "good night",
+        "morning",
+        "evening",
+        "how are you",
+        "how are you doing",
+        "how's it going",
+        "hows it going",
+        "whats up",
+        "what's up",
+        "what up",
+        "who are you",
+        "what can you do",
+        "what do you do",
+        "what are you",
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+        "ok",
+        "okay",
+        "cool",
+        "nice",
+        "got it",
+        "understood",
+        "嗨",
+        "嗨嗨",
+        "你好",
+        "您好",
+        "哈囉",
+        "哈罗",
+        "嗨你好",
+        "你好啊",
+        "你好呀",
+        "你好嗨",
+        "早安",
+        "午安",
+        "晚安",
+        "在嗎",
+        "在嘛",
+        "在不在",
+        "在吗",
+        "你好嗎",
+        "你好吗",
+        "你是誰",
+        "你是谁",
+        "你會什麼",
+        "你会什么",
+        "你能做什麼",
+        "你能做什么",
+        "你可以做什麼",
+        "你可以做什么",
+        "謝謝",
+        "谢谢",
+        "感謝",
+        "感谢",
+        "好",
+        "嗯",
+        "喔",
+        "哦",
+        "哈哈",
+        "呵",
+        "聊聊",
+        "聊天",
+        "陪我聊天",
+        "說說話",
+        "说说话",
+        "👋",
+        "🙋",
+        "😊",
+        "🙂",
+        "😀",
+    ];
+    if EXACT.iter().any(|item| normalized == *item) {
+        return true;
+    }
+    const PREFIXES: &[&str] = &["hi ", "hey ", "hello ", "嗨", "你好"];
+    PREFIXES.iter().any(|prefix| {
+        normalized.starts_with(prefix)
+            && normalized.chars().count() <= 16
+            && !has_task_verb(normalized)
+    })
+}
+
+fn is_chat_intent(normalized: &str) -> bool {
+    const PHRASES: &[&str] = &[
+        "陪我聊天",
+        "跟我聊天",
+        "來聊天",
+        "来聊天",
+        "只是聊天",
+        "隨便聊聊",
+        "随便聊聊",
+        "just chatting",
+        "just saying hi",
+        "let's chat",
+        "lets chat",
+        "wanna chat",
+        "want to chat",
+    ];
+    PHRASES.iter().any(|phrase| normalized.contains(phrase))
+}
+
+/// True when this user message should stay in text chat: no desktop tools,
+/// no container boot, no screenshot.
+fn is_plain_chat(prompt: &str) -> bool {
+    if prompt_needs_desktop(prompt) || prompt_needs_memory(prompt) {
+        return false;
+    }
+    let normalized = normalize_prompt(prompt);
+    if normalized.is_empty() {
+        return true;
+    }
+    if is_text_only_request(&normalized) {
+        return true;
+    }
+    if is_follow_up_task(&normalized) {
+        return false;
+    }
+    if is_greeting(&normalized) {
+        return true;
+    }
+    let chars = normalized.chars().count();
+    if chars <= 24 && !has_task_verb(&normalized) {
+        return true;
+    }
+    is_chat_intent(&normalized) && chars <= 48
+}
+
+fn tool_needs_sandbox(name: &str) -> bool {
+    matches!(
+        name,
+        "shell"
+            | "list_files"
+            | "read_file"
+            | "write_file"
+            | "computer_observe"
+            | "computer_act"
+            | "browser"
+            | "open_path"
+            | "launch_app"
+            | "wait"
+            | "use_saved_login"
+            | "request_takeover"
+    )
+}
+
+fn tool_needs_gui(name: &str) -> bool {
+    matches!(
+        name,
+        "computer_observe"
+            | "computer_act"
+            | "browser"
+            | "open_path"
+            | "launch_app"
+            | "wait"
+            | "use_saved_login"
+            | "request_takeover"
+    )
+}
+
+async fn prepare_run_computer(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+    run_id: &str,
+    ctx: &ToolCtx,
+    need_gui: bool,
+) -> Result<(), String> {
+    if ctx.computer.lock().unwrap().is_none() {
+        let bot = state
+            .db
+            .get_bot(actor, bot_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "bot not found".to_string())?;
+        let computer = state
+            .db
+            .get_computer(bot.computer_id.as_deref().unwrap_or(""))
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "computer not found".to_string())?;
+        if computer.state != "running" {
+            let step = if computer.state == "suspended" {
+                computer::STEP_WAKING
+            } else {
+                computer::STEP_BOOTING
+            };
+            set_run_step(state, run_id, step).await;
+        }
+        computer::boot(state, actor, bot_id).await?;
+        let computer = state
+            .db
+            .get_computer(bot.computer_id.as_deref().unwrap_or(""))
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "computer not found".to_string())?;
+        let computer_ref = computer::computer_ref(&computer)
+            .ok_or_else(|| "computer is not running".to_string())?;
+        *ctx.computer.lock().unwrap() = Some(computer_ref);
+    }
+    if !need_gui || ctx.adapter().display.is_some() {
+        return Ok(());
+    }
+    let bot = state
+        .db
+        .get_bot(actor, bot_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "bot not found".to_string())?;
+    let computer = state
+        .db
+        .get_computer(bot.computer_id.as_deref().unwrap_or(""))
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "computer not found".to_string())?;
+    let bound = computer::ensure_bot_screen(state, actor, bot_id, &computer, Some(run_id)).await?;
+    let mut gui_block = bound.gui_block;
+    let screen = if let Some(row) = bound.row {
+        let held_by_other = row
+            .execution_run_id
+            .as_deref()
+            .is_some_and(|held| held != run_id);
+        let user_holding = row.control_holder == "user";
+        if held_by_other || user_holding {
+            set_run_step(state, run_id, computer::STEP_HANDOFF).await;
+        }
+        let row = computer::take_screen_execution(state, &row, run_id).await?;
+        if gui_block.is_none() {
+            gui_block =
+                computer::take_profile_lock(state, &computer, bot_id, &bot.name, run_id, &row)
+                    .await?;
+        }
+        Some(row)
+    } else {
+        None
+    };
+    *ctx.gui_block.lock().unwrap() = gui_block;
+    *ctx.context.lock().unwrap() =
+        adapter_context_for(actor, bot_id, "run", screen.as_ref(), Some(run_id));
+    Ok(())
+}
+
 fn history_window_start(summary_seq: i32, current_seq: i32) -> i32 {
     summary_seq.min(current_seq.saturating_sub(1)).max(0)
 }
@@ -1334,6 +2117,12 @@ fn describe_step(name: &str, args: &Value) -> String {
         "launch_app" | "open_path" => short(get("app").or(get("path")), 40),
         "read_file" | "write_file" | "list_dir" => short(get("path"), 40),
         "use_skill" => format!("讀取技能 {}", short(get("name"), 30)),
+        "use_saved_login" => "填入已存帳號".into(),
+        "list_accounts" => "列出已存帳號".into(),
+        "create_schedule" => format!("排程 {}", short(get("name"), 30)),
+        "list_schedules" => "列出排程".into(),
+        "cancel_schedule" => "取消排程".into(),
+        "request_takeover" => short(get("site").or(get("reason")), 40),
         _ => String::new(),
     };
     if detail.is_empty() {
@@ -1343,7 +2132,7 @@ fn describe_step(name: &str, args: &Value) -> String {
     }
 }
 
-async fn set_run_step(state: &AppState, run_id: &str, step: &str) {
+pub(crate) async fn set_run_step(state: &AppState, run_id: &str, step: &str) {
     let result = sqlx::query(
         "UPDATE runs SET checkpoint = COALESCE(checkpoint, '{}'::jsonb)
                 || jsonb_build_object('step', $2::text, 'stepAt', now()),
@@ -1397,10 +2186,77 @@ async fn record_run_metrics(
 mod tests {
     use super::{
         RunHalt, SCREENSHOT_CAPTION, describe_step, drop_history_screenshots, halt_from_status,
-        history_window_start, retryable_run_error, screenshot_parts,
+        history_window_start, is_plain_chat, retryable_run_error, screenshot_parts, tool_needs_gui,
+        tool_needs_sandbox,
     };
     use rig_core::completion::message::{Message, UserContent};
     use serde_json::json;
+
+    #[test]
+    fn chat_tools_do_not_need_the_desktop() {
+        assert!(!tool_needs_sandbox("remember"));
+        assert!(!tool_needs_sandbox("recall_memory"));
+        assert!(!tool_needs_sandbox("use_skill"));
+        assert!(tool_needs_sandbox("shell"));
+        assert!(tool_needs_gui("computer_observe"));
+        assert!(tool_needs_gui("browser"));
+        assert!(!tool_needs_gui("shell"));
+        assert!(!tool_needs_gui("list_files"));
+    }
+
+    #[test]
+    fn greetings_stay_in_chat() {
+        for prompt in [
+            "hi",
+            "Hi!",
+            "hello",
+            "hey there",
+            "你好",
+            "嗨",
+            "哈囉！",
+            "在嗎",
+            "你是誰",
+            "thanks",
+            "謝謝",
+            "聊聊",
+            "👋",
+            "今天心情不好",
+            "寫一首詩",
+            "量子力學是什麼",
+            "hello, can you explain Rust ownership?",
+            "YouTube 是什麼？",
+            "how do I open Chrome?",
+            "請解釋量子力學",
+        ] {
+            assert!(is_plain_chat(prompt), "{prompt} should stay in chat");
+        }
+    }
+
+    #[test]
+    fn computer_tasks_are_not_plain_chat() {
+        for prompt in [
+            "打開 youtube",
+            "open chrome",
+            "幫我開 gmail",
+            "go to https://example.com",
+            "ls",
+            "git status",
+            "繼續",
+            "接著做",
+            "執行「完成 STAR 訓練」",
+            "看畫面現在怎樣",
+            "download this file",
+            "幫我點 Next",
+            "幫我看一下 YouTube 上的 Rust 教學",
+            "幫我看一下這個影片",
+            "watch this YouTube video",
+            "hi check my email",
+            "remember that I prefer dark mode",
+            "記住我喜歡繁體中文",
+        ] {
+            assert!(!is_plain_chat(prompt), "{prompt} should keep desktop tools");
+        }
+    }
 
     #[test]
     fn step_labels_summarize_tool_arguments() {

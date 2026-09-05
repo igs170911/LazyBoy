@@ -1,0 +1,37 @@
+.login-chip,.sched-chip{display:grid;gap:6px;margin:8px 0;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:#101113;max-width:min(var(--chat-col),100%)}
+.login-chip .login-label,.sched-chip .sched-label{color:var(--muted);font-size:12px}
+.login-chip .login-site{font-weight:600}
+.login-chip .login-why{color:var(--muted);font-size:13px}
+.sched-list{display:grid;gap:8px;min-height:0;overflow:auto}
+.sched-list-head{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:13px}
+.sched-empty{margin:0;color:var(--faint);font-size:13px}
+.sched-row{display:flex;align-items:center;gap:8px}
+.sched-row-main{display:flex;align-items:center;gap:10px;min-width:0;flex:1;padding:8px;border:0;border-radius:10px;background:transparent;color:inherit;text-align:left;cursor:pointer}
+.sched-row-main:hover{background:var(--surface)}
+.sched-row-main span{min-width:0;display:grid}
+.sched-row-main strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sched-row-main small{color:var(--muted);font-size:12px}
+.sched-dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.sched-dot.on{background:#4ade80}
+.sched-editor{display:grid;gap:12px;min-height:0;overflow:auto}
+.sched-editor-head{display:flex;align-items:center;gap:8px}
+.sched-when{display:grid;gap:8px;color:var(--muted);font-size:13px}
+.sched-card{display:flex;flex-wrap:wrap;gap:8px;padding:10px;border:1px solid var(--border);border-radius:12px;background:#0c0c0d}
+.sched-card select,.sched-cron{height:36px;border:1px solid var(--border);border-radius:8px;background:#151517;color:var(--ink);padding:0 8px;font:inherit}
+.sched-cron{flex:1;min-width:140px;font-family:ui-monospace,monospace}
+.sched-list,.sched-editor{flex:none;overflow:visible;border-top:1px solid var(--line);padding-top:16px;margin-top:6px;min-width:0}
+.sched-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:4px 0}
+.sched-row>.outline{padding:0 10px;white-space:nowrap}
+.sched-row-main small{overflow-wrap:anywhere;line-height:1.45}
+.sched-dot{flex:0 0 8px}
+.sched-editor>label{display:grid;gap:8px;color:var(--muted);font-size:13px;min-width:0}
+.sched-editor>label.memory-toggle{display:flex;align-items:center}
+.sched-editor input:not([type="checkbox"]),.sched-editor textarea{width:100%;min-width:0;border:1px solid var(--border);border-radius:10px;background:var(--inset);color:var(--ink);padding:10px 12px;font:inherit}
+.sched-editor textarea{resize:vertical;min-height:100px;line-height:1.5}
+.sched-editor input[type="checkbox"]{width:16px;height:16px;margin:0;accent-color:var(--accent)}
+.sched-card>*{min-width:0;max-width:100%;flex:1 1 100px}
+.sched-when>span{display:flex;flex-wrap:wrap;gap:6px;overflow-wrap:anywhere}
+.sched-editor .dialog-actions{flex-wrap:wrap}
+.login-chip,.sched-chip{width:100%;overflow-wrap:anywhere}
+.message:has(>.sched-chip),.message:has(>.login-chip){flex-direction:column;gap:8px}
+.message.spoken>.sched-chip,.message.spoken>.login-chip{grid-column:2}

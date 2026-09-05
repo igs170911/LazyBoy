@@ -12,101 +12,31 @@ def http_json(url, timeout=2):
         return None
 
 class Ws:
+    """Use a maintained RFC6455 transport (fragmentation, ping/pong, handshake)."""
     def __init__(self, url):
-        rest = url[5:]
-        hostpath = rest.split("/", 1)
-        hostport = hostpath[0]
-        path = "/" + (hostpath[1] if len(hostpath) > 1 else "")
-        if ":" in hostport:
-            host, port = hostport.rsplit(":", 1)
-            port = int(port)
-        else:
-            host, port = hostport, 80
-        self.sock = socket.create_connection((host, port), 5)
-        key = base64.b64encode(os.urandom(16)).decode()
-        req = (
-            "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\n"
-            "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-            "Sec-WebSocket-Version: 13\r\nOrigin: http://%s\r\n\r\n"
-            % (path, hostport, key, hostport)
-        )
-        self.sock.sendall(req.encode())
-        buf = b""
-        while b"\r\n\r\n" not in buf:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise RuntimeError("ws handshake closed")
-            buf += chunk
+        import websocket
+        self.sock = websocket.create_connection(url, timeout=5, suppress_origin=True,
+                                                http_no_proxy=["127.0.0.1", "localhost"])
         self.n = 0
 
-    def _frame(self, data):
-        n = len(data)
-        hdr = bytearray([0x81])
-        if n < 126:
-            hdr.append(0x80 | n)
-        elif n < 65536:
-            hdr.append(0x80 | 126)
-            hdr += struct.pack("!H", n)
-        else:
-            hdr.append(0x80 | 127)
-            hdr += struct.pack("!Q", n)
-        mask = os.urandom(4)
-        hdr += mask
-        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
-        return bytes(hdr) + masked
-
-    def _read(self, n):
-        buf = b""
-        while len(buf) < n:
-            chunk = self.sock.recv(n - len(buf))
-            if not chunk:
-                raise RuntimeError("ws eof")
-            buf += chunk
-        return buf
-
-    def _read_frame(self):
-        hdr = self._read(2)
-        opcode = hdr[0] & 0x0F
-        masked = hdr[1] & 0x80
-        n = hdr[1] & 0x7F
-        if n == 126:
-            n = struct.unpack("!H", self._read(2))[0]
-        elif n == 127:
-            n = struct.unpack("!Q", self._read(8))[0]
-        mask = self._read(4) if masked else b""
-        payload = self._read(n)
-        if masked:
-            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        return opcode, payload
-
     def recv_json(self):
-        while True:
-            opcode, payload = self._read_frame()
-            if opcode == 0x8:
-                raise RuntimeError("ws closed")
-            if opcode == 0x9:
-                continue
-            if opcode in (0x1, 0x2):
-                return json.loads(payload.decode())
+        return json.loads(self.sock.recv())
 
     def call(self, method, params=None):
         self.n += 1
-        msg = {"id": self.n, "method": method}
-        if params:
-            msg["params"] = params
-        self.sock.sendall(self._frame(json.dumps(msg).encode()))
-        while True:
+        self.sock.send(json.dumps({"id": self.n, "method": method, "params": params or {}}))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            self.sock.settimeout(max(.1, deadline-time.monotonic()))
             obj = self.recv_json()
             if obj.get("id") == self.n:
                 if "error" in obj:
                     raise RuntimeError(str(obj["error"]))
                 return obj.get("result") or {}
+        raise TimeoutError("CDP response deadline exceeded")
 
     def close(self):
-        try:
-            self.sock.close()
-        except Exception:
-            pass
+        self.sock.close()
 
 def probe(port):
     return http_json("http://127.0.0.1:%s/json/version" % port) is not None
@@ -140,7 +70,7 @@ def spawn_browser(display, profile, port):
     if profile:
         env["LAZYBOY_BROWSER_PROFILE"] = profile
     subprocess.Popen(
-        ["lazyboy-browser", "--remote-debugging-port=%s" % port, "--remote-allow-origins=*"],
+        ["lazyboy-browser", "--remote-debugging-port=%s" % port],
         env=env,
         start_new_session=True,
         stdout=subprocess.DEVNULL,
@@ -171,6 +101,8 @@ SNAP_JS = r"""
   const chromeW = Math.max(0, (window.outerWidth || 0) - (window.innerWidth || 0));
   const sx0 = (window.screenX || 0) + Math.floor(chromeW / 2);
   const sy0 = (window.screenY || 0) + chromeH;
+  document.querySelectorAll('[data-lazyboy]').forEach(el => el.removeAttribute('data-lazyboy'));
+  const generation = crypto.randomUUID();
   const seen = new Set();
   const inView = [];
   const offView = [];
@@ -181,7 +113,9 @@ SNAP_JS = r"""
     if (st.visibility === "hidden" || st.display === "none" || Number(st.opacity) === 0) continue;
     const type = (el.getAttribute("type") || "").toLowerCase();
     let text;
-    if (el.tagName === "INPUT" && (type === "radio" || type === "checkbox")) {
+    if (type === "password" || /password|secret|token|one-time-code/i.test([el.name, el.id, el.autocomplete].join(" "))) {
+      text = "[protected input]";
+    } else if (el.tagName === "INPUT" && (type === "radio" || type === "checkbox")) {
       // Quiz answers: the value is usually "on"; the label next to it is what
       // the model must read to pick the right option.
       const owner = (el.labels && el.labels[0]) || el.closest("label") || el.parentElement;
@@ -214,12 +148,12 @@ SNAP_JS = r"""
   const out = [];
   let n = 1;
   for (const item of inView.slice(0, 50).concat(offView.slice(0, 20))) {
-    item.el.setAttribute("data-lazyboy", String(n));
+    item.el.setAttribute("data-lazyboy", generation + "-" + n);
     out.push({
       id: n,
       title: item.text,
       tag: item.el.tagName.toLowerCase(),
-      selector: '[data-lazyboy="' + n + '"]',
+      selector: '[data-lazyboy="' + generation + "-" + n + '"]',
       kind: "dom",
       x: item.x,
       y: item.y,
@@ -239,6 +173,11 @@ CLICK_JS = r"""
   if (!el) return {ok: false, error: "element gone"};
   el.scrollIntoView({block: "center", inline: "nearest"});
   const r = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  const hit = document.elementFromPoint(r.x+r.width/2, r.y+r.height/2);
+  if (el.disabled || el.getAttribute("aria-disabled") === "true" || r.width <= 0 || r.height <= 0 || style.visibility === "hidden" || style.display === "none" || !hit || !(hit === el || el.contains(hit))) {
+    return {ok:false,error:"element is disabled, hidden, or covered; observe again"};
+  }
   el.focus();
   el.click();
   const chromeH = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
@@ -302,7 +241,7 @@ def wait_for_visual_update(ws):
     # exits, so wait for two animation frames to keep that screenshot aligned
     # with the framebuffer streamed by VNC.
     try:
-        evaluate(ws, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+        evaluate(ws, "new Promise(resolve => {setTimeout(resolve, 250); requestAnimationFrame(() => requestAnimationFrame(resolve));})")
     except Exception:
         pass
 
@@ -462,7 +401,7 @@ class Recorder:
             msg["params"] = params
         if session:
             msg["sessionId"] = session
-        self.ws.sock.sendall(self.ws._frame(json.dumps(msg).encode()))
+        self.ws.sock.send(json.dumps(msg))
         while True:
             obj = self.ws.recv_json()
             if obj.get("id") == self.ws.n:
@@ -534,8 +473,47 @@ class Recorder:
                 self.handle(self.pending.pop(0))
             self.handle(self.ws.recv_json())
 
+FILL_LOGIN_JS = r"""
+(creds) => {
+  if (!creds.expectedHost || location.protocol !== "https:" || location.hostname.toLowerCase() !== creds.expectedHost.toLowerCase()) {
+    return {ok: false, error: "saved login requires the exact configured HTTPS host"};
+  }
+  const user = creds.username || "";
+  const pass = creds.password || "";
+  const inputs = Array.from(document.querySelectorAll("input"));
+  const visible = (el) => {
+    const s = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return s.display !== "none" && s.visibility !== "hidden" && el.type !== "hidden" && r.width > 0 && r.height > 0;
+  };
+  const password = inputs.find((el) => el.type === "password" && visible(el) && !el.disabled);
+  if (!password) return {ok: false, error: "no password field on this page"};
+  const userish = /user|email|login|account|phone|id/i;
+  const username = inputs.find((el) => {
+    if (el === password || !visible(el) || el.disabled) return false;
+    const type = (el.type || "text").toLowerCase();
+    if (["email", "tel", "url"].includes(type)) return true;
+    if (type !== "text" && type !== "search") return false;
+    const blob = [el.name, el.id, el.placeholder, el.autocomplete, el.getAttribute("aria-label")].join(" ");
+    return userish.test(blob) || el === inputs[0];
+  });
+  function setValue(el, value) {
+    const proto = HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc && desc.set) desc.set.call(el, value);
+    else el.value = value;
+    el.dispatchEvent(new Event("input", {bubbles: true}));
+    el.dispatchEvent(new Event("change", {bubbles: true}));
+  }
+  if (username) setValue(username, user);
+  setValue(password, pass);
+  return {ok: true, filledUsername: Boolean(username), submitted: false};
+}
+"""
+
 def main():
-    req = json.loads(sys.argv[1])
+    raw = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip() else sys.stdin.read()
+    req = json.loads(raw)
     action = req.get("action") or "snapshot"
     display = req.get("display") or ":1"
     profile = req.get("profile") or ""
@@ -635,6 +613,23 @@ def main():
             if waited >= 1.0:
                 out["waitedSeconds"] = round(waited, 1)
             print(json.dumps(out))
+            return
+        if action == "fill_login":
+            val = evaluate(ws, FILL_LOGIN_JS, {
+                "expectedHost": req.get("expectedHost") or "",
+                "username": req.get("username") or "",
+                "password": req.get("password") or "",
+            }) or {}
+            if not val.get("ok"):
+                fail(val.get("error") or "could not fill the login form")
+            wait_for_visual_update(ws)
+            print(json.dumps({
+                "ok": True,
+                "action": "fill_login",
+                "filledUsername": bool(val.get("filledUsername")),
+                "submitted": bool(val.get("submitted")),
+                "restarted": restarted,
+            }))
             return
         if action == "type":
             sel = req.get("selector") or ""

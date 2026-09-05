@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Real bot desktop. Every boot must look like a Linux workstation:
 # XFCE panel + window manager, Chromium, zsh terminal. Never a kiosk/HTML shell.
 # Traditional Chinese fonts/locale so CJK text does not mojibake.
@@ -9,11 +10,19 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY migrations migrations
-RUN cargo build --release -p lazyboy-controld
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,id=lazyboy-computer-release,sharing=locked \
+    cargo build --locked --release -p lazyboy-controld && cp /src/target/release/lazyboy-controld /lazyboy-controld
 
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Keep Chromium, XFCE, CJK, AT-SPI, git. Skip Debian novnc (pulls nodejs),
+# fonts-noto-core (Latin is DejaVu/Liberation/huninn), and unused xterm.
+RUN printf '%s\n' \
+      'path-include=/usr/share/locale/zh_TW/*' \
+      'path-include=/usr/share/locale/zh/*' \
+      > /etc/dpkg/dpkg.cfg.d/zz-lazyboy-locale \
+  && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
     curl \
@@ -22,13 +31,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
-    fonts-noto-core \
     git \
+    htop \
     imagemagick \
     locales \
-    novnc \
     procps \
     python3 \
+    python3-websocket \
     util-linux \
     websockify \
     wmctrl \
@@ -44,17 +53,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xfdesktop4 \
     xdotool \
     xfwm4 \
-    xterm \
     xvfb \
     thunar \
     adwaita-icon-theme \
     gnome-themes-extra \
     librsvg2-common \
+    at-spi2-core \
+    libatk-adaptor \
+    python3-gi \
+    gir1.2-atspi-2.0 \
     zsh \
   && echo "zh_TW.UTF-8 UTF-8" >> /etc/locale.gen \
   && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
   && locale-gen \
-  && rm -rf /var/lib/apt/lists/*
+  && mkdir -p /usr/share/novnc \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/doc/* /usr/share/man/*
 
 # jf open 粉圓 (system UI) + MesloLGS NF (Powerlevel10k glyphs, CJK via fontconfig).
 RUN mkdir -p /usr/share/fonts/truetype/huninn /usr/share/fonts/truetype/meslo \
@@ -83,7 +96,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/zsh lazyboy \
     && mkdir -p /home/lazyboy /tmp/lazyboy /usr/share/lazyboy/skel /usr/share/lazyboy/xfce-skel /etc/gtk-3.0 /etc/fonts/conf.d \
     && chown -R 1000:1000 /home/lazyboy /tmp/lazyboy
 
-COPY --from=controld --chmod=755 /src/target/release/lazyboy-controld /usr/local/bin/lazyboy-controld
+COPY --from=controld --chmod=755 /lazyboy-controld /usr/local/bin/lazyboy-controld
 COPY --chmod=755 image/computer/lazyboy-screen /usr/local/bin/lazyboy-screen
 COPY --chmod=755 image/computer/lazyboy-browser /usr/local/bin/lazyboy-browser
 COPY --chmod=755 image/computer/lazyboy-terminal /usr/local/bin/lazyboy-terminal
@@ -100,20 +113,10 @@ COPY --chmod=644 image/computer/xfce/xfce4-desktop.xml /usr/share/lazyboy/xfce-s
 COPY --chmod=644 image/computer/xfce/thunar.xml /usr/share/lazyboy/xfce-skel/xfce4/xfconf/xfce-perchannel-xml/thunar.xml
 COPY --chmod=644 image/computer/xfce/terminal.desktop /usr/share/applications/lazyboy-terminal.desktop
 COPY --chmod=644 image/computer/xfce/browser.desktop /usr/share/applications/lazyboy-browser.desktop
-# Debian slim drops /usr/share/locale. Keep Traditional Chinese catalogs so
-# XFCE menus are not English. Hide stock xterm / duplicate terminal entries;
-# the panel launches lazyboy-terminal (zsh -l).
-RUN printf '%s\n' \
-      'path-include=/usr/share/locale/zh_TW/*' \
-      'path-include=/usr/share/locale/zh/*' \
-      > /etc/dpkg/dpkg.cfg.d/zz-lazyboy-locale \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends --reinstall \
-      xfce4-panel xfce4-terminal xfdesktop4 xfwm4 thunar xfce4-settings \
-      libxfce4ui-2-0 libxfce4ui-common libxfce4util7 libxfce4util-common \
-      xfce4-helpers libgarcon-common \
-  && rm -rf /var/lib/apt/lists/* \
-  && for f in xterm uxterm debian-xterm xfce4-terminal; do \
+# Traditional Chinese catalogs were retained during package installation.
+# Hide stock xterm / duplicate terminal entries; the panel launches
+# lazyboy-terminal (zsh -l).
+RUN for f in xterm uxterm debian-xterm xfce4-terminal; do \
        if [ -f "/usr/share/applications/${f}.desktop" ]; then \
          printf '\nNoDisplay=true\nHidden=true\n' >> "/usr/share/applications/${f}.desktop"; \
        fi; \
@@ -132,7 +135,8 @@ COPY --chmod=755 image/computer/start.sh /usr/local/bin/lazyboy-computer
 
 USER 1000:1000
 ENV HOME=/home/lazyboy DISPLAY=:1 SHELL=/bin/zsh TERM=xterm-256color \
-    LANG=zh_TW.UTF-8 LC_ALL=zh_TW.UTF-8 LANGUAGE=zh_TW:zh:en
+    LANG=zh_TW.UTF-8 LC_ALL=zh_TW.UTF-8 LANGUAGE=zh_TW:zh:en \
+    GTK_MODULES=atk-bridge GTK_A11Y=atspi GNOME_ACCESSIBILITY=1 NO_AT_BRIDGE=0
 WORKDIR /home/lazyboy
 EXPOSE 6080 6081 6082 6083 6084 6085 6086 6087
 CMD ["/usr/local/bin/lazyboy-computer"]

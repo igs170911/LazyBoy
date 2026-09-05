@@ -1,5 +1,10 @@
 use lazyboy_contracts::{ComputerAction, PointerButton, PointerType, ScrollDirection};
 
+pub fn is_browser_title(title: &str) -> bool {
+    let title = title.to_lowercase();
+    title.contains("chromium") || title.contains("chrome")
+}
+
 use crate::screen::{PRIMARY_DISPLAY, normalize_display};
 
 pub const DISPLAY: &str = PRIMARY_DISPLAY;
@@ -129,7 +134,8 @@ pub fn xdotool_argv_on(display: &str, action: &ComputerAction) -> Option<Vec<Str
         }
         ComputerAction::Wait { .. }
         | ComputerAction::Open { .. }
-        | ComputerAction::Launch { .. } => {
+        | ComputerAction::Launch { .. }
+        | ComputerAction::Ref { .. } => {
             return None;
         }
     }
@@ -160,6 +166,7 @@ pub fn action_pause_ms(action: &ComputerAction) -> u64 {
         ComputerAction::Focus { .. } => 90,
         ComputerAction::Open { .. } | ComputerAction::Launch { .. } => 220,
         ComputerAction::Wait { .. } => 0,
+        ComputerAction::Ref { .. } => 55,
     }
 }
 
@@ -256,6 +263,11 @@ pub fn parse_ui_elements(raw: &str) -> Vec<lazyboy_contracts::UiElement> {
                     .map(str::to_string),
                 kind: item
                     .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                role: item
+                    .get("role")
                     .and_then(serde_json::Value::as_str)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string),
@@ -455,8 +467,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_a11y_role_and_path() {
+        let elements = parse_ui_elements(
+            r#"[{"id":2,"title":"push button Open","selector":"0/3/1","kind":"a11y","role":"push button","x":8,"y":9,"w":40,"h":16}]"#,
+        );
+        assert_eq!(elements[0].kind.as_deref(), Some("a11y"));
+        assert_eq!(elements[0].role.as_deref(), Some("push button"));
+        assert_eq!(elements[0].selector.as_deref(), Some("0/3/1"));
+        assert!(elements[0].has_ref());
+    }
+
+    #[test]
+    fn browser_titles_match_chromium() {
+        assert!(is_browser_title("Example - Chromium"));
+        assert!(is_browser_title("chrome"));
+        assert!(!is_browser_title("Thunar"));
+    }
+
+    #[test]
     fn empty_or_junk_window_list_is_empty() {
         assert!(parse_ui_elements("").is_empty());
         assert!(parse_ui_elements("not-json").is_empty());
     }
+}
+
+/// Native clipboard path; text is supplied on stdin, never process arguments.
+pub fn paste_command_on(display: &str) -> Vec<String> {
+    vec![
+        "env".into(),
+        display_env(display),
+        "python3".into(),
+        "-c".into(),
+        include_str!("clipboard.py").into(),
+    ]
 }

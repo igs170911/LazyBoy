@@ -2,7 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-docker compose up -d postgres
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
 echo "waiting for postgres..."
 for _ in $(seq 1 40); do
   if docker compose exec -T postgres pg_isready -U lazyboy >/dev/null 2>&1; then

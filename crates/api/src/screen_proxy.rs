@@ -31,6 +31,18 @@ async fn proxy(state: AppState, bot_id: String, rest: String, req: Request) -> R
         .and_then(|value| value.to_str().ok())
         .map(|value| value.eq_ignore_ascii_case("websocket"))
         .unwrap_or(false);
+    if !upgrade {
+        if req.method() != axum::http::Method::GET && req.method() != axum::http::Method::HEAD {
+            return StatusCode::METHOD_NOT_ALLOWED.into_response();
+        }
+        if is_viewer_page(&rest) {
+            return viewer_page().await;
+        }
+        return trusted_asset(&rest).await;
+    }
+    if rest != "websockify" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let ensure = upgrade || is_viewer_page(&rest) || rest.contains("websockify");
     let port = match upstream_port(&state, &bot_id, ensure).await {
         Ok(port) => port,
@@ -47,7 +59,7 @@ async fn proxy(state: AppState, bot_id: String, rest: String, req: Request) -> R
     if is_viewer_page(&rest) {
         return viewer_page().await;
     }
-    http_proxy(port, &rest, req).await
+    StatusCode::NOT_FOUND.into_response()
 }
 
 fn is_viewer_page(rest: &str) -> bool {
@@ -71,7 +83,6 @@ async fn viewer_page() -> Response {
         "text/html; charset=utf-8".parse().unwrap(),
     );
     headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
     (StatusCode::OK, headers, html).into_response()
 }
 
@@ -129,49 +140,36 @@ fn rewrite_upstream(url: &str) -> String {
     url.replace("127.0.0.1", &host).replace("localhost", &host)
 }
 
-async fn http_proxy(port: u16, rest: &str, req: Request) -> Response {
-    let host = std::env::var("LAZYBOY_SCREEN_UPSTREAM").unwrap_or_else(|_| "127.0.0.1".into());
-    let path = if rest.is_empty() {
-        "vnc_lite.html"
-    } else {
-        rest
-    };
-    let query = req.uri().query().unwrap_or_default();
-    let url = if query.is_empty() {
-        format!("http://{host}:{port}/{path}")
-    } else {
-        format!("http://{host}:{port}/{path}?{query}")
-    };
-    let client = reqwest::Client::new();
-    let method = reqwest::Method::from_bytes(req.method().as_str().as_bytes())
-        .unwrap_or(reqwest::Method::GET);
-    match client.request(method, url).send().await {
-        Ok(upstream) => {
-            let status =
-                StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let content_type = upstream
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("application/octet-stream")
-                .to_string();
-            match upstream.bytes().await {
-                Ok(bytes) => {
-                    let mut headers = HeaderMap::new();
-                    if let Ok(value) = content_type.parse() {
-                        headers.insert(header::CONTENT_TYPE, value);
-                    }
-                    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
-                    headers.insert(
-                        header::HeaderName::from_static("cross-origin-resource-policy"),
-                        "cross-origin".parse().unwrap(),
-                    );
-                    (status, headers, bytes).into_response()
-                }
-                Err(_) => StatusCode::BAD_GATEWAY.into_response(),
-            }
+fn safe_asset(rest: &str) -> bool {
+    (rest.starts_with("core/") || rest.starts_with("vendor/"))
+        && rest.ends_with(".js")
+        && rest
+            .split('/')
+            .all(|p| !p.is_empty() && p != "." && p != "..")
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+}
+
+async fn trusted_asset(rest: &str) -> Response {
+    if !safe_asset(rest) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let root = std::env::var("LAZYBOY_NOVNC_DIR").unwrap_or_else(|_| {
+        let web = std::env::var("LAZYBOY_WEB_DIR").unwrap_or_else(|_| "apps/web".into());
+        if std::path::Path::new(&web).join("novnc").is_dir() {
+            format!("{web}/novnc")
+        } else {
+            "apps/web/node_modules/@novnc/novnc".into()
         }
-        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    });
+    match tokio::fs::read(std::path::Path::new(&root).join(rest)).await {
+        Ok(bytes) => (
+            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -226,6 +224,24 @@ async fn proxy_socket(mut client: WebSocket, port: u16, rest: String) {
                     Some(Err(_)) => break,
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use super::*;
+    #[test]
+    fn only_trusted_novnc_scripts_are_served() {
+        assert!(safe_asset("core/rfb.js"));
+        for path in [
+            "../secret.js",
+            "core/../../secret.js",
+            "core/%2e%2e/x.js",
+            "evil.html",
+            "/core/rfb.js",
+        ] {
+            assert!(!safe_asset(path));
         }
     }
 }

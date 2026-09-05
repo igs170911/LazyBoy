@@ -42,6 +42,24 @@ pub fn cdp_command(request: &Value) -> Vec<String> {
     cdp_command_on(PRIMARY_DISPLAY, None, request)
 }
 
+/// Same as `cdp_command_on` but the JSON body is meant to arrive on stdin
+/// so secrets never appear on the process argv.
+pub fn cdp_stdin_command_on(display: &str, profile: Option<&str>) -> Vec<String> {
+    let mut env = vec![
+        "env".into(),
+        format!("DISPLAY={}", normalize_display(display)),
+    ];
+    if let Some(profile) = profile.filter(|value| !value.is_empty()) {
+        env.push(format!("LAZYBOY_BROWSER_PROFILE={profile}"));
+    }
+    env.extend([
+        "python3".into(),
+        "-c".into(),
+        CDP_PY.into(),
+    ]);
+    env
+}
+
 /// Marker embedded in the recorder's argv so `pkill -f` can find exactly one
 /// teaching session without touching other python processes.
 pub fn teach_recorder_tag(skill_id: &str) -> String {
@@ -132,21 +150,7 @@ pub fn parse_cdp_page(raw: &str) -> CdpPage {
 }
 
 pub fn merge_page_elements(windows: Vec<UiElement>, page: &[UiElement]) -> Vec<UiElement> {
-    if page.is_empty() {
-        return windows;
-    }
-    let mut elements = page.to_vec();
-    let mut next = elements.len() as u32 + 1;
-    for mut window in windows {
-        let title = window.title.to_lowercase();
-        if title.contains("chromium") || title.contains("chrome") {
-            continue;
-        }
-        window.id = next;
-        next += 1;
-        elements.push(window);
-    }
-    elements
+    crate::merge_ui_elements(windows, page, &[])
 }
 
 #[cfg(test)]

@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"/>
+  <title>LazyBoy hero</title>
+  <style>
+    @font-face {
+      font-family: Huninn;
+      font-weight: 400;
+      src: url("../apps/web/node_modules/@fontsource/huninn/files/huninn-latin-400-normal.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F;
+    }
+    @font-face {
+      font-family: Huninn;
+      font-weight: 400;
+      src: url("../apps/web/node_modules/@fontsource/huninn/files/huninn-latin-ext-400-normal.woff2") format("woff2");
+      unicode-range: U+0100-02AF, U+0304, U+0308, U+0329, U+1E00-1EFF;
+    }
+    @font-face {
+      font-family: Huninn;
+      font-weight: 400;
+      src: url("../apps/web/node_modules/@fontsource/huninn/files/huninn-chinese-traditional-400-normal.woff2") format("woff2");
+      unicode-range: U+4E00-9FFF, U+3400-4DBF, U+F900-FAFF, U+3000-303F, U+FF00-FFEF;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 1280px;
+      height: 640px;
+      overflow: hidden;
+      background: #f3f3f5;
+      color: #161618;
+      font-family: Huninn, "jf open 粉圓", "PingFang TC", sans-serif;
+    }
+    .page {
+      width: 1280px;
+      height: 640px;
+      padding: 28px 48px 0;
+      position: relative;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 36px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 20px;
+      letter-spacing: .02em;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 28px;
+      padding: 0 12px;
+      border: 1px solid #e4e4e8;
+      border-radius: 999px;
+      background: #fff;
+      color: #5c5c64;
+      font-size: 12px;
+    }
+    .pill b {
+      color: #0f766e;
+      font-weight: 400;
+    }
+    .copy {
+      text-align: center;
+      margin: 22px auto 18px;
+      max-width: 760px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 42px;
+      font-weight: 400;
+      letter-spacing: .01em;
+      line-height: 1.15;
+    }
+    .lead {
+      margin: 10px 0 0;
+      color: #6b6b73;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+    .window {
+      width: 1184px;
+      height: 470px;
+      margin: 0 auto;
+      border-radius: 16px 16px 0 0;
+      overflow: hidden;
+      background: #0d0d0e;
+      box-shadow: 0 24px 70px rgba(16, 16, 20, .28), 0 0 0 1px rgba(0,0,0,.08);
+      display: grid;
+      grid-template-rows: 36px 1fr;
+    }
+    .chrome {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 14px;
+      background: #161618;
+      border-bottom: 1px solid #202023;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot.r { background: #ff5f57; }
+    .dot.y { background: #febc2e; }
+    .dot.g { background: #28c840; }
+    .app {
+      display: grid;
+      grid-template-columns: 228px 1fr 300px;
+      min-height: 0;
+      color: #dfdfe2;
+      background: #050506;
+    }
+    .side, .chat, .desk {
+      min-width: 0;
+      min-height: 0;
+    }
+    .side {
+      background: #0b0b0c;
+      border-right: 1px solid #171719;
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .ws {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 6px 8px;
+      font-size: 14px;
+    }
+    .ws i {
+      width: 26px; height: 26px;
+      display: grid; place-items: center;
+      border-radius: 50%;
+      background: #151517;
+      color: #85858a;
+      font-size: 9px;
+      font-style: normal;
+      letter-spacing: .04em;
+    }
+    .search {
+      height: 34px;
+      border: 1px solid #202023;
+      border-radius: 12px;
+      background: #121214;
+      color: #626267;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      font-size: 12px;
+      gap: 8px;
+    }
+    .search svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+    .label {
+      padding: 8px 8px 2px;
+      color: #626267;
+      font-size: 10px;
+      letter-spacing: .06em;
+    }
+    .bot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-radius: 12px;
+    }
+    .bot.on { background: #171719; }
+    .bot strong { display: block; font-size: 13px; font-weight: 400; }
+    .bot small { display: block; color: #85858a; font-size: 11px; margin-top: 1px; }
+    .bot .copy { min-width: 0; flex: 1; }
+    .bot .copy strong, .bot .copy small {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .time { color: #626267; font-size: 10px; align-self: start; }
+    .chat {
+      background: #0d0d0e;
+      display: grid;
+      grid-template-rows: 52px 1fr 118px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      border-bottom: 1px solid #171719;
+      font-size: 15px;
+    }
+    .grow { flex: 1; }
+    .tools {
+      display: flex; gap: 2px; padding: 3px;
+      border: 1px solid #29292d; border-radius: 11px; background: rgba(18,18,20,.86);
+    }
+    .tools i {
+      width: 26px; height: 26px; border-radius: 8px;
+      display: grid; place-items: center;
+      font-style: normal;
+    }
+    .tools i.on { background: #151517; }
+    .tools svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+    .tools i.on svg { stroke: #f1f1f2; }
+    .tools i:not(.on) svg { stroke: #85858a; }
+    .msgs {
+      padding: 18px 28px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .bubble {
+      max-width: 78%;
+      padding: 10px 14px;
+      border-radius: 18px;
+      line-height: 1.5;
+      font-size: 13px;
+      white-space: pre-wrap;
+    }
+    .me { align-self: flex-end; background: #f1f1ef; color: #1a1a1a; }
+    .them { align-self: flex-start; background: #19191c; }
+    .dock {
+      padding: 8px 22px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .think {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px;
+    }
+    .think .lbl {
+      background: linear-gradient(90deg, #7a8088 0%, #7a8088 28%, #fff 50%, #7a8088 72%, #7a8088 100%);
+      background-size: 220% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .think small { color: #85858a; }
+    .composer {
+      height: 52px;
+      display: flex; align-items: center; gap: 8px;
+      border: 1px solid #29292d;
+      background: #121214;
+      border-radius: 22px;
+      padding: 6px 8px;
+    }
+    .plus, .send {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: grid; place-items: center;
+    }
+    .plus { color: #85858a; font-size: 20px; }
+    .ph { flex: 1; color: #626267; font-size: 13px; }
+    .send { background: #f1f1ef; color: #1b1b1c; font-size: 14px; }
+    .desk {
+      background: #0a0a0b;
+      border-left: 1px solid #171719;
+      padding: 10px 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .desk-h {
+      display: flex; align-items: center; gap: 8px;
+      color: #f1f1f2; font-size: 13px;
+    }
+    .desk-h .dot-run {
+      width: 7px; height: 7px; border-radius: 50%; background: #4ecb71;
+    }
+    .desk-h small { color: #85858a; margin-left: auto; font-size: 11px; }
+    .preview {
+      position: relative;
+      flex: 1;
+      border: 1px solid #29292d;
+      border-radius: 12px;
+      background: #101012;
+      overflow: hidden;
+      min-height: 168px;
+    }
+    .desktop {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(circle at 20% 0%, #1a2430 0%, transparent 42%),
+        linear-gradient(180deg, #15202b, #0d1218);
+    }
+    .win {
+      position: absolute;
+      left: 14px; top: 12px; right: 14px; bottom: 28px;
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+      box-shadow: 0 10px 28px rgba(0,0,0,.35);
+      display: grid;
+      grid-template-rows: 22px 28px 1fr;
+    }
+    .win-bar { background: #e8e8ea; display: flex; align-items: center; gap: 5px; padding: 0 8px; }
+    .win-bar i { width: 7px; height: 7px; border-radius: 50%; background: #c4c4c8; font-style: normal; }
+    .addr {
+      background: #f4f4f6;
+      display: flex; align-items: center;
+      padding: 0 10px;
+      color: #444; font-size: 10px;
+      border-bottom: 1px solid #ececf0;
+    }
+    .page-body { padding: 12px 14px; color: #222; }
+    .page-body h3 { margin: 0 0 6px; font-size: 13px; font-weight: 400; }
+    .page-body p { margin: 0; color: #666; font-size: 11px; line-height: 1.45; }
+    .progress {
+      margin-top: 10px; height: 6px; border-radius: 99px; background: #ececf0; overflow: hidden;
+    }
+    .progress b { display: block; width: 62%; height: 100%; background: #3ec5a8; }
+    .next {
+      margin-top: 10px; height: 24px; width: 64px;
+      border-radius: 6px; background: #1a1a1c; color: #fff;
+      display: grid; place-items: center; font-size: 11px;
+    }
+    .panel {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 22px;
+      background: #1b242e; border-top: 1px solid #2a3540;
+    }
+    .cap {
+      display: flex; justify-content: space-between;
+      color: #85858a; font-size: 11px;
+    }
+    .btn {
+      height: 28px; padding: 0 10px; border-radius: 8px;
+      border: 1px solid #29292d; color: #dfdfe2; display: grid; place-items: center;
+      font-size: 12px;
+    }
+    .btn.cream { background: #f1f1ef; color: #181819; border-color: #f1f1ef; }
+    .actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+    /* blobatar-ish faces */
+    .blob { width: 32px; height: 32px; flex: 0 0 32px; }
+    .blob.sm { width: 22px; height: 22px; flex-basis: 22px; }
+    .blob.md { width: 28px; height: 28px; flex-basis: 28px; }
+    .think-ring { position: relative; }
+    .think-ring:after {
+      content: "";
+      position: absolute; inset: -5px;
+      border-radius: 50%;
+      background: conic-gradient(from 40deg, transparent 0 8%, #ff4fd8 12%, #7c5cff 18%, transparent 26% 48%, #34d9ff 54%, transparent 62%);
+      -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+      mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="top">
+      <div class="brand">
+        <svg class="blob md" viewBox="0 0 64 64" aria-hidden="true">
+          <path fill="#3ec5a8" d="M33 5c11.5 1 24 11 23 26-1 14-11 27-25 28S6 47 7 31 21 4 33 5z"/>
+          <ellipse cx="25.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/>
+          <ellipse cx="40.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/>
+          <circle cx="26.8" cy="27.2" r="1.3" fill="#f3f3f6"/>
+          <circle cx="41.8" cy="27.2" r="1.3" fill="#f3f3f6"/>
+        </svg>
+        LazyBoy
+      </div>
+      <div class="pill"><b>本機開源</b> 每個 Agent 有自己的 Linux 桌面</div>
+    </div>
+    <div class="copy">
+      <h1>給 Agent 一台真的電腦</h1>
+      <p class="lead">在瀏覽器裡開機器人。它會自己開網頁、敲指令、學你示範過的流程。<br/>金鑰、模型、桌面都在你這台機器上。</p>
+    </div>
+    <div class="window">
+      <div class="chrome"><i class="dot r"></i><i class="dot y"></i><i class="dot g"></i></div>
+      <div class="app">
+        <aside class="side">
+          <div class="ws"><i>LB</i> 本機工作區</div>
+          <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>搜尋</div>
+          <div class="label">已釘選</div>
+          <div class="bot on">
+            <span class="think-ring">
+              <svg class="blob" viewBox="0 0 64 64"><path fill="#3ec5a8" d="M33 5c11.5 1 24 11 23 26-1 14-11 27-25 28S6 47 7 31 21 4 33 5z"/><ellipse cx="25.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><ellipse cx="40.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><circle cx="26.8" cy="27.2" r="1.3" fill="#f3f3f6"/><circle cx="41.8" cy="27.2" r="1.3" fill="#f3f3f6"/></svg>
+            </span>
+            <div class="copy"><strong>工程之神</strong><small>正在第 12 頁，等 Next 亮起</small></div>
+            <span class="time">14:08</span>
+          </div>
+          <div class="label">Agent</div>
+          <div class="bot">
+            <svg class="blob" viewBox="0 0 64 64"><path fill="#f5a03c" d="M30 7c13-1 26 10 25 24-1 15-12 26-25 27S5 46 7 31 17 8 30 7z"/><ellipse cx="25" cy="30" rx="4" ry="4.8" fill="#1b1b22"/><ellipse cx="40" cy="30" rx="4" ry="4.8" fill="#1b1b22"/><circle cx="26.3" cy="28.3" r="1.2" fill="#f3f3f6"/><circle cx="41.3" cy="28.3" r="1.2" fill="#f3f3f6"/></svg>
+            <div class="copy"><strong>早報摘要</strong><small>明天 09:00 會跑</small></div>
+          </div>
+          <div class="bot">
+            <svg class="blob" viewBox="0 0 64 64"><path fill="#6a6bf5" d="M34 6c12 2 22 12 21 25s-12 26-25 27S6 46 8 32 22 4 34 6z"/><ellipse cx="26" cy="29" rx="4.1" ry="5" fill="#f3f3f6"/><ellipse cx="41" cy="29" rx="4.1" ry="5" fill="#f3f3f6"/><circle cx="24.8" cy="27.4" r="1.2" fill="#1b1b22"/><circle cx="39.8" cy="27.4" r="1.2" fill="#1b1b22"/></svg>
+            <div class="copy"><strong>客服助手</strong><small>已記住回覆語氣</small></div>
+          </div>
+        </aside>
+        <main class="chat">
+          <header class="topbar">
+            <svg class="blob sm" viewBox="0 0 64 64"><path fill="#3ec5a8" d="M33 5c11.5 1 24 11 23 26-1 14-11 27-25 28S6 47 7 31 21 4 33 5z"/><ellipse cx="25.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><ellipse cx="40.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><circle cx="26.8" cy="27.2" r="1.3" fill="#f3f3f6"/><circle cx="41.8" cy="27.2" r="1.3" fill="#f3f3f6"/></svg>
+            工程之神
+            <span style="color:#85858a;font-size:12px">STAR 訓練　▾</span>
+            <span class="grow"></span>
+            <div class="tools">
+              <i class="on"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg></i>
+              <i><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V18h8v-2.3A7 7 0 0 0 12 3z"/><path d="M9 21h6"/></svg></i>
+              <i><svg viewBox="0 0 24 24"><path d="M12 5v2M12 17v2M5 12h2M17 12h2M7 7l1.5 1.5M15.5 15.5L17 17M7 17l1.5-1.5M15.5 8.5L17 7"/><circle cx="12" cy="12" r="3"/></svg></i>
+            </div>
+          </header>
+          <div class="msgs">
+            <div class="bubble me">幫我把 STAR 那堂課看完，並把測驗交了。</div>
+            <div class="bubble them">電腦已開。現在在第 12 / 24 頁，影片倒數結束我就按 Next。密碼欄我不會記。</div>
+          </div>
+          <div class="dock">
+            <div class="think">
+              <span class="think-ring"><svg class="blob sm" viewBox="0 0 64 64"><path fill="#3ec5a8" d="M33 5c11.5 1 24 11 23 26-1 14-11 27-25 28S6 47 7 31 21 4 33 5z"/><ellipse cx="25.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><ellipse cx="40.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><circle cx="26.8" cy="27.2" r="1.3" fill="#f3f3f6"/><circle cx="41.8" cy="27.2" r="1.3" fill="#f3f3f6"/></svg></span>
+              <span class="lbl">正在工作…</span>
+              <small>click Next</small>
+            </div>
+            <div class="composer"><div class="plus">＋</div><div class="ph">傳訊息給 工程之神</div><div class="send">↑</div></div>
+          </div>
+        </main>
+        <aside class="desk">
+          <div class="desk-h">工程之神 的電腦 <i class="dot-run"></i> <small>執行中</small></div>
+          <div class="preview">
+            <div class="desktop">
+              <div class="win">
+                <div class="win-bar"><i></i><i></i><i></i></div>
+                <div class="addr">star.example / course / 12</div>
+                <div class="page-body">
+                  <h3>Workplace Safety · 第 12 頁</h3>
+                  <p>看完這段說明後按 Next。頁面倒數結束才會解鎖。</p>
+                  <div class="progress"><b></b></div>
+                  <div class="next">Next</div>
+                </div>
+              </div>
+              <div class="panel"></div>
+            </div>
+          </div>
+          <div class="cap"><span>獨立螢幕</span><span>放大</span></div>
+          <div class="actions"><div class="btn cream">接手操作</div><div class="btn">停止任務</div></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

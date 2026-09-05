@@ -10,6 +10,10 @@ export TERM="${TERM:-xterm-256color}"
 export LANG="${LANG:-zh_TW.UTF-8}"
 export LC_ALL="${LC_ALL:-zh_TW.UTF-8}"
 export LANGUAGE="${LANGUAGE:-zh_TW:zh:en}"
+export GTK_MODULES="${GTK_MODULES:-atk-bridge}"
+export GTK_A11Y="${GTK_A11Y:-atspi}"
+export GNOME_ACCESSIBILITY="${GNOME_ACCESSIBILITY:-1}"
+export NO_AT_BRIDGE="${NO_AT_BRIDGE:-0}"
 mkdir -p "$HOME" /tmp/lazyboy /tmp/.X11-unix
 rm -f /tmp/lazyboy/ready
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"

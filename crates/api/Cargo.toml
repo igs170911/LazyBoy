@@ -35,3 +35,9 @@ dotenvy = "0.15"
 fastembed = "6.0.2"
 rmcp = { version = "3.2", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 http = "1"
+aes-gcm = "0.10"
+cron = "0.15"
+chrono-tz = "0.10"
+rand = "0.8"
+
+cap-std = "3"

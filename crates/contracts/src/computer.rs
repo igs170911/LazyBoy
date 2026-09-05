@@ -189,6 +189,10 @@ pub struct ComputerStatus {
     /// What the active run is doing right now ("思考中", "browser: click #12"…).
     #[serde(default)]
     pub busy_step: Option<String>,
+    /// True only while the active run holds the desktop screen lease.
+    /// Chat-only replies set busy_session_id but not this.
+    #[serde(default)]
+    pub using_computer: bool,
     /// Run paused in `waiting_takeover` (bot asked for, or user forced, control).
     #[serde(default)]
     pub waiting_run_id: Option<String>,

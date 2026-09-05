@@ -5,9 +5,10 @@ use lazyboy_contracts::{
 };
 use lazyboy_control::{
     ActionError, ActionRequest, AdapterContext, CdpPage, CommandRequest, ComputerRef,
-    SandboxProvider, apply_element_targets, cdp_command_on, element_id, format_ui_elements,
-    frames_match, merge_page_elements, overlay_elements, parse_cdp_page, parse_computer_actions,
-    resolve_bot_workspace_cwd, resolve_bot_workspace_path,
+    SandboxProvider, a11y_command_on, apply_element_targets, browser_gui_block, cdp_command_on,
+    click_fingerprint, element_id, format_ui_elements, frames_match, merge_ui_elements,
+    cdp_stdin_command_on, overlay_elements, parse_a11y_page, parse_cdp_page, parse_computer_actions,
+    resolve_bot_workspace_cwd, resolve_bot_workspace_path, should_block_stale_click,
 };
 use rig_core::completion::ToolDefinition;
 use serde_json::{Value, json};
@@ -20,15 +21,16 @@ use crate::memory::{CreateMemoryInput, MemoryService};
 
 pub struct ToolCtx {
     pub sandbox: std::sync::Arc<dyn SandboxProvider>,
-    pub computer: ComputerRef,
-    pub context: AdapterContext,
+    pub computer: Mutex<Option<ComputerRef>>,
+    pub context: Mutex<AdapterContext>,
     pub mode: ComputerMode,
     pub bot_id: String,
     pub vision: bool,
-    pub gui_block: Option<String>,
+    pub gui_block: Mutex<Option<String>>,
     pub previous_frame: Mutex<Option<String>>,
     pub elements: Mutex<Vec<UiElement>>,
     pub miss_streak: Mutex<u32>,
+    pub last_click_key: Mutex<Option<String>>,
     pub click_misses: Mutex<u32>,
     pub takeover_requested: Mutex<bool>,
     pub pool: PgPool,
@@ -40,16 +42,30 @@ pub struct ToolCtx {
     pub mcp: McpHub,
 }
 
+impl ToolCtx {
+    pub fn computer_ref(&self) -> ComputerRef {
+        self.computer
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("computer sandbox is not ready")
+    }
+
+    pub fn adapter(&self) -> AdapterContext {
+        self.context.lock().unwrap().clone()
+    }
+}
+
 pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
     let mut definitions = vec![
         ToolDefinition {
             name: "computer_observe".into(),
-            description: "Capture a fresh desktop screenshot plus numbered targets. When Chromium is open this is the page DOM (click those ids); otherwise native windows. The image attaches only if the screen changed.".into(),
+            description: "Capture a fresh desktop screenshot plus numbered targets (page DOM when Chromium is open, otherwise AT-SPI buttons/fields, otherwise windows). Only when the user asked you to do something on the computer. Not for greetings, chat, or listing files — those need no screenshot. The image attaches only if the screen changed.".into(),
             parameters: json!({"type":"object","properties":{}}),
         },
         ToolDefinition {
             name: "computer_act".into(),
-            description: "Drive native desktop GUI (dialogs, canvas, XFCE). Prefer element id from the latest observation. For Chromium pages use the browser tool instead of clicking the window. x,y are 1280x800 fallback.".into(),
+            description: "Drive native desktop GUI (dialogs, file manager, XFCE) when the user asked you to operate the computer. Prefer element id from the latest observation (AT-SPI, not pixels). For Chromium pages use the browser tool — computer_act clicks on the browser window are rejected. x,y are 1280x800 fallback for canvas / no-tree widgets.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -85,7 +101,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "shell".into(),
-            description: "Run a command inside this bot's computer.".into(),
+            description: "Run a command inside this bot's computer when the user asked you to do work there. Not for greetings, small talk, or questions you can answer in text.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -97,17 +113,17 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "list_files".into(),
-            description: "List files in this bot's home.".into(),
+            description: "List files in this bot's home when the user asked about workspace files. Not for greetings or chat — do not ls the desktop to start a conversation.".into(),
             parameters: json!({"type":"object","properties":{"path":{"type":"string"}}}),
         },
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read a UTF-8 text file from this bot's home.".into(),
+            description: "Read a UTF-8 text file from this bot's home when the user asked about that file. Not for greetings or chat.".into(),
             parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
         },
         ToolDefinition {
             name: "write_file".into(),
-            description: "Write a UTF-8 file into this bot's home.".into(),
+            description: "Write a UTF-8 file into this bot's home when the user asked you to save something there. Not for greetings or chat.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{"path":{"type":"string"},"content":{"type":"string"}},
@@ -116,12 +132,12 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "open_path".into(),
-            description: "Open a workspace file or http(s) URL on the desktop.".into(),
+            description: "Open a workspace file or http(s) URL on the desktop when the user asked you to open it. Not for greetings or chat.".into(),
             parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
         },
         ToolDefinition {
             name: "browser".into(),
-            description: "Control Chromium through the page DOM. Prefer this over computer_act for anything in the browser. snapshot returns numbered elements and visible text (no screenshot). click/type/navigate by element id or CSS selector. click scrolls off-screen elements into view and, if the control is [disabled], waits up to 45s (waitMs to change) for it to enable before clicking. Ids are renumbered after every page change. The human still sees the live window.".into(),
+            description: "Control Chromium through the page DOM when the user asked you to use the browser. Prefer this over computer_act for anything in the page. snapshot returns numbered elements and visible text (no screenshot). click/type/navigate by element id or CSS selector. click scrolls off-screen elements into view and, if the control is [disabled], waits up to 45s (waitMs to change) for it to enable before clicking. Ids are renumbered after every page change. The human still sees the live window.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -139,7 +155,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "launch_app".into(),
-            description: "Launch browser or terminal on the desktop.".into(),
+            description: "Launch browser or terminal on the desktop when the user asked you to open an app.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{"application":{"type":"string"},"uri":{"type":"string"}},
@@ -157,8 +173,61 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "request_takeover".into(),
-            description: "Ask the user to take over for passwords, 2FA, CAPTCHA, login walls, or when the right on-screen control cannot be found. Never ask them to paste secrets in chat.".into(),
-            parameters: json!({"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}),
+            description: "Ask the user to take over the live screen for passwords, 2FA, CAPTCHA, or a login wall when no saved account fits. Never ask them to paste secrets in chat. Prefer use_saved_login when list_accounts has a matching site.".into(),
+            parameters: json!({
+                "type":"object",
+                "properties":{
+                    "reason":{"type":"string"},
+                    "site":{"type":"string","description":"Site or app name, e.g. Gmail"},
+                    "why":{"type":"string","description":"What you will do once they have signed in"}
+                },
+                "required":["reason"]
+            }),
+        },
+        ToolDefinition {
+            name: "list_accounts".into(),
+            description: "List saved logins for this bot (site + username only, never passwords). Use before filling a login wall. If the site is missing, tell the human to add it under 帳號 — do not ask them to paste a password.".into(),
+            parameters: json!({"type":"object","properties":{}}),
+        },
+        ToolDefinition {
+            name: "use_saved_login".into(),
+            description: "Fill the current Chromium login form with a saved account. Pass only accountId from list_accounts. The password never appears in chat. If 2FA or CAPTCHA appears afterwards, call request_takeover.".into(),
+            parameters: json!({
+                "type":"object",
+                "properties":{"accountId":{"type":"string"}},
+                "required":["accountId"]
+            }),
+        },
+        ToolDefinition {
+            name: "create_schedule".into(),
+            description: "Schedule recurring work for this bot. Use when the user says every day / weekdays / every Monday / from now on at 9. cron is five fields in the bot timezone (default Asia/Taipei), e.g. \"0 9 * * 1-5\".".into(),
+            parameters: json!({
+                "type":"object",
+                "properties":{
+                    "name":{"type":"string"},
+                    "cron":{"type":"string"},
+                    "instructions":{"type":"string","description":"What to do each time it fires, written to yourself."},
+                    "timezone":{"type":"string"}
+                },
+                "required":["name","cron","instructions"]
+            }),
+        },
+        ToolDefinition {
+            name: "list_schedules".into(),
+            description: "List this bot's scheduled jobs.".into(),
+            parameters: json!({"type":"object","properties":{}}),
+        },
+        ToolDefinition {
+            name: "cancel_schedule".into(),
+            description: "Disable or delete a scheduled job by id from list_schedules.".into(),
+            parameters: json!({
+                "type":"object",
+                "properties":{
+                    "scheduleId":{"type":"string"},
+                    "delete":{"type":"boolean"}
+                },
+                "required":["scheduleId"]
+            }),
         },
         ToolDefinition {
             name: "use_skill".into(),
@@ -207,6 +276,7 @@ pub struct ToolOutcome {
     pub text: String,
     pub image: Option<Vec<u8>>,
     pub pause: bool,
+    pub blocks: Vec<Value>,
 }
 
 pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
@@ -234,8 +304,14 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
                     .to_string(),
                 image: None,
                 pause: true,
+                blocks: login_blocks(args),
             }
         }
+        "list_accounts" => list_saved_accounts(ctx).await,
+        "use_saved_login" => use_saved_login(ctx, args).await,
+        "create_schedule" => create_schedule_tool(ctx, args).await,
+        "list_schedules" => list_schedules_tool(ctx).await,
+        "cancel_schedule" => cancel_schedule_tool(ctx, args).await,
         "use_skill" => {
             let name = args.get("name").and_then(Value::as_str).unwrap_or("");
             let skills = crate::skills::saved_skills(&ctx.pool, &ctx.bot_id).await;
@@ -263,6 +339,7 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
             text: format!("unknown tool {other}"),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -337,15 +414,17 @@ fn text_outcome(text: impl Into<String>) -> ToolOutcome {
         text: text.into(),
         image: None,
         pause: false,
+        blocks: Vec::new(),
     }
 }
 
 fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
-    if let Some(message) = &ctx.gui_block {
+    if let Some(message) = ctx.gui_block.lock().unwrap().clone() {
         return Some(ToolOutcome {
-            text: message.clone(),
+            text: message,
             image: None,
             pause: false,
+            blocks: Vec::new(),
         });
     }
     if ctx.vision {
@@ -355,17 +434,16 @@ fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
             text: "This model cannot see the screen. Use shell and file tools, or pick a vision model.".into(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         })
     }
 }
 
 fn observation_text(note: &str, observation: &ComputerObservation, unchanged: bool) -> String {
-    let label = if observation
-        .elements
-        .iter()
-        .any(|element| element.kind.as_deref() == Some("dom"))
-    {
-        "Clickable page elements"
+    let label = if observation.elements.iter().any(|element| {
+        matches!(element.kind.as_deref(), Some("dom") | Some("a11y"))
+    }) {
+        "Clickable controls"
     } else {
         "Clickable windows"
     };
@@ -389,16 +467,17 @@ async fn observe(ctx: &ToolCtx) -> ToolOutcome {
     if let Some(blocked) = vision_guard(ctx) {
         return blocked;
     }
-    match ctx.sandbox.observe(&ctx.computer, &ctx.context).await {
+    match ctx.sandbox.observe(&ctx.computer_ref(), &ctx.adapter()).await {
         Ok(observation) => {
             let (observation, note) =
-                attach_page_elements(ctx, observation, "computer observed").await;
+                attach_ui_elements(ctx, observation, "computer observed").await;
             pack_observation(ctx, &note, observation)
         }
         Err(error) => ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -416,34 +495,95 @@ async fn wait_then_observe(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     if vision_guard(ctx).is_some() {
         return text_outcome(format!("waited {seconds:.0}s"));
     }
-    match ctx.sandbox.observe(&ctx.computer, &ctx.context).await {
+    match ctx.sandbox.observe(&ctx.computer_ref(), &ctx.adapter()).await {
         Ok(observation) => {
             let note = format!("waited {seconds:.0}s");
-            let (observation, note) = attach_page_elements(ctx, observation, &note).await;
+            let (observation, note) = attach_ui_elements(ctx, observation, &note).await;
             pack_observation(ctx, &note, observation)
         }
         Err(error) => text_outcome(format!("waited {seconds:.0}s; observe failed: {error}")),
     }
 }
 
-async fn attach_page_elements(
+async fn attach_ui_elements(
     ctx: &ToolCtx,
     mut observation: ComputerObservation,
     note: &str,
 ) -> (ComputerObservation, String) {
-    let Some(page) = cdp_snapshot(ctx, false).await else {
-        return (observation, note.to_string());
-    };
-    observation.elements = merge_page_elements(observation.elements, &page.elements);
+    let page = cdp_snapshot(ctx, false).await;
+    let include_browser = page
+        .as_ref()
+        .map(|page| !page.ok || page.elements.is_empty())
+        .unwrap_or(true);
+    let a11y = a11y_snapshot(ctx, include_browser).await;
+    let page_elements = page
+        .as_ref()
+        .map(|page| page.elements.as_slice())
+        .unwrap_or(&[]);
+    let a11y_elements = a11y
+        .as_ref()
+        .filter(|page| page.ok)
+        .map(|page| page.elements.as_slice())
+        .unwrap_or(&[]);
+    observation.elements = merge_ui_elements(observation.elements, page_elements, a11y_elements);
     let mut note = note.to_string();
-    if !page.url.is_empty() || !page.title.is_empty() {
-        note.push_str(&format!("\nPage: {} {}", page.title, page.url));
-    }
-    if !page.text.is_empty() {
-        note.push_str("\nVisible text:\n");
-        note.push_str(&page.text);
+    if let Some(page) = page.as_ref().filter(|page| page.ok) {
+        if !page.url.is_empty() || !page.title.is_empty() {
+            note.push_str(&format!("\nPage: {} {}", page.title, page.url));
+        }
+        if !page.text.is_empty() {
+            note.push_str("\nVisible text:\n");
+            note.push_str(&page.text);
+        }
     }
     (observation, note)
+}
+
+async fn a11y_snapshot(ctx: &ToolCtx, include_browser: bool) -> Option<lazyboy_control::A11yPage> {
+    let page = a11y_call(
+        ctx,
+        json!({"action": "snapshot", "includeBrowser": include_browser}),
+    )
+    .await;
+    if page.ok {
+        Some(page)
+    } else {
+        None
+    }
+}
+
+async fn a11y_call(ctx: &ToolCtx, request: serde_json::Value) -> lazyboy_control::A11yPage {
+    let adapter = ctx.adapter();
+    let display = adapter.display.as_deref().unwrap_or(":1");
+    let argv = a11y_command_on(display, &request);
+    match ctx
+        .sandbox
+        .execute(
+            &ctx.computer_ref(),
+            CommandRequest {
+                argv,
+                cwd: None,
+                timeout_ms: Some(8_000),
+                stdin: None,
+            },
+            &ctx.adapter(),
+        )
+        .await
+    {
+        Ok(result) => {
+            let raw = if result.stdout.trim().is_empty() {
+                result.stderr
+            } else {
+                result.stdout
+            };
+            parse_a11y_page(&raw)
+        }
+        Err(error) => lazyboy_control::A11yPage {
+            ok: false,
+            error: Some(error.to_string()),
+            ..lazyboy_control::A11yPage::default()
+        },
+    }
 }
 
 async fn cdp_snapshot(ctx: &ToolCtx, ensure: bool) -> Option<CdpPage> {
@@ -452,7 +592,8 @@ async fn cdp_snapshot(ctx: &ToolCtx, ensure: bool) -> Option<CdpPage> {
 }
 
 async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
-    let display = ctx.context.display.as_deref().unwrap_or(":1");
+    let adapter = ctx.adapter();
+    let display = adapter.display.as_deref().unwrap_or(":1");
     // Clicks may sit through a page's stay timer (CLICK_WAIT_MS in cdp.py).
     let timeout_ms = if request.get("action").and_then(Value::as_str) == Some("click") {
         let wait = request
@@ -464,17 +605,18 @@ async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
     } else {
         20_000
     };
-    let argv = cdp_command_on(display, ctx.context.profile_path.as_deref(), &request);
+    let argv = cdp_command_on(display, adapter.profile_path.as_deref(), &request);
     match ctx
         .sandbox
         .execute(
-            &ctx.computer,
+            &ctx.computer_ref(),
             CommandRequest {
                 argv,
                 cwd: None,
                 timeout_ms: Some(timeout_ms),
+                stdin: None,
             },
-            &ctx.context,
+            &ctx.adapter(),
         )
         .await
     {
@@ -574,17 +716,19 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             text,
             image: None,
             pause: false,
+            blocks: Vec::new(),
         };
     }
-    match ctx.sandbox.observe(&ctx.computer, &ctx.context).await {
+    match ctx.sandbox.observe(&ctx.computer_ref(), &ctx.adapter()).await {
         Ok(observation) => {
-            let (observation, note) = attach_page_elements(ctx, observation, &text).await;
+            let (observation, note) = attach_ui_elements(ctx, observation, &text).await;
             pack_observation(ctx, &note, observation)
         }
         Err(_) => ToolOutcome {
             text,
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -609,6 +753,20 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     }
     let mut args = args.clone();
     let elements = ctx.elements.lock().unwrap().clone();
+    let actions_value = args.get("actions").cloned().unwrap_or(Value::Null);
+    if let Some(message) = browser_gui_block(&actions_value, &elements) {
+        return text_outcome(message);
+    }
+    let click_key = click_fingerprint(&actions_value);
+    if should_block_stale_click(
+        *ctx.miss_streak.lock().unwrap(),
+        ctx.last_click_key.lock().unwrap().as_deref(),
+        click_key.as_deref(),
+    ) {
+        return text_outcome(
+            "The last clicks changed nothing. Do not repeat the same click. Options: the control may be disabled until a video/loading finishes (use wait, then re-observe); the target may be off (use browser snapshot and click by element id, or pick a different native control); if the page needs login, CAPTCHA or a human decision, call request_takeover.",
+        );
+    }
     if let Some(actions) = args.get_mut("actions") {
         if let Err(error) = apply_element_targets(actions, &elements) {
             if let ActionError::UnknownElement(id) = error {
@@ -617,35 +775,7 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             return text_outcome(error.to_string());
         }
         if let Some(items) = actions.as_array_mut() {
-            for item in items {
-                let Some(kind) = item.get("kind").and_then(Value::as_str) else {
-                    continue;
-                };
-                if kind != "click" {
-                    continue;
-                }
-                let Some(id) = element_id(item.get("element")) else {
-                    continue;
-                };
-                let Some(selector) = elements
-                    .iter()
-                    .find(|element| u64::from(element.id) == id)
-                    .and_then(|element| element.selector.clone())
-                else {
-                    continue;
-                };
-                let page = cdp_call(
-                    ctx,
-                    json!({"action":"click","selector":selector,"ensure":false}),
-                )
-                .await;
-                if page.ok {
-                    if let Some(object) = item.as_object_mut() {
-                        object.insert("kind".into(), json!("wait"));
-                        object.insert("ms".into(), json!(80));
-                    }
-                }
-            }
+            apply_semantic_actions(ctx, items, &elements).await;
         }
     }
     let actions = match parse_computer_actions(args.get("actions").unwrap_or(&Value::Null)) {
@@ -655,34 +785,40 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                 text: error.to_string(),
                 image: None,
                 pause: false,
+                blocks: Vec::new(),
             };
         }
     };
-    let had_click = actions.iter().any(action_is_click);
+    let had_click = actions.iter().any(action_is_click) || click_key.is_some();
+    if let Some(key) = click_key {
+        *ctx.last_click_key.lock().unwrap() = Some(key);
+    }
     match ctx
         .sandbox
         .act(
-            &ctx.computer,
+            &ctx.computer_ref(),
             ActionRequest {
                 actions,
                 observe: args.get("observe").and_then(Value::as_bool) != Some(false),
                 settle_ms: args.get("settle_ms").and_then(Value::as_u64).unwrap_or(350) as u32,
-                display: ctx.context.display.clone(),
-                profile_path: ctx.context.profile_path.clone(),
+                display: ctx.adapter().display.clone(),
+                profile_path: ctx.adapter().profile_path.clone(),
             },
-            &ctx.context,
+            &ctx.adapter(),
         )
         .await
     {
         Ok(result) => {
             if let Some(observation) = result.observation {
+                let (observation, note) = attach_ui_elements(
+                    ctx,
+                    observation,
+                    &format!("completed {} computer action(s)", result.completed),
+                )
+                .await;
                 let unchanged =
                     frames_match(ctx.previous_frame.lock().unwrap().as_deref(), &observation);
-                let mut outcome = pack_observation(
-                    ctx,
-                    &format!("completed {} computer action(s)", result.completed),
-                    observation,
-                );
+                let mut outcome = pack_observation(ctx, &note, observation);
                 note_click_result(ctx, had_click, unchanged, &mut outcome);
                 outcome
             } else {
@@ -690,6 +826,7 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                     text: json!({"ok": true, "completed": result.completed}).to_string(),
                     image: None,
                     pause: false,
+                    blocks: Vec::new(),
                 }
             }
         }
@@ -697,6 +834,7 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -707,8 +845,85 @@ fn action_is_click(action: &ComputerAction) -> bool {
         ComputerAction::Pointer {
             pointer_type: PointerType::Click | PointerType::Down,
             ..
+        } | ComputerAction::Ref {
+            verb: lazyboy_contracts::RefVerb::Click,
+            ..
         }
     )
+}
+
+async fn apply_semantic_actions(ctx: &ToolCtx, items: &mut [Value], elements: &[UiElement]) {
+    for item in items {
+        let Some(kind) = item.get("kind").and_then(Value::as_str) else {
+            continue;
+        };
+        if !matches!(kind, "click" | "type") {
+            continue;
+        }
+        let Some(target) = item
+            .get("target")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let ref_kind = item
+            .get("refKind")
+            .and_then(Value::as_str)
+            .unwrap_or("a11y")
+            .to_string();
+        let doubled = item.get("double").and_then(Value::as_bool) == Some(true) && kind == "click";
+        let text = item
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let mut request = json!({"action": kind, "selector": target, "ensure": false});
+        if kind == "type" {
+            request["text"] = json!(text);
+        }
+        let ok = if ref_kind == "dom" {
+            let page = cdp_call(ctx, request.clone()).await;
+            if doubled && page.ok {
+                cdp_call(ctx, request).await.ok
+            } else {
+                page.ok
+            }
+        } else {
+            let page = a11y_call(ctx, request.clone()).await;
+            if doubled && page.ok {
+                a11y_call(ctx, request).await.ok
+            } else {
+                page.ok
+            }
+        };
+        if ok {
+            if let Some(object) = item.as_object_mut() {
+                object.insert("kind".into(), json!("wait"));
+                object.insert("ms".into(), json!(80));
+                object.remove("target");
+                object.remove("x");
+                object.remove("y");
+            }
+            continue;
+        }
+        let Some(id) = element_id(item.get("element")) else {
+            continue;
+        };
+        let Some(element) = elements.iter().find(|element| u64::from(element.id) == id) else {
+            continue;
+        };
+        if element.is_offscreen() {
+            continue;
+        }
+        if let Some(object) = item.as_object_mut() {
+            let (x, y) = element.center();
+            object.insert("x".into(), json!(x));
+            object.insert("y".into(), json!(y));
+            object.remove("target");
+        }
+    }
 }
 
 /// A stale element id is the model's mistake, not a reason to park the run
@@ -721,6 +936,7 @@ fn pause_unknown_element(_ctx: &ToolCtx, id: u32, elements: &[UiElement]) -> Too
         ),
         image: None,
         pause: false,
+        blocks: Vec::new(),
     }
 }
 
@@ -757,6 +973,7 @@ fn pack_observation(ctx: &ToolCtx, note: &str, observation: ComputerObservation)
             Some(overlay_elements(&observation.image, &observation.elements))
         },
         pause: false,
+        blocks: Vec::new(),
     }
 }
 
@@ -769,13 +986,14 @@ async fn shell(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     match ctx
         .sandbox
         .execute(
-            &ctx.computer,
+            &ctx.computer_ref(),
             CommandRequest {
                 argv: vec!["bash".into(), "-lc".into(), command.into()],
                 cwd,
                 timeout_ms: Some(60_000),
+                stdin: None,
             },
-            &ctx.context,
+            &ctx.adapter(),
         )
         .await
     {
@@ -783,11 +1001,13 @@ async fn shell(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             text: format!("exit {}\n{}\n{}", result.code, result.stdout, result.stderr),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
         Err(error) => ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -801,23 +1021,26 @@ async fn list_files(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                 text: error.to_string(),
                 image: None,
                 pause: false,
+                blocks: Vec::new(),
             };
         }
     };
     match ctx
         .sandbox
-        .list_files(&ctx.computer, &stored, &ctx.context)
+        .list_files(&ctx.computer_ref(), &stored, &ctx.adapter())
         .await
     {
         Ok(entries) => ToolOutcome {
             text: serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into()),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
         Err(error) => ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -831,23 +1054,26 @@ async fn read_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                 text: error.to_string(),
                 image: None,
                 pause: false,
+                blocks: Vec::new(),
             };
         }
     };
     match ctx
         .sandbox
-        .read_file(&ctx.computer, &stored, &ctx.context)
+        .read_file(&ctx.computer_ref(), &stored, &ctx.adapter())
         .await
     {
         Ok(bytes) => ToolOutcome {
             text: String::from_utf8_lossy(&bytes).into_owned(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
         Err(error) => ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -865,23 +1091,26 @@ async fn write_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                 text: error.to_string(),
                 image: None,
                 pause: false,
+                blocks: Vec::new(),
             };
         }
     };
     match ctx
         .sandbox
-        .write_file(&ctx.computer, &stored, content.as_bytes(), &ctx.context)
+        .write_file(&ctx.computer_ref(), &stored, content.as_bytes(), &ctx.adapter())
         .await
     {
         Ok(()) => ToolOutcome {
             text: json!({"ok": true, "path": requested}).to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
         Err(error) => ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -894,15 +1123,15 @@ async fn open_path(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     match ctx
         .sandbox
         .act(
-            &ctx.computer,
+            &ctx.computer_ref(),
             ActionRequest {
                 actions: vec![lazyboy_contracts::ComputerAction::Open { path: path.into() }],
                 observe: true,
                 settle_ms: 400,
-                display: ctx.context.display.clone(),
-                profile_path: ctx.context.profile_path.clone(),
+                display: ctx.adapter().display.clone(),
+                profile_path: ctx.adapter().profile_path.clone(),
             },
-            &ctx.context,
+            &ctx.adapter(),
         )
         .await
     {
@@ -914,6 +1143,7 @@ async fn open_path(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                     text: "opened".into(),
                     image: None,
                     pause: false,
+                    blocks: Vec::new(),
                 }
             }
         }
@@ -921,6 +1151,7 @@ async fn open_path(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
     }
 }
@@ -937,7 +1168,7 @@ async fn launch_app(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     match ctx
         .sandbox
         .act(
-            &ctx.computer,
+            &ctx.computer_ref(),
             ActionRequest {
                 actions: vec![lazyboy_contracts::ComputerAction::Launch {
                     application: application.into(),
@@ -945,10 +1176,10 @@ async fn launch_app(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                 }],
                 observe: true,
                 settle_ms: 500,
-                display: ctx.context.display.clone(),
-                profile_path: ctx.context.profile_path.clone(),
+                display: ctx.adapter().display.clone(),
+                profile_path: ctx.adapter().profile_path.clone(),
             },
-            &ctx.context,
+            &ctx.adapter(),
         )
         .await
     {
@@ -960,6 +1191,7 @@ async fn launch_app(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                     text: "launched".into(),
                     image: None,
                     pause: false,
+                    blocks: Vec::new(),
                 }
             }
         }
@@ -967,6 +1199,238 @@ async fn launch_app(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             text: error.to_string(),
             image: None,
             pause: false,
+            blocks: Vec::new(),
         },
+    }
+}
+
+fn login_blocks(args: &Value) -> Vec<Value> {
+    let reason = args
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let site = args
+        .get("site")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let why = args.get("why").and_then(Value::as_str).unwrap_or("").trim();
+    let site = if site.is_empty() { reason } else { site };
+    let why = if why.is_empty() { reason } else { why };
+    vec![json!({
+        "kind": "login",
+        "site": site,
+        "why": why,
+    })]
+}
+
+async fn list_saved_accounts(ctx: &ToolCtx) -> ToolOutcome {
+    match crate::vault::list_on(&ctx.pool, &ctx.actor, &ctx.bot_id).await {
+        Ok(items) => {
+            let slim: Vec<Value> = items
+                .iter()
+                .map(|item| {
+                    json!({
+                        "accountId": item.id,
+                        "site": item.site,
+                        "host": item.host,
+                        "username": item.username,
+                    })
+                })
+                .collect();
+            if slim.is_empty() {
+                text_outcome("No saved logins. Ask the human to add one under 帳號, or call request_takeover so they can sign in on the screen.")
+            } else {
+                text_outcome(json!({"accounts": slim}).to_string())
+            }
+        }
+        Err(error) => text_outcome(error),
+    }
+}
+
+async fn use_saved_login(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    if let Some(blocked) = vision_guard(ctx) {
+        return blocked;
+    }
+    let Some(account_id) = args.get("accountId").and_then(Value::as_str) else {
+        return text_outcome("accountId is required");
+    };
+    let secret =
+        match crate::vault::get_secret_on(&ctx.pool, &ctx.actor, &ctx.bot_id, account_id).await {
+            Ok(Some(row)) => row,
+            Ok(None) => return text_outcome("that saved account was not found"),
+            Err(error) => return text_outcome(error),
+        };
+    let (account, username, password) = secret;
+    let adapter = ctx.adapter();
+    let display = adapter.display.as_deref().unwrap_or(":1");
+    let request = json!({
+        "action": "fill_login",
+        "expectedHost": account.host,
+        "ensure": false,
+        "username": username,
+        "password": password,
+        "display": display,
+        "port": lazyboy_control::devtools_port(display),
+        "profile": adapter.profile_path.clone().unwrap_or_default(),
+    });
+    let argv = cdp_stdin_command_on(display, adapter.profile_path.as_deref());
+    let raw = match ctx
+        .sandbox
+        .execute(
+            &ctx.computer_ref(),
+            CommandRequest {
+                argv,
+                cwd: None,
+                timeout_ms: Some(20_000),
+                stdin: Some(request.to_string()),
+            },
+            &ctx.adapter(),
+        )
+        .await
+    {
+        Ok(result) => {
+            if result.stdout.trim().is_empty() {
+                result.stderr
+            } else {
+                result.stdout
+            }
+        }
+        Err(error) => {
+            return text_outcome(format!("could not fill login: {error}"));
+        }
+    };
+    let page = parse_cdp_page(&raw);
+    if !page.ok {
+        return text_outcome(format!(
+            "could not fill {} login: {}",
+            account.site,
+            page.error.unwrap_or_else(|| "unknown error".into())
+        ));
+    }
+    let submitted = serde_json::from_str::<Value>(raw.trim())
+        .ok()
+        .and_then(|value| value.get("submitted").and_then(Value::as_bool))
+        .unwrap_or(false);
+    text_outcome(format!(
+        "Filled {} as {}. {} If a 2FA/CAPTCHA wall is next, call request_takeover.",
+        account.site,
+        account.username,
+        if submitted {
+            "Submitted the form."
+        } else {
+            "Username and password are in the fields; click Sign in if needed."
+        }
+    ))
+}
+
+async fn create_schedule_tool(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    let name = args.get("name").and_then(Value::as_str).unwrap_or("");
+    let cron = args.get("cron").and_then(Value::as_str).unwrap_or("");
+    let instructions = args
+        .get("instructions")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let timezone = args
+        .get("timezone")
+        .and_then(Value::as_str)
+        .unwrap_or("Asia/Taipei");
+    let state = schedule_state(ctx);
+    match crate::schedules::create(
+        &state,
+        &ctx.actor,
+        &ctx.bot_id,
+        crate::schedules::CreateSchedule {
+            name: name.to_string(),
+            cron: cron.to_string(),
+            timezone: timezone.to_string(),
+            instructions: instructions.to_string(),
+            thread_id: Some(ctx.session_id.clone()),
+            enabled: true,
+        },
+    )
+    .await
+    {
+        Ok(row) => {
+            let human = crate::schedules::describe_cron(&row.cron);
+            ToolOutcome {
+                text: format!("Scheduled 「{}」 ({human}).", row.name),
+                image: None,
+                pause: false,
+                blocks: vec![json!({
+                    "kind": "schedule",
+                    "scheduleId": row.id,
+                    "name": row.name,
+                    "cron": row.cron,
+                    "human": human,
+                })],
+            }
+        }
+        Err(error) => text_outcome(error),
+    }
+}
+
+async fn list_schedules_tool(ctx: &ToolCtx) -> ToolOutcome {
+    let state = schedule_state(ctx);
+    match crate::schedules::list(&state, &ctx.actor, &ctx.bot_id).await {
+        Ok(rows) => text_outcome(
+            json!({
+                "schedules": rows.into_iter().map(crate::schedules::public_json).collect::<Vec<_>>()
+            })
+            .to_string(),
+        ),
+        Err(error) => text_outcome(error),
+    }
+}
+
+async fn cancel_schedule_tool(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    let Some(id) = args.get("scheduleId").and_then(Value::as_str) else {
+        return text_outcome("scheduleId is required");
+    };
+    let delete = args.get("delete").and_then(Value::as_bool).unwrap_or(false);
+    if delete {
+        let result = sqlx::query(
+            "DELETE FROM schedules WHERE id=$1 AND bot_id=$2 AND space_id=$3 AND user_id=$4",
+        )
+        .bind(id)
+        .bind(&ctx.bot_id)
+        .bind(&ctx.actor.space_id)
+        .bind(&ctx.actor.user_id)
+        .execute(&ctx.pool)
+        .await;
+        return match result {
+            Ok(done) if done.rows_affected() == 1 => text_outcome("schedule deleted"),
+            Ok(_) => text_outcome("schedule not found"),
+            Err(error) => text_outcome(error.to_string()),
+        };
+    }
+    let result = sqlx::query(
+        "UPDATE schedules SET enabled=false, next_run_at=NULL, updated_at=now()
+         WHERE id=$1 AND bot_id=$2 AND space_id=$3 AND user_id=$4",
+    )
+    .bind(id)
+    .bind(&ctx.bot_id)
+    .bind(&ctx.actor.space_id)
+    .bind(&ctx.actor.user_id)
+    .execute(&ctx.pool)
+    .await;
+    match result {
+        Ok(done) if done.rows_affected() == 1 => text_outcome("schedule paused"),
+        Ok(_) => text_outcome("schedule not found"),
+        Err(error) => text_outcome(error.to_string()),
+    }
+}
+
+fn schedule_state(ctx: &ToolCtx) -> crate::state::AppState {
+    crate::state::AppState {
+        db: crate::db::Db {
+            pool: ctx.pool.clone(),
+        },
+        sandbox: ctx.sandbox.clone(),
+        data_dir: String::new(),
+        auth: crate::auth::AuthConfig::from_env(),
+        memory: ctx.memory.clone(),
+        mcp: ctx.mcp.clone(),
     }
 }

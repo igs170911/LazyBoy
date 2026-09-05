@@ -58,6 +58,21 @@ pub struct CommandRequest {
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub timeout_ms: Option<u64>,
+    /// Optional bytes written to the process stdin, then closed.
+    /// Used so fill-login never puts a password on the argv of `ps`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<String>,
+}
+
+impl Default for CommandRequest {
+    fn default() -> Self {
+        Self {
+            argv: Vec::new(),
+            cwd: None,
+            timeout_ms: None,
+            stdin: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,17 +208,13 @@ pub trait SandboxProvider: Send + Sync {
         &self,
         computer: &ComputerRef,
         context: &AdapterContext,
-    ) -> Result<(), SandboxError> {
-        self.stop(computer, context).await
-    }
+    ) -> Result<(), SandboxError>;
 
     async fn resume(
         &self,
         request: ProvisionRequest,
         context: &AdapterContext,
-    ) -> Result<ComputerRef, SandboxError> {
-        self.provision(request, context).await
-    }
+    ) -> Result<ComputerRef, SandboxError>;
 
     async fn execute(
         &self,
