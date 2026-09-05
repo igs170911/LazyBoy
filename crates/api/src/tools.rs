@@ -6,8 +6,7 @@ use lazyboy_contracts::{
 use lazyboy_control::{
     ActionError, ActionRequest, AdapterContext, CdpPage, CommandRequest, ComputerRef,
     SandboxProvider, apply_element_targets, cdp_command_on, element_id, format_ui_elements,
-    frames_match,
-    merge_page_elements, overlay_elements, parse_cdp_page, parse_computer_actions,
+    frames_match, merge_page_elements, overlay_elements, parse_cdp_page, parse_computer_actions,
     resolve_bot_workspace_cwd, resolve_bot_workspace_path,
 };
 use rig_core::completion::ToolDefinition;

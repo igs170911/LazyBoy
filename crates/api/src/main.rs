@@ -1,3 +1,4 @@
+mod attachments;
 mod auth;
 mod computer;
 mod db;
@@ -18,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use state::AppState;
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
@@ -72,7 +74,8 @@ async fn main() {
         )
         .merge(auth::public_router(state.clone()))
         .merge(routes::router(state))
-        .fallback_service(ServeDir::new(web_dir));
+        .fallback_service(ServeDir::new(web_dir))
+        .layer(DefaultBodyLimit::max(24 * 1024 * 1024));
 
     tracing::info!("api listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

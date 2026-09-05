@@ -324,7 +324,7 @@ async fn send_message(
     Json(input): Json<SendSessionMessageInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let actor = actor(&state).await?;
-    if input.text.trim().is_empty() {
+    if input.text.trim().is_empty() && input.attachments.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({"message":"empty message"})),
@@ -346,6 +346,7 @@ async fn send_message(
         input.text.trim(),
         input.client_nonce.as_deref(),
         &input.blocks,
+        &input.attachments,
     )
     .await
     .map_err(|message| (StatusCode::BAD_REQUEST, Json(json!({"message":message}))))?;

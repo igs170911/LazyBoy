@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use base64::Engine;
@@ -48,7 +48,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/bots/{id}/skills/start", post(start_skill))
         .route("/api/bots/{id}/skills/stop", post(stop_skill))
         .route("/api/bots/{id}/skills/cancel", post(cancel_skill))
+        .route("/api/bots/{id}/skills/import", post(import_skill))
         .route("/api/skills/{id}", patch(update_skill).delete(delete_skill))
+        .route("/api/skills/{id}/export", get(export_skill))
         .route("/api/skills/{id}/test", post(test_skill))
 }
 
@@ -474,10 +476,276 @@ async fn test_skill(
         .map_err(|error| internal(error.to_string()))?
         .ok_or_else(not_found)?;
     let prompt = format!("試跑技能「{name}」：照剛學到的流程做一遍，做完回報結果。");
-    let result = crate::runs::send(&state, &actor, &row.bot_id, &thread_id, &prompt, None, &[])
-        .await
-        .map_err(bad_request)?;
+    let result = crate::runs::send(
+        &state,
+        &actor,
+        &row.bot_id,
+        &thread_id,
+        &prompt,
+        None,
+        &[],
+        &[],
+    )
+    .await
+    .map_err(bad_request)?;
     Ok(Json(result))
+}
+
+/// Portable JSON a human can download after a demo and load onto another bot.
+pub const SKILL_FILE_KIND: &str = "lazyboy.skill";
+pub const SKILL_FILE_VERSION: u32 = 1;
+const SKILL_NAME_MAX: usize = 40;
+
+pub fn skill_file(name: &str, goal: &str, playbook: &Value) -> Value {
+    json!({
+        "kind": SKILL_FILE_KIND,
+        "version": SKILL_FILE_VERSION,
+        "name": name,
+        "goal": goal,
+        "playbook": playbook,
+    })
+}
+
+fn clip_name(name: &str) -> String {
+    name.chars().take(SKILL_NAME_MAX).collect()
+}
+
+pub fn unique_skill_name(existing: &[String], wanted: &str) -> String {
+    let wanted = clip_name(wanted.trim());
+    let clash = |candidate: &str| {
+        existing
+            .iter()
+            .any(|have| have.eq_ignore_ascii_case(candidate))
+    };
+    if !clash(&wanted) {
+        return wanted;
+    }
+    for n in 2..1000 {
+        let suffix = format!(" ({n})");
+        let budget = SKILL_NAME_MAX.saturating_sub(suffix.chars().count());
+        let base: String = wanted.chars().take(budget).collect();
+        let candidate = format!("{base}{suffix}");
+        if !clash(&candidate) {
+            return candidate;
+        }
+    }
+    wanted
+}
+
+fn sanitize_steps(value: Option<&Value>) -> Result<Vec<Value>, String> {
+    let steps = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| "steps required".to_string())?;
+    let steps: Vec<Value> = steps
+        .iter()
+        .filter_map(|step| match step {
+            Value::String(text) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(json!({ "do": text, "expect": "", "note": "" }))
+                }
+            }
+            Value::Object(obj) => {
+                let action = obj
+                    .get("do")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())?;
+                Some(json!({
+                    "do": action,
+                    "expect": obj.get("expect").and_then(Value::as_str).unwrap_or(""),
+                    "note": obj.get("note").and_then(Value::as_str).unwrap_or(""),
+                }))
+            }
+            _ => None,
+        })
+        .collect();
+    if steps.is_empty() {
+        return Err("steps required".into());
+    }
+    Ok(steps)
+}
+
+fn sanitize_inputs(value: Option<&Value>) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())?;
+                    Some(json!({
+                        "name": name,
+                        "description": item.get("description").and_then(Value::as_str).unwrap_or(""),
+                        "example": item.get("example").and_then(Value::as_str).unwrap_or(""),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn sanitize_playbook(playbook: &Value, name: &str) -> Result<Value, String> {
+    let text = |key: &str| {
+        playbook
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+    };
+    Ok(json!({
+        "name": name,
+        "whenToUse": text("whenToUse"),
+        "intent": text("intent"),
+        "inputs": sanitize_inputs(playbook.get("inputs")),
+        "preconditions": strings(playbook.get("preconditions")),
+        "steps": sanitize_steps(playbook.get("steps"))?,
+        "howToCheck": text("howToCheck"),
+        "whatToReturn": text("whatToReturn"),
+        "cautions": strings(playbook.get("cautions")),
+    }))
+}
+
+/// Accepts the envelope we export, or a bare playbook object with `name` + `steps`.
+pub fn parse_skill_file(value: &Value) -> Result<(String, String, Value), String> {
+    if !value.is_object() {
+        return Err("skill file must be a JSON object".into());
+    }
+    if let Some(kind) = value.get("kind").and_then(Value::as_str)
+        && kind != SKILL_FILE_KIND
+    {
+        return Err(format!("unsupported skill kind: {kind}"));
+    }
+    let playbook = match value.get("playbook") {
+        Some(inner) if inner.is_object() => inner,
+        _ => value,
+    };
+    let name = value
+        .get("name")
+        .or_else(|| playbook.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "name required".to_string())?;
+    let name = clip_name(name);
+    let goal = value
+        .get("goal")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|goal| !goal.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            playbook
+                .get("intent")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|intent| !intent.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| name.clone());
+    let playbook = sanitize_playbook(playbook, &name)?;
+    Ok((name, goal, playbook))
+}
+
+fn export_filename_ascii(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(40)
+        .collect();
+    if slug.is_empty() {
+        "skill.json".into()
+    } else {
+        format!("{slug}.json")
+    }
+}
+
+async fn export_skill(
+    State(state): State<AppState>,
+    Path(skill_id): Path<String>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
+    let actor = actor(&state).await?;
+    let row = load_skill(&state, &actor, &skill_id).await?;
+    if !matches!(row.status.as_str(), "draft" | "saved") {
+        return Err(conflict("skill is not ready yet"));
+    }
+    let name = if row.name.trim().is_empty() {
+        row.playbook
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&row.goal)
+            .to_string()
+    } else {
+        row.name.clone()
+    };
+    let payload = skill_file(&name, &row.goal, &row.playbook);
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        export_filename_ascii(&name)
+    )) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    Ok((headers, Json(payload)))
+}
+
+async fn import_skill(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Skill>, ApiError> {
+    let actor = actor(&state).await?;
+    state
+        .db
+        .get_bot(&actor, &bot_id)
+        .await
+        .map_err(|error| internal(error.to_string()))?
+        .ok_or_else(not_found)?;
+    let (name, goal, mut playbook) = parse_skill_file(&body).map_err(bad_request)?;
+    let existing = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM taught_skills
+         WHERE bot_id = $1 AND space_id = $2 AND user_id = $3
+           AND status IN ('saved','draft','drafting','recording')",
+    )
+    .bind(&bot_id)
+    .bind(&actor.space_id)
+    .bind(&actor.user_id)
+    .fetch_all(state.pool())
+    .await
+    .map_err(|error| internal(error.to_string()))?;
+    let name = unique_skill_name(&existing, &name);
+    if let Some(object) = playbook.as_object_mut() {
+        object.insert("name".into(), json!(name));
+    }
+    let thread_id = crate::sessions::default_session_for_bot(&state, &actor, &bot_id)
+        .await
+        .map_err(|error| internal(error.to_string()))?;
+    let skill_id = Uuid::new_v4().to_string();
+    let row = sqlx::query_as::<_, SkillRow>(&format!(
+        "INSERT INTO taught_skills (id, space_id, user_id, bot_id, thread_id, name, goal, status, playbook)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'saved', $8)
+         RETURNING {COLUMNS}"
+    ))
+    .bind(&skill_id)
+    .bind(&actor.space_id)
+    .bind(&actor.user_id)
+    .bind(&bot_id)
+    .bind(&thread_id)
+    .bind(&name)
+    .bind(&goal)
+    .bind(&playbook)
+    .fetch_one(state.pool())
+    .await
+    .map_err(|error| internal(error.to_string()))?;
+    Ok(Json(row.into()))
 }
 
 async fn teach_target(
@@ -1447,5 +1715,61 @@ mod tests {
         let text = format_playbook_for_run(&skill("demo"));
         assert!(text.contains("1. open → expect: page"));
         assert!(text.contains("never replay coordinates"));
+    }
+
+    fn sample_playbook() -> Value {
+        json!({
+            "name": "完成 STAR 訓練",
+            "whenToUse": "要把指定課程看完",
+            "intent": "把 STAR 課程的影片看完並通過測驗",
+            "inputs": [{"name": "courseName", "description": "課程名稱", "example": "Workplace"}],
+            "preconditions": ["已登入"],
+            "steps": [{"do": "點 Next", "expect": "頁碼加一", "note": "鎖住就等"}],
+            "howToCheck": "課程顯示 completed",
+            "whatToReturn": "課程名稱與結果",
+            "cautions": ["遇到驗證碼就停下"],
+            "noise": "drop me"
+        })
+    }
+
+    #[test]
+    fn skill_file_roundtrip_drops_unknown_keys() {
+        let playbook = sample_playbook();
+        let file = skill_file("完成 STAR 訓練", "示範目標", &playbook);
+        assert_eq!(file["kind"], SKILL_FILE_KIND);
+        assert_eq!(file["version"], SKILL_FILE_VERSION);
+        let (name, goal, parsed) = parse_skill_file(&file).unwrap();
+        assert_eq!(name, "完成 STAR 訓練");
+        assert_eq!(goal, "示範目標");
+        assert_eq!(parsed["steps"][0]["do"], "點 Next");
+        assert_eq!(parsed["inputs"][0]["name"], "courseName");
+        assert!(parsed.get("noise").is_none());
+    }
+
+    #[test]
+    fn import_accepts_bare_playbook() {
+        let (name, goal, playbook) = parse_skill_file(&sample_playbook()).unwrap();
+        assert_eq!(name, "完成 STAR 訓練");
+        assert_eq!(goal, "把 STAR 課程的影片看完並通過測驗");
+        assert_eq!(playbook["steps"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn import_rejects_wrong_kind_and_empty_steps() {
+        assert!(
+            parse_skill_file(&json!({"kind":"other","name":"a","steps":[{"do":"x"}]})).is_err()
+        );
+        assert!(parse_skill_file(&json!({"name":"a","steps":[]})).is_err());
+        assert!(parse_skill_file(&json!({"steps":[{"do":"x"}]})).is_err());
+    }
+
+    #[test]
+    fn unique_name_adds_suffix() {
+        let have = vec!["完成 STAR 訓練".into(), "完成 STAR 訓練 (2)".into()];
+        assert_eq!(
+            unique_skill_name(&have, "完成 STAR 訓練"),
+            "完成 STAR 訓練 (3)"
+        );
+        assert_eq!(unique_skill_name(&have, "新技能"), "新技能");
     }
 }

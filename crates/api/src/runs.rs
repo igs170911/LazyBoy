@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use lazyboy_contracts::ModelProvider;
+use lazyboy_contracts::{ModelProvider, SessionAttachment};
 use lazyboy_harness::{
     CredentialChain, DynModel, ResolveModelRequest, connect_model, resolve_backend,
 };
@@ -54,7 +54,7 @@ computer_act examples (native windows only):
 - {\"kind\":\"focus\",\"title\":\"Open File\"}
 - wait: {\"seconds\":30,\"reason\":\"video playing\"}
 
-On a Team Computer, relative files live in your bot folder; use shared/ for shared work. Finish the user's task.";
+On a Team Computer, relative files live in your bot folder; use shared/ for shared work. User-attached files appear in inbox/ for two hours only — chat history does not keep the bytes. Open them with open_path when you need the original file. Finish the user's task.";
 
 pub async fn send(
     state: &AppState,
@@ -64,6 +64,7 @@ pub async fn send(
     text: &str,
     client_nonce: Option<&str>,
     blocks: &[Value],
+    attachments: &[SessionAttachment],
 ) -> Result<Value, String> {
     if crate::skills::recording_skill(state.pool(), bot_id)
         .await
@@ -71,6 +72,13 @@ pub async fn send(
     {
         return Err("示範進行中：先按「完成示範」或「取消」，再送訊息。".into());
     }
+    let decoded = crate::attachments::decode_incoming(attachments)?;
+    if text.trim().is_empty() && decoded.is_empty() {
+        return Err("empty message".into());
+    }
+    let stored_body = crate::attachments::caption_for_title(text, &decoded);
+    let mut stored_blocks = blocks.to_vec();
+    stored_blocks.extend(crate::attachments::stored_blocks(&decoded));
     let mut tx = state
         .pool()
         .begin()
@@ -129,8 +137,8 @@ pub async fn send(
     .bind(&message_id)
     .bind(thread_id)
     .bind(seq)
-    .bind(text)
-    .bind(json!(blocks))
+    .bind(&stored_body)
+    .bind(json!(stored_blocks))
     .bind(&run_id)
     .bind(client_nonce)
     .execute(&mut *tx)
@@ -139,7 +147,7 @@ pub async fn send(
     if crate::sessions::is_default_session_title(&current_title) {
         sqlx::query("UPDATE threads SET title=$2 WHERE id=$1")
             .bind(thread_id)
-            .bind(crate::sessions::title_from_first_message(text))
+            .bind(crate::sessions::title_from_first_message(&stored_body))
             .execute(&mut *tx)
             .await
             .map_err(|error| error.to_string())?;
@@ -171,7 +179,7 @@ pub async fn send(
         .bind(member_id)
         .bind(&thread_id)
         .bind(&actor.user_id)
-        .bind(text)
+        .bind(&stored_body)
         .bind(json!({"messageSeq":seq}))
         .execute(&mut *tx)
         .await
@@ -190,7 +198,7 @@ pub async fn send(
     .bind(Uuid::new_v4().to_string())
     .bind(thread_id)
     .bind(event_seq)
-    .bind(json!({"id":message_id,"seq":seq,"role":"user","body":text,"runId":run_id}))
+    .bind(json!({"id":message_id,"seq":seq,"role":"user","body":stored_body,"runId":run_id}))
     .execute(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
@@ -211,6 +219,11 @@ pub async fn send(
             .map_err(|error| error.to_string())?;
     }
     tx.commit().await.map_err(|error| error.to_string())?;
+    if let Err(error) =
+        crate::attachments::stage_for_bots(state, actor, &member_ids, &decoded).await
+    {
+        tracing::warn!("stage attachments for {message_id}: {error}");
+    }
     Ok(json!({
         "messageId": message_id,
         "runId": run_id,
@@ -498,12 +511,28 @@ async fn execute_run(
     } else {
         vec![UserContent::text(prompt)]
     };
+    if !resume_after_takeover {
+        let blocks: Value = sqlx::query_scalar(
+            "SELECT blocks FROM messages WHERE thread_id=$1 AND seq=$2 AND role='user'",
+        )
+        .bind(thread_id)
+        .bind(current_seq)
+        .fetch_optional(state.pool())
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(json!([]));
+        let blocks = blocks.as_array().cloned().unwrap_or_default();
+        first.extend(crate::attachments::llm_parts(state, actor, bot_id, &blocks, vision).await);
+    }
     let mut skill_check: Option<String> = None;
     if !resume_after_takeover {
         // The user named a taught skill: hand the model the full playbook up
         // front so it does not have to guess or call use_skill first.
         if let Some(skill) = crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await {
-            first.push(UserContent::text(crate::skills::format_playbook_for_run(&skill)));
+            first.push(UserContent::text(crate::skills::format_playbook_for_run(
+                &skill,
+            )));
             skill_check = Some(crate::skills::skill_check_hint(&skill));
         }
     }
@@ -677,7 +706,12 @@ async fn execute_run(
             match nudge {
                 Some(text) if nudges < 6 && turns + 2 < max_turns => {
                     nudges += 1;
-                    tracing::info!(run_id, turn = turns, parroted, "nudging model back to tools");
+                    tracing::info!(
+                        run_id,
+                        turn = turns,
+                        parroted,
+                        "nudging model back to tools"
+                    );
                     earlier_replies.push(final_text.trim().to_string());
                     final_text.clear();
                     let mut content = vec![UserContent::text(text)];
@@ -718,7 +752,12 @@ async fn execute_run(
             let name = call.function.name.clone();
             used_gui |= matches!(
                 name.as_str(),
-                "computer_observe" | "computer_act" | "open_path" | "launch_app" | "browser" | "wait"
+                "computer_observe"
+                    | "computer_act"
+                    | "open_path"
+                    | "launch_app"
+                    | "browser"
+                    | "wait"
             );
             let step = describe_step(&name, &call.function.arguments);
             set_run_step(state, run_id, &step).await;
@@ -1033,7 +1072,10 @@ fn drop_history_screenshots(history: &mut [Message], pending: &Message) {
 
 /// Cancel every unfinished run of a bot and free the screen/execution leases
 /// it held, so the desktop is available to a human immediately.
-pub(crate) async fn cancel_active_runs(state: &AppState, bot_id: &str) -> Result<Vec<String>, String> {
+pub(crate) async fn cancel_active_runs(
+    state: &AppState,
+    bot_id: &str,
+) -> Result<Vec<String>, String> {
     let run_ids: Vec<String> = sqlx::query_scalar(
         "UPDATE runs SET status = 'cancelled', completed_at = now(), updated_at = now()
          WHERE bot_id = $1 AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
@@ -1245,7 +1287,8 @@ fn describe_step(name: &str, args: &Value) -> String {
                         let kind = field("kind").or(field("type")).unwrap_or("?");
                         let target = if let Some(text) = field("text").or(field("keys")) {
                             short(Some(text), 24)
-                        } else if let Some(id) = lazyboy_control::element_id(action.get("element")) {
+                        } else if let Some(id) = lazyboy_control::element_id(action.get("element"))
+                        {
                             format!("#{id}")
                         } else if let (Some(x), Some(y)) = (
                             action.get("x").and_then(Value::as_i64),
@@ -1262,16 +1305,28 @@ fn describe_step(name: &str, args: &Value) -> String {
             })
             .unwrap_or_default(),
         "browser" => {
-            let target = get("url").or(get("text")).or(get("selector")).map(|s| short(Some(s), 40));
-            let target = target.or_else(|| lazyboy_control::element_id(args.get("element")).map(|id| format!("#{id}")));
-            format!("{} {}", get("action").unwrap_or("snapshot"), target.unwrap_or_default())
-                .trim()
-                .to_string()
+            let target = get("url")
+                .or(get("text"))
+                .or(get("selector"))
+                .map(|s| short(Some(s), 40));
+            let target = target.or_else(|| {
+                lazyboy_control::element_id(args.get("element")).map(|id| format!("#{id}"))
+            });
+            format!(
+                "{} {}",
+                get("action").unwrap_or("snapshot"),
+                target.unwrap_or_default()
+            )
+            .trim()
+            .to_string()
         }
         "shell" => short(get("command").or(get("cmd")), 60),
         "wait" => format!(
             "{}s {}",
-            args.get("seconds").and_then(Value::as_f64).unwrap_or(0.0).round(),
+            args.get("seconds")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                .round(),
             short(get("reason"), 30)
         )
         .trim()
@@ -1349,7 +1404,10 @@ mod tests {
 
     #[test]
     fn step_labels_summarize_tool_arguments() {
-        assert_eq!(describe_step("computer_observe", &json!({})), "computer_observe: 看畫面");
+        assert_eq!(
+            describe_step("computer_observe", &json!({})),
+            "computer_observe: 看畫面"
+        );
         assert_eq!(
             describe_step(
                 "computer_act",
@@ -1365,7 +1423,10 @@ mod tests {
             describe_step("shell", &json!({"command":"ls\n-la"})),
             "shell: ls -la"
         );
-        assert_eq!(describe_step("mcp_search", &json!({"query":"x"})), "mcp_search");
+        assert_eq!(
+            describe_step("mcp_search", &json!({"query":"x"})),
+            "mcp_search"
+        );
     }
 
     #[test]
@@ -1419,7 +1480,11 @@ mod tests {
         let Message::User { content } = &history[2] else {
             panic!("expected user message");
         };
-        assert!(content.iter().any(|part| matches!(part, UserContent::Image(_))));
+        assert!(
+            content
+                .iter()
+                .any(|part| matches!(part, UserContent::Image(_)))
+        );
     }
 
     #[test]

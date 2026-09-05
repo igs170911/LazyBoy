@@ -932,6 +932,7 @@ pub fn user_has_screen_control(
 pub async fn idle_loop(state: AppState) {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
+        crate::attachments::sweep_all_inboxes(&state.data_dir).await;
         let cutoff = Utc::now() - TimeDelta::minutes(10);
         let rows = sqlx::query_as::<_, ComputerRow>(
             "SELECT id, space_id, user_id, scope, scope_key, home_key, home_revision, kind, provider_ref, state,
@@ -1048,9 +1049,7 @@ pub async fn current_status(
     .fetch_all(state.pool())
     .await
     .unwrap_or_default();
-    let waiting = active
-        .iter()
-        .find(|run| run.status == "waiting_takeover");
+    let waiting = active.iter().find(|run| run.status == "waiting_takeover");
     let busy = active.iter().find(|run| {
         parse_run_status(&run.status).is_some_and(|status| {
             status.is_active() && status != lazyboy_contracts::RunStatus::WaitingTakeover
@@ -1077,7 +1076,9 @@ pub async fn current_status(
     }
     status.queued_runs = active
         .iter()
-        .filter(|run| run.status == "queued" && Some(run.id.as_str()) != busy.map(|b| b.id.as_str()))
+        .filter(|run| {
+            run.status == "queued" && Some(run.id.as_str()) != busy.map(|b| b.id.as_str())
+        })
         .count() as u32;
     Ok(status)
 }

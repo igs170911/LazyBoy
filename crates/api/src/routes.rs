@@ -478,6 +478,8 @@ struct SendBody {
     client_nonce: Option<String>,
     #[serde(default)]
     blocks: Vec<Value>,
+    #[serde(default)]
+    attachments: Vec<lazyboy_contracts::SessionAttachment>,
 }
 
 async fn send_message(
@@ -504,6 +506,7 @@ async fn send_message(
         &body.text,
         body.client_nonce.as_deref(),
         &body.blocks,
+        &body.attachments,
     )
     .await
     .map_err(|error| {

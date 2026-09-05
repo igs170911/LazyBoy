@@ -55,4 +55,16 @@ pub struct SendSessionMessageInput {
     pub client_nonce: Option<String>,
     #[serde(default)]
     pub blocks: Vec<Value>,
+    #[serde(default)]
+    pub attachments: Vec<SessionAttachment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAttachment {
+    pub name: String,
+    #[serde(default)]
+    pub mime_type: String,
+    #[serde(alias = "contentBase64")]
+    pub content: String,
 }

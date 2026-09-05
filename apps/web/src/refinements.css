@@ -13,7 +13,21 @@
 .thinking-dots{position:relative;display:flex;align-items:center;gap:4px;height:32px;padding:0 12px;border:1px solid var(--border);border-radius:14px;background:var(--surface);overflow:hidden}.thinking-dots:after{content:"";position:absolute;left:12px;bottom:4px;width:24px;height:2px;border-radius:999px;background:linear-gradient(90deg,#7c5cff,#34d9ff,#58f39a,#ffe66d,#ff73dc,#7c5cff);background-size:200% 100%;animation:small-magic-line 1.25s linear infinite}
 .thinking-dots i{width:5px;height:5px;border-radius:50%;background:var(--muted);animation:thinking-dot 1.15s ease-in-out infinite}.thinking-dots i:nth-child(2){animation-delay:.16s}.thinking-dots i:nth-child(3){animation-delay:.32s}
 .composer{left:50%;right:auto;width:min(760px,calc(100% - 48px));min-height:62px;align-items:center;padding:9px 10px;transform:translateX(-50%)}
+.composer.has-files{flex-wrap:wrap;align-items:flex-end;padding-top:10px}
 .composer textarea{align-self:center;box-sizing:border-box;height:42px;min-height:42px;max-height:126px;padding:11px 4px;line-height:20px}
+.composer-files{display:flex;flex-wrap:wrap;gap:8px;flex:1 0 100%;order:-1;padding:2px 8px 10px 46px}
+.file-card{position:relative;display:flex;align-items:center;gap:8px;max-width:240px;height:48px;padding:2px 12px 2px 2px;border:1px solid #2a2a2a;border-radius:14px;background:#1a1a1a;color:var(--ink)}
+.file-card-thumb,.file-card-badge{flex:0 0 44px;width:44px;height:44px;border-radius:11px;object-fit:cover}
+.file-card-badge{display:grid;place-items:center;background:#2a2a2a;color:#c8c8c8;font-size:10px;font-weight:700;letter-spacing:.04em}
+.file-card-meta{display:grid;min-width:0;padding-right:4px}
+.file-card-meta strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
+.file-card-meta small{color:var(--muted);font-size:11px}
+.file-card-remove{position:absolute;top:-7px;right:-7px;width:20px;height:20px;display:grid;place-items:center;border:1px solid #3a3a3a;border-radius:50%;background:#141414;color:#9a9a9a;cursor:pointer}
+.file-card-remove:hover{color:var(--ink);background:#252525}
+.file-card-remove svg{width:11px;height:11px}
+.message.with-files{align-items:flex-end;flex-direction:column;gap:8px}
+.message.with-files .msg-attachments{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:min(420px,82%)}
+.message.with-files .message-body{max-width:82%}
 .composer-plus,.composer .send{box-sizing:border-box;flex:0 0 42px;width:42px;height:42px;margin:0;align-self:center}
 .stop-send{background:#f2f2f2;color:#151515}.stop-send svg{width:14px;height:14px;fill:currentColor}
 .spinner{width:17px;height:17px;animation:spin .8s linear infinite}.spinner.large{width:38px;height:38px;color:var(--accent)}.primary .spinner{margin-right:7px}.primary{display:inline-flex;align-items:center;justify-content:center}
@@ -268,13 +282,20 @@
 /* Teach-by-demonstration: composer menu, live banner, draft card */
 .plus-menu-wrap{position:relative;align-self:center}
 .composer-plus.open{color:var(--ink);background:rgba(255,255,255,.08)}
-.plus-menu{position:absolute;z-index:40;bottom:50px;left:0;display:grid;width:240px;padding:6px;border:1px solid var(--border);border-radius:13px;background:#18181b;box-shadow:0 18px 60px rgba(0,0,0,.55)}
+.plus-menu{position:absolute;z-index:40;bottom:50px;left:0;display:grid;width:268px;padding:6px;border:1px solid var(--border);border-radius:13px;background:#18181b;box-shadow:0 18px 60px rgba(0,0,0,.55)}
 .plus-menu button{display:flex;align-items:center;gap:10px;width:100%;height:38px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .plus-menu button:hover:not(:disabled){background:rgba(255,255,255,.07)}
 .plus-menu button:disabled{opacity:.4;cursor:not-allowed}
 .plus-menu svg{width:16px;height:16px;flex:0 0 16px}
 .plus-menu hr{width:100%;margin:5px 0;border:0;border-top:1px solid var(--border)}
 .plus-menu-label{padding:4px 10px 2px;color:var(--faint);font-size:11px}
+.plus-menu-skills{display:grid;min-height:0}
+.plus-menu-search{box-sizing:border-box;width:calc(100% - 8px);height:32px;margin:4px 4px 6px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:#121214;color:var(--ink);font:inherit;font-size:13px;outline:0}
+.plus-menu-search:focus{border-color:#4b4b50}
+.plus-menu-skill-list{overflow-y:auto;max-height:min(228px,calc(100dvh - 280px));padding-bottom:2px}
+.plus-menu-skill-list::-webkit-scrollbar{width:8px}
+.plus-menu-skill-list::-webkit-scrollbar-thumb{border-radius:8px;background:#2f2f33}
+.plus-menu-empty{display:block;padding:10px 12px 12px;color:var(--muted);font-size:12px}
 .record-dot{display:inline-block;flex:0 0 12px;width:12px;height:12px;border-radius:50%;background:#ef5555;box-shadow:inset 0 0 0 2px #18181b,0 0 0 1.5px #ef5555}
 .record-dot.live{animation:pulse 1.2s infinite;margin-right:8px;vertical-align:-1px}
 .teach-dialog h2{display:flex;align-items:center;gap:10px}
@@ -313,6 +334,7 @@
 .plus-menu-skill .skill-edit{flex:0 0 30px;width:30px;height:30px;padding:0;justify-content:center;color:var(--muted)}
 .plus-menu-skill .skill-edit:hover{color:var(--ink)}
 .plus-menu-skill .skill-edit svg{width:14px;height:14px;flex-basis:14px}
+.skill-import-input{position:absolute;left:0;bottom:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0;opacity:0}
 /* Full skill editor */
 .dialog.skill-edit{width:min(600px,calc(100vw - 28px));max-height:calc(100dvh - 28px);overflow:auto}
 .dialog.skill-edit h2{display:flex;align-items:center;gap:9px}
@@ -320,5 +342,6 @@
 .dialog.skill-edit label{display:grid;gap:6px;color:var(--muted);font-size:12.5px}
 .dialog.skill-edit input,.dialog.skill-edit textarea{width:100%;border:1px solid var(--border);border-radius:10px;background:#0c0c0d;color:var(--ink);padding:9px 12px;outline:0;font:inherit;font-size:13.5px;line-height:1.5;resize:vertical}
 .dialog.skill-edit input:focus,.dialog.skill-edit textarea:focus{border-color:#4b4b50}
-.dialog.skill-edit .dialog-actions{align-items:center;gap:8px}
+.dialog.skill-edit .dialog-actions{align-items:center;gap:8px;flex-wrap:wrap}
 .dialog.skill-edit .dialog-actions .grow{flex:1}
+.dialog.skill-edit .dialog-actions .outline svg{fill:none;stroke:currentColor;width:14px;height:14px}
