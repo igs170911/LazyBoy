@@ -1,4 +1,7 @@
-use lazyboy_contracts::{ComputerAction, PointerButton, PointerType, ScrollDirection, UiElement};
+use crate::is_browser_title;
+use lazyboy_contracts::{
+    ComputerAction, PointerButton, PointerType, RefVerb, ScrollDirection, UiElement,
+};
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -43,7 +46,8 @@ pub fn element_id(value: Option<&Value>) -> Option<u64> {
     }
 }
 
-/// Fill x/y from a numbered on-screen element so the model can click by id.
+/// Resolve a numbered on-screen element. DOM/a11y refs stay semantic (no
+/// pre-filled coordinates). Window-level targets still become center pixels.
 pub fn apply_element_targets(value: &mut Value, elements: &[UiElement]) -> Result<(), ActionError> {
     let Some(items) = value.as_array_mut() else {
         return Ok(());
@@ -58,6 +62,21 @@ pub fn apply_element_targets(value: &mut Value, elements: &[UiElement]) -> Resul
         let Some(element) = elements.iter().find(|element| u64::from(element.id) == id) else {
             return Err(ActionError::UnknownElement(id as u32));
         };
+        let kind = action
+            .get("kind")
+            .and_then(Value::as_str)
+            .or_else(|| action.get("type").and_then(Value::as_str))
+            .unwrap_or("");
+        if element.has_ref() && matches!(kind, "click" | "type") {
+            if let Some(selector) = element.selector.clone() {
+                action.insert("target".into(), json!(selector));
+                action.insert(
+                    "refKind".into(),
+                    json!(element.kind.clone().unwrap_or_else(|| "a11y".into())),
+                );
+            }
+            continue;
+        }
         if element.is_offscreen() {
             return Err(ActionError::OffscreenElement(id as u32));
         }
@@ -66,6 +85,97 @@ pub fn apply_element_targets(value: &mut Value, elements: &[UiElement]) -> Resul
         action.insert("y".into(), json!(y));
     }
     Ok(())
+}
+
+/// Fingerprint of the first click-like action, used to refuse repeating a miss.
+pub fn click_fingerprint(actions: &Value) -> Option<String> {
+    let items = actions.as_array()?;
+    for raw in items {
+        let Some(action) = raw.as_object() else {
+            continue;
+        };
+        let kind = action
+            .get("kind")
+            .and_then(Value::as_str)
+            .or_else(|| action.get("type").and_then(Value::as_str))
+            .unwrap_or("");
+        if !matches!(kind, "click" | "down" | "drag") {
+            continue;
+        }
+        if let Some(id) = element_id(action.get("element")) {
+            return Some(format!("e{id}"));
+        }
+        match (
+            action.get("x").and_then(Value::as_f64),
+            action.get("y").and_then(Value::as_f64),
+        ) {
+            (Some(x), Some(y)) if x.is_finite() && y.is_finite() => {
+                return Some(format!("p{},{}", x.round() as i64, y.round() as i64));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+pub fn should_block_stale_click(miss_streak: u32, last: Option<&str>, next: Option<&str>) -> bool {
+    miss_streak >= 2 && next.is_some() && next == last
+}
+
+/// When a CDP page snapshot is live, refuse pixel-clicking the Chromium window.
+pub fn browser_gui_block(actions: &Value, elements: &[UiElement]) -> Option<String> {
+    if !elements
+        .iter()
+        .any(|element| element.kind.as_deref() == Some("dom"))
+    {
+        return None;
+    }
+    let items = actions.as_array()?;
+    for raw in items {
+        let Some(action) = raw.as_object() else {
+            continue;
+        };
+        let kind = action
+            .get("kind")
+            .and_then(Value::as_str)
+            .or_else(|| action.get("type").and_then(Value::as_str))
+            .unwrap_or("");
+        if !matches!(kind, "click" | "move" | "down" | "up" | "hover" | "drag") {
+            continue;
+        }
+        if let Some(id) = element_id(action.get("element")) {
+            match elements.iter().find(|element| u64::from(element.id) == id) {
+                Some(element) if element.has_ref() => continue,
+                Some(element)
+                    if element.kind.as_deref() == Some("window")
+                        && is_browser_title(&element.title) =>
+                {
+                    return Some(browser_block_message(elements));
+                }
+                _ => continue,
+            }
+        } else {
+            return Some(browser_block_message(elements));
+        }
+    }
+    None
+}
+
+fn browser_block_message(elements: &[UiElement]) -> String {
+    let known: Vec<String> = elements
+        .iter()
+        .filter(|element| element.kind.as_deref() == Some("dom"))
+        .take(12)
+        .map(|element| format!("[{}] {}", element.id, element.title))
+        .collect();
+    format!(
+        "Chromium is in front: use the browser tool (snapshot / click element N) instead of computer_act pixel clicks. Known page elements: {}",
+        if known.is_empty() {
+            "call browser snapshot first".to_string()
+        } else {
+            known.join(", ")
+        }
+    )
 }
 
 pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, ActionError> {
@@ -90,6 +200,23 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
             .unwrap_or_default();
         match kind {
             "click" | "move" | "down" | "up" => {
+                if kind == "click" {
+                    if let Some(target) = ref_target(action) {
+                        let pointer = ComputerAction::Ref {
+                            verb: RefVerb::Click,
+                            target,
+                            ref_kind: ref_kind(action),
+                            text: None,
+                        };
+                        let doubled = action.get("double").and_then(Value::as_bool) == Some(true);
+                        actions.push(pointer.clone());
+                        if doubled {
+                            actions.push(ComputerAction::Wait { ms: 70 });
+                            actions.push(pointer);
+                        }
+                        continue;
+                    }
+                }
                 let x = coordinate(action.get("x"), "x")?;
                 let y = coordinate(action.get("y"), "y")?;
                 let pointer_type = match kind {
@@ -177,7 +304,16 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                actions.push(ComputerAction::Clipboard { text });
+                if let Some(target) = ref_target(action) {
+                    actions.push(ComputerAction::Ref {
+                        verb: RefVerb::SetValue,
+                        target,
+                        ref_kind: ref_kind(action),
+                        text: Some(text),
+                    });
+                } else {
+                    actions.push(ComputerAction::Clipboard { text });
+                }
             }
             "key" => {
                 let key = action
@@ -245,6 +381,24 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
         return Err(ActionError::ExpandedTooMany);
     }
     Ok(actions)
+}
+
+fn ref_target(action: &serde_json::Map<String, Value>) -> Option<String> {
+    action
+        .get("target")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn ref_kind(action: &serde_json::Map<String, Value>) -> String {
+    action
+        .get("refKind")
+        .or_else(|| action.get("ref_kind"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("a11y")
+        .to_string()
 }
 
 fn coordinate(value: Option<&Value>, name: &'static str) -> Result<u32, ActionError> {
@@ -386,10 +540,145 @@ mod tests {
             kind: Some("dom".into()),
             ..UiElement::default()
         };
-        let mut actions = json!([{"kind": "click", "element": 3}]);
+        let mut actions = json!([{"kind": "hover", "element": 3}]);
         assert_eq!(
             apply_element_targets(&mut actions, &[below_fold]).unwrap_err(),
             ActionError::OffscreenElement(3)
+        );
+    }
+
+    fn a11y_button() -> UiElement {
+        UiElement {
+            id: 4,
+            title: "push button Open".into(),
+            selector: Some("0/2/1".into()),
+            kind: Some("a11y".into()),
+            role: Some("push button".into()),
+            x: 10,
+            y: 20,
+            w: 80,
+            h: 24,
+            ..UiElement::default()
+        }
+    }
+
+    #[test]
+    fn a11y_click_stays_semantic() {
+        let mut actions = json!([{"kind": "click", "element": 4}]);
+        apply_element_targets(&mut actions, &[a11y_button()]).unwrap();
+        assert!(actions[0].get("x").is_none());
+        assert_eq!(actions[0]["target"], "0/2/1");
+        assert_eq!(actions[0]["refKind"], "a11y");
+        let parsed = parse_computer_actions(&actions).unwrap();
+        assert!(matches!(
+            parsed[0],
+            ComputerAction::Ref {
+                verb: RefVerb::Click,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a11y_type_is_set_value() {
+        let mut actions = json!([{"kind": "type", "element": 4, "text": "report.pdf"}]);
+        apply_element_targets(&mut actions, &[a11y_button()]).unwrap();
+        let parsed = parse_computer_actions(&actions).unwrap();
+        match &parsed[0] {
+            ComputerAction::Ref {
+                verb: RefVerb::SetValue,
+                text,
+                ..
+            } => assert_eq!(text.as_deref(), Some("report.pdf")),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn dom_click_does_not_fill_coordinates() {
+        let mut actions = json!([{"kind": "click", "element": 1}]);
+        let elements = vec![UiElement {
+            id: 1,
+            title: "Submit".into(),
+            selector: Some("[data-lazyboy=\"1\"]".into()),
+            kind: Some("dom".into()),
+            x: 10,
+            y: 20,
+            w: 80,
+            h: 24,
+            ..UiElement::default()
+        }];
+        apply_element_targets(&mut actions, &elements).unwrap();
+        assert!(actions[0].get("x").is_none());
+        let parsed = parse_computer_actions(&actions).unwrap();
+        match &parsed[0] {
+            ComputerAction::Ref {
+                ref_kind, verb, ..
+            } => {
+                assert_eq!(ref_kind, "dom");
+                assert_eq!(*verb, RefVerb::Click);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn pixel_clicks_are_blocked_when_dom_is_live() {
+        let elements = vec![UiElement {
+            id: 1,
+            title: "Submit".into(),
+            selector: Some("[data-lazyboy=\"1\"]".into()),
+            kind: Some("dom".into()),
+            x: 10,
+            y: 20,
+            w: 80,
+            h: 24,
+            ..UiElement::default()
+        }];
+        let blocked = browser_gui_block(&json!([{"kind":"click","x":40,"y":80}]), &elements);
+        assert!(blocked.unwrap().contains("browser"));
+        assert!(
+            browser_gui_block(&json!([{"kind":"click","element":1}]), &elements).is_none()
+        );
+    }
+
+    #[test]
+    fn chromium_window_clicks_are_blocked_when_dom_is_live() {
+        let elements = vec![
+            UiElement {
+                id: 1,
+                title: "Submit".into(),
+                selector: Some("[data-lazyboy=\"1\"]".into()),
+                kind: Some("dom".into()),
+                ..UiElement::default()
+            },
+            UiElement {
+                id: 2,
+                title: "Chromium".into(),
+                kind: Some("window".into()),
+                x: 0,
+                y: 0,
+                w: 1280,
+                h: 800,
+                ..UiElement::default()
+            },
+        ];
+        let blocked = browser_gui_block(&json!([{"kind":"click","element":2}]), &elements);
+        assert!(blocked.unwrap().contains("browser"));
+    }
+
+    #[test]
+    fn stale_repeat_blocks_the_third_same_click() {
+        assert!(!should_block_stale_click(1, Some("e3"), Some("e3")));
+        assert!(should_block_stale_click(2, Some("e3"), Some("e3")));
+        assert!(!should_block_stale_click(2, Some("e3"), Some("e4")));
+        assert_eq!(
+            click_fingerprint(&json!([{"kind":"click","element":3}])).as_deref(),
+            Some("e3")
+        );
+        assert_eq!(
+            click_fingerprint(&json!([{"kind":"click","x":10,"y":20}])).as_deref(),
+            Some("p10,20")
         );
     }
 }

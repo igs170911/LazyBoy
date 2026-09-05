@@ -106,8 +106,13 @@ fn rewrite_loopback_host(url: &str) -> String {
     if !supervisor.contains("://supervisor") {
         return url.to_string();
     }
-    url.replace("://127.0.0.1", "://host.docker.internal")
-        .replace("://localhost", "://host.docker.internal")
+    let Ok(mut parsed) = reqwest::Url::parse(url) else {
+        return url.to_string();
+    };
+    if matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")) {
+        let _ = parsed.set_host(Some("host.docker.internal"));
+    }
+    parsed.to_string().trim_end_matches('/').to_string()
 }
 
 pub enum DynModel {

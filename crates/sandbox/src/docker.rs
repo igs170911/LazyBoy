@@ -57,6 +57,29 @@ impl DockerSandbox {
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base_url)
     }
+
+    async fn post_lifecycle(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+        action: &str,
+    ) -> Result<(), SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/{action}", computer.id)))
+            .headers(self.headers(context))
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(SandboxError::message(format!(
+                "{action} failed: {}",
+                response.status()
+            )))
+        }
+    }
 }
 
 #[async_trait]
@@ -345,18 +368,44 @@ impl SandboxProvider for DockerSandbox {
         }
     }
 
+    async fn suspend(
+        &self,
+        computer: &ComputerRef,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
+        self.post_lifecycle(computer, context, "pause").await
+    }
+
+    async fn resume(
+        &self,
+        request: ProvisionRequest,
+        context: &AdapterContext,
+    ) -> Result<ComputerRef, SandboxError> {
+        if let Some(provider_ref) = request.provider_ref.clone() {
+            let computer = ComputerRef {
+                id: provider_ref.clone(),
+                home_key: request.home_key.clone(),
+                kind: SandboxKind::Docker,
+                provider_ref,
+                fresh: false,
+            };
+            if self
+                .post_lifecycle(&computer, context, "unpause")
+                .await
+                .is_ok()
+            {
+                return Ok(computer);
+            }
+        }
+        self.provision(request, context).await
+    }
+
     async fn stop(
         &self,
         computer: &ComputerRef,
         context: &AdapterContext,
     ) -> Result<(), SandboxError> {
-        self.client
-            .post(self.url(&format!("/computers/{}/stop", computer.id)))
-            .headers(self.headers(context))
-            .send()
-            .await
-            .map_err(|error| SandboxError::message(error.to_string()))?;
-        Ok(())
+        self.post_lifecycle(computer, context, "stop").await
     }
 
     async fn destroy(

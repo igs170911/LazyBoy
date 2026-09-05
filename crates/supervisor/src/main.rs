@@ -32,6 +32,15 @@ struct ProvisionBody {
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|arg| arg == "--healthcheck") {
+        let ok = reqwest::Client::new()
+            .get("http://127.0.0.1:7091/health")
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success());
+        std::process::exit(if ok { 0 } else { 1 });
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
@@ -43,6 +52,15 @@ async fn main() {
     );
     let image =
         std::env::var("LAZYBOY_COMPUTER_IMAGE").unwrap_or_else(|_| "lazyboy/computer:local".into());
+    let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".into());
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .expect("create data directory");
+    #[cfg(unix)]
+    if std::env::var("HOST_DATA_DIR").is_ok() {
+        std::os::unix::fs::chown(&data_dir, Some(1000), Some(1000))
+            .expect("set data directory owner");
+    }
     let docker = DockerHost::connect(image, token.clone())
         .await
         .expect("docker");
@@ -64,7 +82,13 @@ async fn main() {
         .route("/computers/{id}/files", get(list_files).post(write_file))
         .route("/computers/{id}/read", post(read_file))
         .route("/computers/{id}/stop", post(stop))
+        .route("/computers/{id}/pause", post(pause))
+        .route("/computers/{id}/unpause", post(unpause))
         .route("/computers/{id}", delete(destroy))
+        .route_layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            managed_boundary,
+        ))
         .with_state(app);
     let bind = std::env::var("SUPERVISOR_BIND").unwrap_or_else(|_| "127.0.0.1:7091".into());
     let listener = tokio::net::TcpListener::bind(&bind).await.expect("bind");
@@ -301,6 +325,32 @@ async fn stop(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn pause(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    require_token(&headers, &app.token)?;
+    app.docker.pause(&id).await.map_err(|error| {
+        tracing::error!("pause: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn unpause(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    require_token(&headers, &app.token)?;
+    app.docker.unpause(&id).await.map_err(|error| {
+        tracing::error!("unpause: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn destroy(
     State(app): State<App>,
     headers: HeaderMap,
@@ -320,4 +370,28 @@ struct _Home(&'static str);
 
 fn _assert_home() {
     let _ = HOME;
+}
+
+async fn managed_boundary(
+    State(app): State<App>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if req.uri().path() != "/health" {
+        if require_token(req.headers(), &app.token).is_err() {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        if let Some(id) = req
+            .uri()
+            .path()
+            .strip_prefix("/computers/")
+            .and_then(|p| p.split('/').next())
+        {
+            if app.docker.container_control_token(id).await.is_err() {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
+    }
+    next.run(req).await
 }

@@ -10,3 +10,5 @@ lazyboy-contracts.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 rig-core.workspace = true
+
+reqwest.workspace = true

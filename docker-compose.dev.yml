@@ -1,0 +1,5 @@
+# Opt-in host access for local Rust development only.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5434:5432"

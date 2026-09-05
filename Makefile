@@ -53,26 +53,12 @@ help: ## Show this help
 
 # --- Environment -----------------------------------------------------------
 
-env: ## Create .env from example with fresh random tokens (no-op if .env exists)
-	@if [ -f .env ]; then \
-	  echo ".env already exists — leaving it untouched (use 'make env-force' to regenerate tokens)."; \
-	else \
-	  cp .env.example .env; \
-	  APP=$$(openssl rand -hex 32); SUP=$$(openssl rand -hex 32); \
-	  sed "s|^LAZYBOY_APP_TOKEN=.*|LAZYBOY_APP_TOKEN=$$APP|" .env > .env.tmp; \
-	  sed "s|^SANDBOX_SUPERVISOR_TOKEN=.*|SANDBOX_SUPERVISOR_TOKEN=$$SUP|" .env.tmp > .env.tmp2; \
-	  mv .env.tmp2 .env; rm -f .env.tmp; \
-	  echo "created .env with generated LAZYBOY_APP_TOKEN / SANDBOX_SUPERVISOR_TOKEN (64 hex chars)."; \
-	  echo "next: set XAI_API_KEY in .env, then run 'make up'."; \
-	fi
+env: ## Create .env with independent random secrets (preserve existing .env)
+	@python3 scripts/init-env.py
 
-env-force: ## Regenerate .env (wipes XAI_API_KEY — you will set it again)
-	@cp .env.example .env; \
-	 APP=$$(openssl rand -hex 32); SUP=$$(openssl rand -hex 32); \
-	 sed "s|^LAZYBOY_APP_TOKEN=.*|LAZYBOY_APP_TOKEN=$$APP|" .env > .env.tmp; \
-	 sed "s|^SANDBOX_SUPERVISOR_TOKEN=.*|SANDBOX_SUPERVISOR_TOKEN=$$SUP|" .env.tmp > .env.tmp2; \
-	 mv .env.tmp2 .env; rm -f .env.tmp; \
-	 echo "regenerated .env tokens (XAI_API_KEY reset — set it again)."
+env-force: ## Refuse destructive key regeneration; existing vault keys must be preserved
+	@echo "Refusing to overwrite .env: this can orphan saved passwords. See docs/security-and-harness-review.md for safe rotation."
+	@exit 1
 
 # --- Full Docker stack -----------------------------------------------------
 
@@ -104,7 +90,7 @@ computer: ## Build the Debian desktop image used to spawn bot computers
 	docker build -f image/computer/Dockerfile -t $(COMPUTER_IMAGE) .
 
 postgres: ## Start only postgres and wait until it is ready
-	$(COMPOSE) up -d postgres
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
 	@echo "waiting for postgres (127.0.0.1:5434) to be ready..."
 	@for i in $$(seq 1 40); do if $(COMPOSE) exec -T postgres pg_isready -U lazyboy >/dev/null 2>&1; then echo "postgres ready"; break; fi; sleep 0.5; done
 

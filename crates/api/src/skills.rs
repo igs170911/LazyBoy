@@ -292,6 +292,7 @@ async fn start_skill(
                 argv,
                 cwd: None,
                 timeout_ms: Some(10_000),
+                stdin: None,
             },
             &ctx,
         )
@@ -902,6 +903,7 @@ async fn stop_recorder(
                 argv: cdp_record_stop_command(skill_id),
                 cwd: None,
                 timeout_ms: Some(5_000),
+                stdin: None,
             },
             ctx,
         )
@@ -928,6 +930,7 @@ async fn collect_browser_events(
                 ],
                 cwd: None,
                 timeout_ms: Some(10_000),
+                stdin: None,
             },
             ctx,
         )

@@ -5,11 +5,12 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use lazyboy_contracts::ComputerAction;
+use lazyboy_contracts::{ComputerAction, RefVerb};
 use lazyboy_control::{
-    ActionRequest, PRIMARY_DISPLAY, action_pause_ms, launch_argv_on, normalize_display,
-    open_argv_on, parse_pointer_state, parse_ui_elements, pointer_state_command_on,
-    screenshot_command_on, window_list_command_on, xdotool_argv_on,
+    ActionRequest, PRIMARY_DISPLAY, a11y_command_on, action_pause_ms, cdp_command_on,
+    launch_argv_on, normalize_display, open_argv_on, parse_a11y_page, parse_cdp_page,
+    parse_pointer_state, parse_ui_elements, pointer_state_command_on, screenshot_command_on,
+    window_list_command_on, xdotool_argv_on,
 };
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -153,6 +154,12 @@ async fn apply_action(
                 .ok_or_else(|| "unknown application".to_string())?;
             spawn_detached(&argv).await
         }
+        ComputerAction::Ref {
+            verb,
+            target,
+            ref_kind,
+            text,
+        } => apply_ref(display, profile, *verb, target, ref_kind, text.as_deref()).await,
         other => {
             let argv =
                 xdotool_argv_on(display, other).ok_or_else(|| "unsupported action".to_string())?;
@@ -168,6 +175,51 @@ async fn apply_action(
             }
         }
     }
+}
+
+async fn apply_ref(
+    display: &str,
+    profile: Option<&str>,
+    verb: RefVerb,
+    target: &str,
+    kind: &str,
+    text: Option<&str>,
+) -> Result<(), String> {
+    let action = match verb {
+        RefVerb::Click => "click",
+        RefVerb::SetValue => "type",
+        RefVerb::Focus => "focus",
+    };
+    let mut request = serde_json::json!({
+        "action": action,
+        "selector": target,
+        "display": display,
+        "ensure": false,
+    });
+    if let Some(text) = text {
+        request["text"] = serde_json::json!(text);
+    }
+    let argv = if kind == "dom" {
+        cdp_command_on(display, profile, &request)
+    } else {
+        a11y_command_on(display, &request)
+    };
+    let output = Command::new(&argv[0])
+        .args(&argv[1..])
+        .output()
+        .await
+        .map_err(|error| error.to_string())?;
+    let raw = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    } else {
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let ok = if kind == "dom" {
+        parse_cdp_page(&raw).ok
+    } else {
+        parse_a11y_page(&raw).ok
+    };
+    if ok { Ok(()) } else { Err(raw) }
 }
 
 async fn spawn_detached(argv: &[String]) -> Result<(), String> {
@@ -186,14 +238,15 @@ async fn observation_json(display: &str, png: Vec<u8>) -> serde_json::Value {
     let mut body = serde_json::json!({
         "png_base64": base64::engine::general_purpose::STANDARD.encode(png)
     });
-    let (cursor, window) = run_pointer_state(display).await;
+    let ((cursor, window), elements) =
+        tokio::join!(run_pointer_state(display), run_window_list(display));
     if let Some(cursor) = cursor {
         body["cursor"] = serde_json::json!({ "x": cursor.x, "y": cursor.y });
     }
     if let Some(window) = window {
         body["activeWindow"] = serde_json::json!({ "id": window.id, "title": window.title });
     }
-    let elements = run_window_list(display).await;
+
     if !elements.is_empty() {
         body["elements"] = serde_json::to_value(elements).unwrap_or(serde_json::json!([]));
     }

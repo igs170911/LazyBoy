@@ -254,6 +254,21 @@ async fn connect_client(row: &McpRow) -> Result<LiveClient, String> {
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| "stdio 需要 command".to_string())?;
             let mut cmd = Command::new(command);
+            cmd.env_clear();
+            for key in [
+                "PATH",
+                "HOME",
+                "LANG",
+                "LC_ALL",
+                "TMPDIR",
+                "PYTHONPATH",
+                "NODE_EXTRA_CA_CERTS",
+            ] {
+                if let Some(value) = std::env::var_os(key) {
+                    cmd.env(key, value);
+                }
+            }
+            cmd.kill_on_drop(true);
             cmd.args(&row.args);
             cmd.stdin(std::process::Stdio::piped());
             cmd.stdout(std::process::Stdio::piped());

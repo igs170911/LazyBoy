@@ -24,6 +24,14 @@ pub enum ScrollDirection {
     Down,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RefVerb {
+    Click,
+    Focus,
+    SetValue,
+}
+
 /// Canonical actions the control plane understands.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -35,6 +43,15 @@ pub enum ComputerAction {
         pointer_type: PointerType,
         #[serde(default)]
         button: Option<PointerButton>,
+    },
+    /// Semantic target (DOM selector or AT-SPI path). Execute via CDP/a11y, not xdotool.
+    Ref {
+        verb: RefVerb,
+        target: String,
+        #[serde(default, rename = "refKind")]
+        ref_kind: String,
+        #[serde(default)]
+        text: Option<String>,
     },
     Clipboard {
         text: String,
@@ -86,15 +103,24 @@ pub struct UiElement {
     pub y: u32,
     pub w: u32,
     pub h: u32,
-    /// CSS selector for in-page controls (Chromium CDP). Native windows leave this empty.
+    /// CSS selector (DOM) or AT-SPI path (a11y). Native windows leave this empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
-    /// "dom" for page controls, "window" for native windows.
+    /// "dom" for page controls, "a11y" for AT-SPI widgets, "window" for native windows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 impl UiElement {
+    pub fn has_ref(&self) -> bool {
+        self.selector
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            && matches!(self.kind.as_deref(), Some("dom") | Some("a11y"))
+    }
+
     pub fn center(&self) -> (u32, u32) {
         (
             self.x.saturating_add(self.w / 2),

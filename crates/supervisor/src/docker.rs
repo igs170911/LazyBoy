@@ -14,9 +14,8 @@ use bollard::network::CreateNetworkOptions;
 use futures_util::StreamExt;
 use lazyboy_control::{
     ActionRequest, CommandRequest, CommandResult, EnsureScreenRequest, EnsureScreenResult, HOME,
-    ScreenTarget, TEAM_SCREEN_LIMIT, action_pause_ms, launch_argv_on, normalize_display,
-    normalize_workspace_path, open_argv_on, pointer_state_command_on, screen_layout,
-    screenshot_command_on, window_list_command_on, xdotool_argv_on,
+    ScreenTarget, TEAM_SCREEN_LIMIT, normalize_display, normalize_workspace_path,
+    pointer_state_command_on, screen_layout, screenshot_command_on, window_list_command_on,
 };
 use tokio::time::{Duration, sleep};
 
@@ -68,22 +67,40 @@ impl DockerHost {
         home_path: &str,
         space_id: &str,
     ) -> Result<Provisioned, String> {
-        let home_path = host_bind_path(home_path);
-        tokio::fs::create_dir_all(&home_path)
+        let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".into());
+        if home_key.is_empty()
+            || !home_key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+        {
+            return Err("invalid home key".into());
+        }
+        let expected = PathBuf::from(&data_dir).join("homes").join(home_key);
+        if PathBuf::from(home_path) != expected {
+            return Err("home path is outside managed homes".into());
+        }
+        // Work on the container-local path, not the host daemon's bind path.
+        tokio::fs::create_dir_all(&expected)
             .await
-            .map_err(|error| error.to_string())?;
-        let _ = tokio::process::Command::new("chown")
-            .args(["-R", "1000:1000", &home_path])
-            .status()
-            .await;
+            .map_err(|e| e.to_string())?;
+        let canonical = tokio::fs::canonicalize(&expected)
+            .await
+            .map_err(|e| e.to_string())?;
+        let root = tokio::fs::canonicalize(&data_dir)
+            .await
+            .map_err(|e| e.to_string())?;
+        if canonical != root.join("homes").join(home_key) {
+            return Err("symlinked home is not allowed".into());
+        }
+        #[cfg(unix)]
+        if std::env::var("HOST_DATA_DIR").is_ok() {
+            std::os::unix::fs::chown(&canonical, Some(1000), Some(1000))
+                .map_err(|e| e.to_string())?;
+        }
+        let home_path = host_bind_path(home_path);
         if let Some(existing) = self.find(home_key).await? {
             if self.container_reusable(&existing).await.unwrap_or(false) {
-                self.docker
-                    .start_container(&existing, None::<StartContainerOptions<String>>)
-                    .await
-                    .ok();
-                self.wait_running(&existing).await?;
-                self.wait_ready(&existing).await?;
+                self.wake(&existing).await?;
                 let screen_url = self.screen_url(&existing, false).await.ok();
                 return Ok(Provisioned {
                     id: existing,
@@ -100,6 +117,7 @@ impl DockerHost {
         let mut labels = HashMap::new();
         labels.insert("lazyboy.homeKey".into(), home_key.to_string());
         labels.insert("lazyboy.spaceId".into(), space_id.to_string());
+        labels.insert("lazyboy.controlVersion".into(), "2".into());
 
         let mut port_bindings = HashMap::new();
         let mut exposed = HashMap::new();
@@ -136,7 +154,10 @@ impl DockerHost {
             env: Some(vec![
                 "DISPLAY=:1".into(),
                 format!("HOME={HOME}"),
-                format!("LAZYBOY_CONTROL_TOKEN={}", self.control_token),
+                format!(
+                    "LAZYBOY_CONTROL_TOKEN={}",
+                    scoped_control_token(&self.control_token, home_key)
+                ),
             ]),
             labels: Some(labels),
             exposed_ports: Some(exposed),
@@ -212,13 +233,27 @@ impl DockerHost {
             }
             None => HOME.to_string(),
         };
+        let timeout_ms = request.timeout_ms.unwrap_or(30_000).clamp(100, 120_000);
         let argv = if request.argv.is_empty() {
             vec!["/bin/echo".into(), "ready".into()]
         } else {
             request.argv
         };
-        self.exec_argv(id, &argv, Some(&cwd), &ScreenTarget::default())
-            .await
+        let mut bounded = vec![
+            "timeout".into(),
+            "--signal=TERM".into(),
+            "--kill-after=2s".into(),
+            format!("{}s", timeout_ms as f64 / 1000.0),
+        ];
+        bounded.extend(argv);
+        self.exec_raw_cmd(
+            id,
+            &bounded,
+            Some(&cwd),
+            &ScreenTarget::default(),
+            request.stdin,
+        )
+        .await
     }
 
     pub async fn exec_on(
@@ -239,12 +274,21 @@ impl DockerHost {
             }
             None => HOME.to_string(),
         };
+        let timeout_ms = request.timeout_ms.unwrap_or(30_000).clamp(100, 120_000);
         let argv = if request.argv.is_empty() {
             vec!["/bin/echo".into(), "ready".into()]
         } else {
             request.argv
         };
-        self.exec_argv(id, &argv, Some(&cwd), target).await
+        let mut bounded = vec![
+            "timeout".into(),
+            "--signal=TERM".into(),
+            "--kill-after=2s".into(),
+            format!("{}s", timeout_ms as f64 / 1000.0),
+        ];
+        bounded.extend(argv);
+        self.exec_raw_cmd(id, &bounded, Some(&cwd), target, request.stdin)
+            .await
     }
 
     pub async fn observe(&self, id: &str) -> Result<Vec<u8>, String> {
@@ -263,7 +307,13 @@ impl DockerHost {
             value
         } else {
             let (stdout, stderr, code) = self
-                .exec_raw(id, &screenshot_command_on(&target.display), None, target)
+                .exec_raw(
+                    id,
+                    &screenshot_command_on(&target.display),
+                    None,
+                    target,
+                    None,
+                )
                 .await?;
             if code != 0 {
                 return Err(String::from_utf8_lossy(&stderr).into_owned());
@@ -343,63 +393,8 @@ impl DockerHost {
             request.profile_path.as_deref(),
             None,
         );
-        if let Ok(body) = self.control_act(id, &request, &target).await {
-            return Ok(body);
-        }
-        let mut completed = 0usize;
-        for action in &request.actions {
-            match action {
-                lazyboy_contracts::ComputerAction::Wait { ms } => {
-                    sleep(Duration::from_millis(*ms as u64)).await;
-                }
-                lazyboy_contracts::ComputerAction::Open { path } => {
-                    let _ = self
-                        .exec_argv(
-                            id,
-                            &open_argv_on(&target.display, target.profile_path.as_deref(), path),
-                            None,
-                            &target,
-                        )
-                        .await?;
-                }
-                lazyboy_contracts::ComputerAction::Launch { application, uri } => {
-                    let argv = launch_argv_on(
-                        &target.display,
-                        target.profile_path.as_deref(),
-                        application,
-                        uri.as_deref(),
-                    )
-                    .ok_or_else(|| "unknown application".to_string())?;
-                    let _ = self.exec_argv(id, &argv, None, &target).await?;
-                }
-                other => {
-                    let argv = xdotool_argv_on(&target.display, other)
-                        .ok_or_else(|| "unsupported action".to_string())?;
-                    let result = self.exec_argv(id, &argv, None, &target).await?;
-                    if result.code != 0 {
-                        return Err(result.stderr);
-                    }
-                }
-            }
-            let pause = action_pause_ms(action);
-            if pause > 0 {
-                sleep(Duration::from_millis(pause)).await;
-            }
-            completed += 1;
-        }
-        if request.settle_ms > 0 {
-            sleep(Duration::from_millis(request.settle_ms as u64)).await;
-        }
-        let mut body = serde_json::json!({ "completed": completed });
-        if request.observe {
-            let payload = self.observe_payload(id, &target).await?;
-            if let serde_json::Value::Object(map) = payload.json {
-                if let Some(object) = body.as_object_mut() {
-                    object.extend(map);
-                }
-            }
-        }
-        Ok(body)
+        // A transport failure may follow a successful click. Never replay mutations.
+        self.control_act(id, &request, &target).await
     }
 
     pub async fn screen_url(&self, id: &str, interactive: bool) -> Result<String, String> {
@@ -536,6 +531,7 @@ PY"#,
                 ],
                 None,
                 &ScreenTarget::default(),
+                None,
             )
             .await?;
         if code != 0 {
@@ -570,6 +566,18 @@ PY"#,
             .stop_container(id, Some(StopContainerOptions { t: 8 }))
             .await
             .map_err(|error| error.to_string())
+    }
+
+    pub async fn pause(&self, id: &str) -> Result<(), String> {
+        match self.docker.pause_container(id).await {
+            Ok(()) => Ok(()),
+            Err(error) if docker_already(&error.to_string(), "paused") => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    pub async fn unpause(&self, id: &str) -> Result<(), String> {
+        self.wake(id).await
     }
 
     pub async fn destroy(&self, id: &str) -> Result<(), String> {
@@ -610,17 +618,31 @@ PY"#,
             .inspect_container(id, None)
             .await
             .map_err(|error| error.to_string())?;
+        if info
+            .config
+            .as_ref()
+            .and_then(|c| c.labels.as_ref())
+            .and_then(|l| l.get("lazyboy.controlVersion"))
+            .map(String::as_str)
+            != Some("2")
+        {
+            return Ok(false);
+        }
         let wanted = self.current_image_id().await?;
         let have = info.image.unwrap_or_default();
         if !image_ids_match(&wanted, &have) {
             return Ok(false);
         }
         let running = info.state.as_ref().and_then(|state| state.running) == Some(true);
+        let paused = info.state.as_ref().and_then(|state| state.paused) == Some(true);
         let exit = info
             .state
             .as_ref()
             .and_then(|state| state.exit_code)
             .unwrap_or(0);
+        if paused {
+            return Ok(true);
+        }
         if !running && exit != 0 {
             return Ok(false);
         }
@@ -659,6 +681,33 @@ PY"#,
         }
     }
 
+    async fn wake(&self, id: &str) -> Result<(), String> {
+        let info = self
+            .docker
+            .inspect_container(id, None)
+            .await
+            .map_err(|error| error.to_string())?;
+        let running = info.state.as_ref().and_then(|state| state.running) == Some(true);
+        let paused = info.state.as_ref().and_then(|state| state.paused) == Some(true);
+        if paused {
+            match self.docker.unpause_container(id).await {
+                Ok(()) => {}
+                Err(error) if docker_already(&error.to_string(), "not paused") => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            return self.wait_ready_fast(id).await;
+        }
+        if running {
+            return self.wait_ready_fast(id).await;
+        }
+        self.docker
+            .start_container(id, None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.wait_running(id).await?;
+        self.wait_ready(id).await
+    }
+
     async fn wait_running(&self, id: &str) -> Result<(), String> {
         for _ in 0..40 {
             let info = self
@@ -675,12 +724,23 @@ PY"#,
     }
 
     async fn wait_ready(&self, id: &str) -> Result<(), String> {
-        for _ in 0..160 {
+        self.wait_ready_attempts(id, 160).await
+    }
+
+    async fn wait_ready_fast(&self, id: &str) -> Result<(), String> {
+        self.wait_ready_attempts(id, 20).await
+    }
+
+    async fn wait_ready_attempts(&self, id: &str, attempts: u32) -> Result<(), String> {
+        for _ in 0..attempts {
             let info = self
                 .docker
                 .inspect_container(id, None)
                 .await
                 .map_err(|error| error.to_string())?;
+            if info.state.as_ref().and_then(|state| state.paused) == Some(true) {
+                return Err("computer is still paused".into());
+            }
             if info.state.as_ref().and_then(|state| state.running) != Some(true) {
                 let exit = info.state.and_then(|state| state.exit_code).unwrap_or(1);
                 return Err(format!("computer exited during startup with code {exit}"));
@@ -708,7 +768,20 @@ PY"#,
         cwd: Option<&str>,
         target: &ScreenTarget,
     ) -> Result<CommandResult, String> {
-        let (stdout, stderr, code) = self.exec_raw(id, argv, cwd, target).await?;
+        self.exec_raw_cmd(id, argv, cwd, target, None).await
+    }
+
+    async fn exec_raw_cmd(
+        &self,
+        id: &str,
+        argv: &[String],
+        cwd: Option<&str>,
+        target: &ScreenTarget,
+        stdin: Option<String>,
+    ) -> Result<CommandResult, String> {
+        let (stdout, stderr, code) = self
+            .exec_raw(id, argv, cwd, target, stdin.as_deref())
+            .await?;
         Ok(CommandResult {
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
             stderr: String::from_utf8_lossy(&stderr).into_owned(),
@@ -722,6 +795,7 @@ PY"#,
         argv: &[String],
         cwd: Option<&str>,
         target: &ScreenTarget,
+        stdin: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<u8>, i32), String> {
         let display = normalize_display(&target.display);
         let mut env = vec![
@@ -737,6 +811,7 @@ PY"#,
             .create_exec(
                 id,
                 CreateExecOptions {
+                    attach_stdin: Some(stdin.is_some()),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
                     cmd: Some(argv.to_vec()),
@@ -750,7 +825,10 @@ PY"#,
             .map_err(|error| error.to_string())?;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        if let StartExecResults::Attached { mut output, .. } = self
+        if let StartExecResults::Attached {
+            mut output,
+            mut input,
+        } = self
             .docker
             .start_exec(
                 &exec.id,
@@ -761,14 +839,26 @@ PY"#,
             .await
             .map_err(|error| error.to_string())?
         {
+            if let Some(body) = stdin {
+                use tokio::io::AsyncWriteExt;
+                input
+                    .write_all(body.as_bytes())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                input.shutdown().await.map_err(|error| error.to_string())?;
+            }
             while let Some(chunk) = output.next().await {
                 match chunk.map_err(|error| error.to_string())? {
-                    bollard::container::LogOutput::StdOut { message } => {
-                        stdout.extend_from_slice(&message)
-                    }
-                    bollard::container::LogOutput::StdErr { message } => {
-                        stderr.extend_from_slice(&message)
-                    }
+                    bollard::container::LogOutput::StdOut { message } => stdout.extend_from_slice(
+                        &message[..message
+                            .len()
+                            .min((16 * 1024 * 1024usize).saturating_sub(stdout.len()))],
+                    ),
+                    bollard::container::LogOutput::StdErr { message } => stderr.extend_from_slice(
+                        &message[..message
+                            .len()
+                            .min((1024 * 1024usize).saturating_sub(stderr.len()))],
+                    ),
                     _ => {}
                 }
             }
@@ -781,17 +871,45 @@ PY"#,
         Ok((stdout, stderr, inspect.exit_code.unwrap_or(1) as i32))
     }
 
+    pub async fn container_control_token(&self, id: &str) -> Result<String, String> {
+        let info = self
+            .docker
+            .inspect_container(id, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        let labels = info
+            .config
+            .and_then(|c| c.labels)
+            .ok_or("unmanaged container")?;
+        let home = labels.get("lazyboy.homeKey").ok_or("unmanaged container")?;
+        Ok(scoped_control_token(&self.control_token, home))
+    }
+
     async fn control_observe_json(
         &self,
         id: &str,
         target: &ScreenTarget,
     ) -> Result<serde_json::Value, String> {
-        let script = format!(
-            "curl -fsS -H 'Authorization: Bearer {}' -H 'x-lazyboy-display: {}' http://127.0.0.1:7070/observe",
-            self.control_token, target.display
-        );
+        let token = self.container_control_token(id).await?;
         let result = self
-            .exec_argv(id, &["bash".into(), "-lc".into(), script], None, target)
+            .exec_argv(
+                id,
+                &[
+                    "curl".into(),
+                    "-fsS".into(),
+                    "--max-time".into(),
+                    "20".into(),
+                    "-X".into(),
+                    "POST".into(),
+                    "-H".into(),
+                    format!("Authorization: Bearer {token}"),
+                    "-H".into(),
+                    format!("x-lazyboy-display: {}", target.display),
+                    "http://127.0.0.1:7070/observe".into(),
+                ],
+                None,
+                target,
+            )
             .await?;
         if result.code != 0 {
             return Err(result.stderr);
@@ -806,19 +924,29 @@ PY"#,
         target: &ScreenTarget,
     ) -> Result<serde_json::Value, String> {
         let payload = serde_json::to_string(request).map_err(|error| error.to_string())?;
-        let profile_header = target
-            .profile_path
-            .as_deref()
-            .map(|profile| format!(" -H 'x-lazyboy-profile: {profile}'"))
-            .unwrap_or_default();
-        let script = format!(
-            "curl -fsS -H 'Authorization: Bearer {}' -H 'x-lazyboy-display: {}'{profile_header} -H 'content-type: application/json' -d {} http://127.0.0.1:7070/act",
-            self.control_token,
-            target.display,
-            shell_single_quote(&payload)
-        );
+        let token = self.container_control_token(id).await?;
+        let mut argv = vec![
+            "curl".into(),
+            "-fsS".into(),
+            "--max-time".into(),
+            "120".into(),
+            "-H".into(),
+            format!("Authorization: Bearer {token}"),
+            "-H".into(),
+            format!("x-lazyboy-display: {}", target.display),
+            "-H".into(),
+            "content-type: application/json".into(),
+        ];
+        if let Some(profile) = &target.profile_path {
+            argv.extend(["-H".into(), format!("x-lazyboy-profile: {profile}")]);
+        }
+        argv.extend([
+            "--data-binary".into(),
+            "@-".into(),
+            "http://127.0.0.1:7070/act".into(),
+        ]);
         let result = self
-            .exec_argv(id, &["bash".into(), "-lc".into(), script], None, target)
+            .exec_raw_cmd(id, &argv, None, target, Some(payload))
             .await?;
         if result.code != 0 {
             return Err(result.stderr);
@@ -871,6 +999,11 @@ fn computer_pids_limit() -> i64 {
         .unwrap_or(2048)
 }
 
+fn docker_already(error: &str, needle: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("409") || error.contains(needle)
+}
+
 fn container_name(home_key: &str) -> String {
     let sanitized: String = home_key
         .chars()
@@ -889,4 +1022,27 @@ fn network_name(home_key: &str) -> String {
 
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'"'"'"#))
+}
+
+fn scoped_control_token(master: &str, home: &str) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(master.as_bytes())
+        .expect("HMAC accepts any key length");
+    mac.update(b"lazyboy-computer-control-v2:");
+    mac.update(home.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    #[test]
+    fn computer_credentials_do_not_reveal_or_share_the_master() {
+        let master = "test-master-key-at-least-32-characters";
+        let a = scoped_control_token(master, "a");
+        let b = scoped_control_token(master, "b");
+        assert_ne!(a, master);
+        assert_ne!(a, b);
+        assert_eq!(a, scoped_control_token(master, "a"));
+    }
 }

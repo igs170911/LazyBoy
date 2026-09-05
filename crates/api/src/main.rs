@@ -8,11 +8,13 @@ mod memory;
 mod rooms;
 mod routes;
 mod runs;
+mod schedules;
 mod screen_proxy;
 mod sessions;
 mod skills;
 mod state;
 mod tools;
+mod vault;
 mod workspace;
 
 use std::net::SocketAddr;
@@ -57,6 +59,10 @@ async fn main() {
     tokio::spawn(async move {
         computer::idle_loop(idle_state).await;
     });
+    let schedule_state = state.clone();
+    tokio::spawn(async move {
+        schedules::tick_loop(schedule_state).await;
+    });
 
     let bind = std::env::var("API_BIND").unwrap_or_else(|_| "127.0.0.1:3101".into());
     let addr: SocketAddr = bind.parse().expect("API_BIND");
@@ -66,16 +72,20 @@ async fn main() {
         );
     }
 
-    let web_dir = std::env::var("LAZYBOY_WEB_DIR").unwrap_or_else(|_| "apps/web".into());
+    let web_dir = std::env::var("LAZYBOY_WEB_DIR").unwrap_or_else(|_| "apps/web/dist".into());
     let app = Router::new()
         .route(
             "/api/health",
             axum::routing::get(|| async { axum::Json(serde_json::json!({"ok": true})) }),
         )
         .merge(auth::public_router(state.clone()))
-        .merge(routes::router(state))
+        .merge(routes::router(state.clone()))
         .fallback_service(ServeDir::new(web_dir))
-        .layer(DefaultBodyLimit::max(24 * 1024 * 1024));
+        .layer(DefaultBodyLimit::max(28 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            auth::browser_boundary,
+        ));
 
     tracing::info!("api listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

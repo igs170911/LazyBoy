@@ -1,4 +1,4 @@
-import UseAnimations from "react-useanimations";
+import UseAnimations from "./use-animations";
 import type { Animation } from "react-useanimations/utils";
 import activity from "react-useanimations/lib/activity";
 import archive from "react-useanimations/lib/archive";

@@ -10,6 +10,10 @@ export TERM="${TERM:-xterm-256color}"
 export LANG="${LANG:-zh_TW.UTF-8}"
 export LC_ALL="${LC_ALL:-zh_TW.UTF-8}"
 export LANGUAGE="${LANGUAGE:-zh_TW:zh:en}"
+export GTK_MODULES="${GTK_MODULES:-atk-bridge}"
+export GTK_A11Y="${GTK_A11Y:-atspi}"
+export GNOME_ACCESSIBILITY="${GNOME_ACCESSIBILITY:-1}"
+export NO_AT_BRIDGE="${NO_AT_BRIDGE:-0}"
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
 ROOT=/tmp/lazyboy
@@ -112,6 +116,41 @@ alive_pidfile() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
+start_atspi() {
+  local display="$1"
+  local log="$2"
+  local number="${display#:}"
+  if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+    printf '%s\n' "$DBUS_SESSION_BUS_ADDRESS" >"$ROOT/screen-${number}.dbus"
+  fi
+  if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    printf '%s\n' "$XDG_RUNTIME_DIR" >"$ROOT/screen-${number}.runtime"
+  fi
+  local launcher="" registry=""
+  local c
+  for c in /usr/libexec/at-spi-bus-launcher /usr/lib/at-spi2-core/at-spi-bus-launcher at-spi-bus-launcher; do
+    if [[ -x "$c" ]] || command -v "$c" >/dev/null 2>&1; then
+      launcher="$c"
+      break
+    fi
+  done
+  for c in /usr/libexec/at-spi2-registryd /usr/lib/at-spi2-core/at-spi2-registryd at-spi2-registryd; do
+    if [[ -x "$c" ]] || command -v "$c" >/dev/null 2>&1; then
+      registry="$c"
+      break
+    fi
+  done
+  if [[ -n "$launcher" ]]; then
+    DISPLAY="$display" "$launcher" --launch-immediately >"${log}-atspi-bus.log" 2>&1 &
+    echo $! >"${log}-atspi-bus.pid"
+  fi
+  if [[ -n "$registry" ]]; then
+    DISPLAY="$display" "$registry" >"${log}-atspi-registry.log" 2>&1 &
+    echo $! >"${log}-atspi-registry.pid"
+  fi
+  sleep 0.2
+}
+
 start_desktop() {
   local display="$1"
   local xfce_home="$2"
@@ -131,6 +170,7 @@ start_desktop() {
     eval "$(dbus-launch --sh-syntax)"
     echo "${DBUS_SESSION_BUS_PID:-}" >"${log}-dbus.pid"
   fi
+  start_atspi "$display" "$log"
   if command -v xfconfd >/dev/null 2>&1; then
     xfconfd --daemon >/dev/null 2>&1 || true
   fi

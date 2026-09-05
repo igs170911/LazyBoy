@@ -1,3 +1,4 @@
+mod a11y;
 mod actions;
 mod cdp;
 mod lease;
@@ -9,6 +10,7 @@ mod screen;
 mod takeover;
 mod x11;
 
+pub use a11y::*;
 pub use actions::*;
 pub use cdp::*;
 pub use lease::*;

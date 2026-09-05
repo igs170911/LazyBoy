@@ -9,7 +9,7 @@ export interface Message { id:string; sessionId?:string; seq?:number; role:strin
 export interface MessageFile { kind:"image"|"file"; name:string; mimeType?:string; size?:number }
 export interface RoomMember { id:string; name:string; avatarColor:string; avatarShape:AvatarShape }
 export interface Room { id:string; name:string; members:RoomMember[]; lastMessageAt:string|null; lastPreview:string|null; unreadCount:number }
-export interface ComputerStatus { botId:string; mode:ComputerMode; state:ComputerState; controlHolder:"none"|"bot"|"user"; takeoverRequested:boolean; busyBotName:string|null; busySessionId:string|null; busyRunId:string|null; busyStep?:string|null; waitingRunId?:string|null; waitingSessionId?:string|null; queuedRuns?:number; display:string|null; profileMode:string; screenAvailable:boolean }
+export interface ComputerStatus { botId:string; mode:ComputerMode; state:ComputerState; controlHolder:"none"|"bot"|"user"; takeoverRequested:boolean; busyBotName:string|null; busySessionId:string|null; busyRunId:string|null; busyStep?:string|null; usingComputer?:boolean; waitingRunId?:string|null; waitingSessionId?:string|null; queuedRuns?:number; display:string|null; profileMode:string; screenAvailable:boolean }
 export interface PlaybookStep { do:string; expect?:string; note?:string }
 export interface PlaybookInput { name:string; description?:string; example?:string }
 export interface Playbook { name?:string; whenToUse?:string; intent?:string; inputs?:PlaybookInput[]; preconditions?:string[]; steps?:(PlaybookStep|string)[]; howToCheck?:string; whatToReturn?:string; cautions?:string[] }
