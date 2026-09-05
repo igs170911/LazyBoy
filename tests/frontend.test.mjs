@@ -31,3 +31,23 @@ test('saved login rejects HTTP, lookalike hosts, and missing host before touchin
   assert.equal(evaluate({username:'u',password:'secret',expectedHost}).ok,false);
  }
 });
+
+const mdJs=ts.transpileModule(fs.readFileSync('apps/web/src/markdown.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+const mdBox={exports:{},require:(name)=>{
+ if(name==='react')return{useCallback:fn=>fn,useRef:()=>({current:null}),useState:()=>[false,()=>{}],memo:fn=>fn};
+ if(name==='react/jsx-runtime')return{jsx:()=>null,jsxs:()=>null,Fragment:'Fragment'};
+ if(name==='react-markdown'||name==='remark-gfm'||name==='remark-breaks')return{default:()=>null};
+ if(name==='./i18n')return{t:key=>key};
+ if(name.endsWith('.css'))return{};
+ throw new Error('unexpected import '+name);
+}};
+vm.runInNewContext(mdJs,mdBox);
+const {sanitizeMarkdownUrl}=mdBox.exports;
+test('markdown links only keep http(s), mailto, tel, and in-page hashes',()=>{
+ assert.equal(sanitizeMarkdownUrl('https://example.com/docs'),'https://example.com/docs');
+ assert.equal(sanitizeMarkdownUrl('mailto:hi@example.com'),'mailto:hi@example.com');
+ assert.equal(sanitizeMarkdownUrl('#section'),'#section');
+ assert.equal(sanitizeMarkdownUrl('javascript:alert(1)'),undefined);
+ assert.equal(sanitizeMarkdownUrl('data:text/html,<script>alert(1)</script>'),undefined);
+ assert.equal(sanitizeMarkdownUrl('/relative'),undefined);
+});

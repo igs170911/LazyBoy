@@ -134,270 +134,85 @@ Blobatar 色塊＋眼睛。啟動、喚醒、連線、換手時，預覽左上�
 
 ---
 
-## 系統怎麼疊起來
+## 系統怎麼轉起來
 
-```text
-瀏覽器
-  ├─ React UI（apps/web）
-  └─ /view/{bot}  →  API 畫面代理（cookie）→ 容器 websockify → x11vnc → Xvfb
-         │
-         ▼
-    lazyboy-api
-      ├─ Postgres + pgvector
-      ├─ runs worker（最多 16 條並行，每個 bot 同時一個）
-      ├─ computer idle_loop（熱機／凍結／停放）
-      ├─ schedules tick
-      ├─ MCP hub
-      └─ harness：選模型、接金鑰
-         │
-         ▼ HTTP（SANDBOX_SUPERVISOR_TOKEN）
-    lazyboy-supervisor :7091
-         │ Docker socket
-         ▼
-    lazyboy/computer 容器
-      ├─ start.sh → Xvfb :1 + XFCE + x11vnc + websockify
-      ├─ lazyboy-screen   額外 Team 螢幕 :2…:8
-      └─ lazyboy-controld :7070   容器內觀察／動作
-           data/homes/<homeKey>  bind 到 /home/lazyboy
-```
+![其實只有三個角色：你、LazyBoy、它的電腦](./docs/diagrams/map.png)
 
-Compose 裡 supervisor **不**對主機開埠。API 在容器網路連 `supervisor:7091`。
+Compose 裡 supervisor **不**對主機開埠。API 在容器網路連 `supervisor:7091`。家目錄 `data/homes/<homeKey>` bind 進容器的 `/home/lazyboy`。
 
 ---
 
-## 時序：你送一則訊息
+## 你送一則訊息
 
-```mermaid
-sequenceDiagram
-    participant U as 瀏覽器
-    participant A as API
-    participant DB as Postgres
-    participant W as run worker
-    participant H as harness
-    participant M as 模型
-    participant S as supervisor
-    participant C as 桌面容器
+![它先決定：聊就好，還是要動手](./docs/diagrams/chat.png)
 
-    U->>A: POST /api/sessions/{id}/messages
-    A->>DB: 寫 user 訊息（clientNonce 去重）
-    A->>DB: INSERT run status=queued
-    A-->>U: 202 + 輪詢 messages / computer status
+同一 bot 已有進行中的工作時，新訊息會排隊（`queuedBehindActive`）。人正在接管時，後面的話只排隊，思考轉圈不會假裝它還在動。問候路徑會把工具表清空，從源頭避免「哈囉」去開電腦。
 
-    loop 每 200ms
-        W->>DB: 租下一筆 queued（同 bot 沒有別人在跑）
-    end
-    W->>H: resolve_backend（bot → 工作區 → 環境變數）
-    H-->>W: provider + model + key
-    W->>M: 系統提示 + 歷史 + 記憶 + 工具定義
-
-    alt 純聊天（問候、閒聊、知識問答）
-        M-->>W: 純文字
-        W->>DB: 寫 assistant 訊息，run=completed
-    else 要用電腦
-        M-->>W: tool_call（browser / computer_act / shell…）
-        W->>DB: busy_step（電腦啟動中／喚醒中／實際動作）
-        W->>A: boot() 若尚未 running
-        A->>S: provision 或 unpause
-        S->>C: 等 /tmp/lazyboy/ready
-        W->>C: 執行工具
-        C-->>W: 截圖／DOM／stdout
-        W->>M: tool result（畫面變了才帶圖）
-        M-->>W: 下一動或結束文字
-    end
-    W->>DB: completed，放開螢幕租約
-    U->>A: GET status／messages（2 秒一次）
-```
-
-同一 bot 已有 `leased`／`running`／`waiting_takeover` 時，新訊息會 `queuedBehindActive`。人正在接管時，後面的話只排隊，思考轉圈不會假裝它還在動。
+`execute_run` 每一輪：續租約 → 寫步驟文字 → 問模型 → 沒有工具就結束（技能沒過會再把畫面塞回去）→ 有工具且需要沙盒才 boot → 畫面沒變就不重複塞圖。回合上限：聊天 4、一般 40、技能 80。
 
 ---
 
-## 時序：電腦從開機到你看到畫面
+## 電腦的作息
 
-```mermaid
-sequenceDiagram
-    participant U as 瀏覽器
-    participant A as API
-    participant S as supervisor
-    participant D as Docker
-    participant C as 容器 PID 1
-
-    U->>A: POST /api/computer/{bot}/boot
-    alt 已是 running 且容器還在
-        A-->>U: state=running
-    else 休眠中（docker pause）
-        A->>S: POST /computers/{id}/unpause
-        S->>D: unpause
-        S->>C: 確認 /tmp/lazyboy/ready（約一秒內）
-        A-->>U: state=running
-    else 已關或沒有容器
-        A->>DB: state=booting
-        A->>S: POST /computers
-        S->>D: 找到可重用的就 start，否則 create
-        D->>C: start.sh
-        C->>C: Xvfb :1、XFCE、x11vnc、websockify、controld
-        C->>C: touch /tmp/lazyboy/ready
-        A->>S: ensure_screen（Team 再掛 :2…）
-        A-->>U: state=running
-    end
-    U->>A: GET /api/computer/{bot}/screen
-    A-->>U: /view/{bot}/vnc.html
-    U->>A: WebSocket /view/{bot}/websockify
-    A->>C: 轉到該 slot 的 6080+N
-    Note over U,C: 分頁每 2 秒 heartbeat，更新 computers.updated_at
-```
+![開著、小睡、關機](./docs/diagrams/sleep.png)
 
 閒置（`crates/api/src/computer.rs` `idle_loop`）：
 
-1. 執行中、超過 10 分鐘沒人看、也沒有進行中的 run／示範 → `docker pause`，狀態 `suspended`  
-2. 休眠超過 6 小時 → `docker stop`，狀態 `stopped`  
+1. 執行中、超過 10 分鐘沒人看、也沒有進行中的 run／示範 → `docker pause`，狀態 `suspended`
+2. 休眠超過 6 小時 → `docker stop`，狀態 `stopped`
 3. 分頁還在就心跳，不會進 1
 
----
-
-## Harness 流程
-
-`crates/harness` 不管滑鼠，只負責**這次 run 要用哪一家模型**。真正的 agent 迴圈在 `crates/api/src/runs.rs`。
-
-```mermaid
-flowchart TD
-    A[execute_run] --> B[讀 bot 與工作區設定]
-    B --> C[CredentialChain]
-    C --> C1[bot 自己存的 key]
-    C --> C2[工作區設定的 key]
-    C --> C3[環境變數 XAI_API_KEY 等]
-    C1 --> D[resolve_backend]
-    C2 --> D
-    C3 --> D
-    D --> E{provider}
-    E -->|xai| F[rig xAI CompletionModel]
-    E -->|opencode-go 且 gpt/grok/muse| G[OpenAI Responses API]
-    E -->|其他 OpenAI 相容| H[OpenAI Chat Completions]
-    F --> I[connect_model]
-    G --> I
-    H --> I
-    I --> J[帶工具定義進 complete_once]
-    J --> K{回傳}
-    K -->|純文字| L[聊天結束或 skill 檢查沒過就 nudge]
-    K -->|tool_calls| M[dispatch]
-    M --> N[結果寫回 history]
-    N --> J
-```
-
-金鑰優先順序：**bot → 工作區 → 環境變數**。API 跑在 Docker 時，迴圈位址 `127.0.0.1` 會被改成 `host.docker.internal`，才能打到你本機的相容端點。
-
-`execute_run` 每一輪：
-
-1. 續租約（5 分鐘），否則 halt  
-2. 寫 `busy_step`（思考中／電腦啟動中／browser click…）  
-3. `complete_once`：system + 記憶 + 技能目錄 + 歷史  
-4. 沒有 tool call：問候就結束；技能 run 若檢查沒過，把現在畫面塞回去再逼一次（最多數次）  
-5. 有 tool call：需要沙盒才 `prepare_run_computer`（boot／解凍、拿螢幕執行租約、瀏覽器 profile lock）  
-6. `dispatch` 跑工具，畫面沒變就不重複塞圖  
-7. 直到文字結束、halt（停止／接管）、或達到回合上限（聊天 4、一般 40、技能 80）
-
-問候路徑會把工具表清空，從源頭避免「哈囉」去 `ls` 家目錄。
+開機／喚醒：已在跑就直接回；凍結中就 `unpause`（約一秒）；沒有容器才 `provision`，等 `/tmp/lazyboy/ready`。畫面走 `/view/{bot}/vnc.html`，已登入的 cookie 轉到 websockify。
 
 ---
 
-## 控制電腦的原理
+## 它怎麼看、怎麼點
 
-模型**從不**直接連 VNC。它只打 API 工具；工具經 sandbox HTTP 進 supervisor，再 `docker exec` 或打容器內 `controld`。
+![你看乾淨的，它看有編號的](./docs/diagrams/look.png)
 
-```mermaid
-flowchart LR
-    subgraph 模型側
-      T1[browser]
-      T2[computer_observe / computer_act]
-      T3[shell / files]
-    end
-    subgraph 容器內
-      CDP[Chromium CDP]
-      ATSPI[AT-SPI]
-      XD[xdotool / Xvfb]
-      VNC[x11vnc]
-    end
-    T1 --> CDP
-    T2 --> ATSPI
-    T2 --> XD
-    T3 --> XD
-    U[你的瀏覽器] --> VNC
-```
+![能認控制項，就不要猜座標](./docs/diagrams/click.png)
 
-**三層找得到什麼、點得了什麼**
+模型從不直接連 VNC。它只打 API 工具；工具經 sandbox HTTP 進 supervisor，再 `docker exec` 或打容器內 `controld`。
 
-1. **CDP（網頁）**  
-   Chromium 開著時，`browser` 拿 DOM：可點的控制項編成 1…N，截圖上蓋黃字。`click {element:N}` 會捲到視窗外的節點。這是訓練系統、信箱、後台的主路徑。`computer_act` 點在瀏覽器視窗上會被拒，避免用像素點網頁。
+編號只畫在給模型的 JPEG 上。VNC 是乾淨桌面。每次 navigation／snapshot 會重編號，舊 id 作廢。`computer_act` 點在瀏覽器視窗上會被拒，避免用像素點網頁。解析度契約是 **1280×800**。
 
-2. **AT-SPI（原生 GUI）**  
-   沒有 DOM 時（檔案選取、XFCE 對話框），`computer_observe` 走無障礙樹。編號是控制項，不是視窗外框。
+每個 bot 一個 `computer_screens` 列：slot、DISPLAY、執行租約、控制租約。人接管寫 `control_holder=user`，worker 在回合邊界停，不跟你搶滑鼠。`view_only` 用 postMessage 切，不重掛 iframe，所以換手時預覽不會黑掉。
 
-3. **座標（最後）**  
-   畫布、無樹的 widget 才用 `computer_act` 的 x,y。解析度契約是 **1280×800**。
-
-**編號從哪來**  
-`overlay_elements` 只畫在給模型的 JPEG 上。VNC 是乾淨桌面。每次 navigation／snapshot 會重編號，舊 id 作廢。
-
-**誰可以動滑鼠**  
-每個 bot 一個 `computer_screens` 列：slot、DISPLAY、執行租約 `execution_run_id`、控制租約 `control_holder`。run 要 GUI 時 `take_screen_execution` 把 fence +1，較新的 fence 贏。人接管寫 `control_holder=user`，worker 在回合邊界停，不跟你搶滑鼠。
-
-**你看到的畫面**  
-`screen_proxy` 只接受已登入的 GET／WebSocket。頁面本體是 `apps/web/vnc.html`。`view_only` 用 postMessage 切，不重掛 iframe，所以換手時預覽不會黑掉。
-
-**容器內 controld**  
-`lazyboy-controld` 聽 `127.0.0.1:7070`，要 `LAZYBOY_CONTROL_TOKEN`。supervisor 的觀察／動作能打通就走它，否則退回 `import`／`xdotool` 指令。
-
-**Team 多螢幕**  
-slot 0 = `:1` / VNC 5900 / 畫面 6080。slot N = `:N+1` / 5900+N / 6080+N。`lazyboy-screen ensure` 在同一個容器裡再長一組 Xvfb。瀏覽器設定檔預設 per-bot；兩個 bot 搶同一份 shared profile 會拿到「profile locked」，檔案與 shell 仍可用。
+`lazyboy-controld` 聽 `127.0.0.1:7070`。Team 多螢幕：slot 0 = `:1`，slot N = `:N+1`。`lazyboy-screen ensure` 在同一個容器裡再長一組 Xvfb。
 
 ---
 
-## 教技能怎麼做
+## 模型金鑰從哪來
 
-```mermaid
-sequenceDiagram
-    participant H as 你
-    participant A as API
-    participant C as 桌面
-    participant M as 模型
+![由近到遠，找到第一把就用](./docs/diagrams/keys.png)
 
-    H->>A: POST /skills/start {goal}
-    A->>C: 開電腦、把控制權給人
-    A->>C: 啟動 CDP recorder
-    loop 約 1.5s
-        A->>C: 視窗標題 + 粗略畫面簽名
-        Note over A: 簽名沒變就不存，避免閒置把 60 幀用完
-    end
-    H->>C: 正常操作（密碼欄不錄）
-    H->>A: POST /skills/stop
-    A->>C: 停 recorder
-    A->>M: 目標 + 語意事件 + 最多 8 張關鍵畫面
-    M-->>A: playbook（意圖、輸入、步驟、怎麼驗收）
-    A-->>H: 草稿，可改名、試跑、匯出 JSON
-```
+`crates/harness` 不管滑鼠，只決定這次 run 要用哪一家模型。真正的 agent 迴圈在 `crates/api/src/runs.rs`。
+
+金鑰：**這個機器人 → 工作區設定 → 環境變數**。API 跑在 Docker 時，迴圈位址 `127.0.0.1` 會被改成 `host.docker.internal`，才能打到你本機的相容端點。
+
+---
+
+## 教會它
+
+![你做一次，它記住為什麼](./docs/diagrams/teach.png)
 
 之後 run 若 prompt 對得上技能名，會把完整 playbook 塞進當則，並清掉舊聊天以免模型複誦上次的「還在倒數」。執行仍用 `browser`／`computer_act`，在**現在**的畫面上找「Next」，不是記像素。
 
 ---
 
-## 排程怎麼進 run
+## 排程怎麼進工作
 
-```mermaid
-flowchart LR
-    A[對話 create_schedule 或側欄新增] --> B[(schedules 表)]
-    B --> C[tick_loop]
-    C -->|next_run_at 到了| D[INSERT runs queued]
-    D --> E[同一個 worker_loop]
-    E --> F[普通 execute_run，prompt 是 instructions]
-```
+![到點以後，跟你傳訊息同一條路](./docs/diagrams/schedule.png)
 
-Cron 五欄。時區寫在列上，預設台北。`run now` 只是立刻插一筆 run，不改下一拍時間。
+Cron 五欄。時區寫在列上，預設台北。`立刻跑` 只是立刻插一筆 run，不改下一拍時間。
 
 ---
 
 ## 專案目錄（二次開發從這裡找）
 
-Cargo workspace。契約在 `contracts`，畫面邏輯在 `control`，HTTP 與 agent 迴圈在 `api`，Docker 生命週期在 `supervisor`。前端是獨立的 Vite app，由 API 把 `apps/web/dist`（或開發時的 `apps/web`）端出去。
+![把它當成幾間房間，不是分層蛋糕](./docs/diagrams/folders.png)
+
+Cargo workspace。畫面在 `apps/web`，對話與工作在 `api`，怎麼點在 `control`，開機在 `supervisor` + `image/computer`，問哪一家模型在 `harness`。前端是獨立的 Vite app，由 API 把 `apps/web/dist`（或開發時的 `apps/web`）端出去。
 
 ```text
 LazyBoy/
@@ -447,17 +262,6 @@ LazyBoy/
 ├── docker-compose.yml        正式堆疊（Postgres + supervisor + API）
 ├── Makefile                  make up / dev / test
 └── reference/rakazo/         上游參考實作，不要當 runtime 依賴
-```
-
-crate 依賴方向（不要倒過來 import）：
-
-```text
-api → harness, control, sandbox, contracts
-sandbox → control, contracts
-supervisor → control, contracts
-controld → control, contracts
-harness → contracts
-control → contracts
 ```
 
 ### 想改什麼，開哪個檔

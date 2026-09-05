@@ -545,13 +545,13 @@
 .side-card-body{display:flex;flex-direction:column;min-height:0;flex:1;padding:14px 16px 16px;overflow:hidden}
 
 
-.pane-form,.memory-pane{display:grid;gap:14px;min-height:0;overflow:auto;padding-bottom:8px}
+.pane-form,.memory-pane,.vault-pane{display:grid;gap:14px;min-height:0;overflow:auto;padding-bottom:8px;align-content:start}
 
 
-.pane-form label,.memory-pane label,.mcp-add label{display:grid;gap:8px;color:var(--muted);font-size:13px}
+.pane-form label,.memory-pane label,.mcp-add label,.vault-pane label{display:grid;gap:8px;color:var(--muted);font-size:13px;min-width:0}
 
 
-.pane-form input:not([type="checkbox"]):not([type="color"]),.memory-pane input:not([type="checkbox"]),.mcp-add input{height:40px;border:1px solid var(--border);border-radius:10px;background:#0c0c0d;color:var(--ink);padding:0 12px;outline:0}
+.pane-form input:not([type="checkbox"]):not([type="color"]),.memory-pane input:not([type="checkbox"]),.mcp-add input,.vault-pane input{width:100%;min-width:0;height:40px;border:1px solid var(--border);border-radius:10px;background:#0c0c0d;color:var(--ink);padding:0 12px;outline:0}
 
 
 .pane-form textarea,.memory-pane textarea,.mcp-add textarea{box-sizing:border-box;width:100%;resize:vertical;border:1px solid var(--border);border-radius:10px;background:#0c0c0d;color:var(--ink);padding:11px;font:inherit;outline:none}
@@ -860,16 +860,35 @@
 .dialog.skill-edit .dialog-actions .outline svg{fill:none;stroke:currentColor;width:14px;height:14px}
 
 
-.account-list{display:grid;gap:10px}
+.vault-pane{flex:1;container-type:inline-size}
 
+.vault-form{display:grid;gap:12px}
 
-.account-row{display:grid;gap:4px;padding:10px;border:1px solid var(--border);border-radius:12px}
+.vault-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
 
+@container (max-width:310px){
+  .vault-fields{grid-template-columns:1fr}
+}
 
-.account-row strong{font-size:14px}
+.vault-form>.primary{justify-self:start}
 
+.account-list{display:grid;gap:8px;margin-top:2px;padding-top:16px;border-top:1px solid var(--line)}
 
-.account-row small{color:var(--muted)}
+.vault-empty{margin:0;color:var(--faint);font-size:13px;line-height:1.5}
+
+.account-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;padding:10px 6px 10px 12px;border:1px solid var(--border);border-radius:12px;background:#101012}
+
+.account-row-main{display:grid;gap:3px;min-width:0}
+
+.account-row-main strong{overflow:hidden;font-size:14px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+
+.account-row-main small{overflow:hidden;color:var(--muted);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+
+.account-row-main .account-notes{white-space:normal;overflow-wrap:anywhere}
+
+.account-row .icon-button{color:var(--muted)}
+
+.account-row .icon-button:hover:not(:disabled){color:var(--danger)}
 
 
 @keyframes monitor-breathe{50%{transform:translateY(-4px);box-shadow:0 0 28px #65dcb325}}

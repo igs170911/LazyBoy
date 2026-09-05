@@ -1,9 +1,16 @@
 .messages{flex:1;overflow:auto;padding:34px max(34px,7vw) 150px;display:flex;flex-direction:column;gap:18px}
 .message{display:flex}
-.message>.message-body{max-width:76%;padding:13px 17px;border-radius:22px;white-space:pre-wrap;line-height:1.5}
+.message>.message-body,.message-stack>.message-body{max-width:76%;padding:13px 17px;border-radius:22px;white-space:pre-wrap;line-height:1.5}
+.message>.message-body.md,.message-stack>.message-body.md{min-width:0;white-space:normal}
 .message.user{justify-content:flex-end}
 .message.user>.message-body{background:var(--cream);color:#1a1a1a}
-.message.assistant>.message-body{background:#19191c}
+.message.assistant>.message-body,.message-stack>.message-body{background:#19191c}
+.message-stack{display:flex;flex-direction:column;align-items:flex-start;max-width:76%;min-width:0}
+.message-stack>.message-body{max-width:100%}
+.copy-msg{display:inline-flex;align-items:center;gap:6px;height:28px;margin-top:6px;padding:0 8px 0 6px;border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer}
+.copy-msg svg{flex:0 0 14px}
+.copy-msg:hover{background:rgba(255,255,255,.07);color:var(--ink)}
+.copy-msg.copied,.copy-msg.copied:hover{color:var(--accent);background:transparent;cursor:default}
 .composer{position:absolute;left:max(34px,5vw);right:max(34px,5vw);bottom:22px;display:flex;align-items:flex-end;gap:8px;border:1px solid var(--border);background:#121214;border-radius:26px;padding:8px;box-shadow:0 16px 50px rgba(0,0,0,.22)}
 .composer textarea{flex:1;min-height:42px;max-height:140px;resize:none;border:0;outline:0;background:transparent;color:var(--ink);padding:11px 4px}
 .composer-plus{background:transparent;color:var(--muted)}
@@ -35,7 +42,7 @@
 .file-card-remove svg{width:14px;height:14px}
 .message.with-files{align-items:flex-end;flex-direction:column;gap:8px}
 .message.with-files .msg-attachments{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:min(420px,82%)}
-.message.with-files .message-body{max-width:82%}
+.message.with-files .message-body,.message.with-files .message-stack{max-width:82%}
 .composer-plus,.composer .send{box-sizing:border-box;flex:0 0 42px;width:42px;height:42px;margin:0;align-self:center}
 .stop-send{background:#f2f2f2;color:#151515}
 .stop-send svg{width:14px;height:14px;fill:currentColor}
@@ -55,5 +62,6 @@
 .message.assistant.spoken{column-gap:11px;row-gap:6px}
 .message.assistant.spoken>.msg-avatar{max-width:none;padding:0;border-radius:0;background:transparent}
 .message.assistant.spoken .speaker{padding:0 2px;letter-spacing:.01em}
-.message.assistant.spoken>.message-body{grid-column:2;max-width:82%;line-height:1.52;border-radius:6px 18px 18px 18px}
+.message.assistant.spoken>.message-body,.message.assistant.spoken>.message-stack{grid-column:2;max-width:82%;min-width:0}
+.message.assistant.spoken .message-stack>.message-body{max-width:100%;line-height:1.52;border-radius:6px 18px 18px 18px}
 .composer-plus.open{color:var(--ink);background:rgba(255,255,255,.08)}

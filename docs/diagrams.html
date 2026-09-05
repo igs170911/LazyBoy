@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"/>
+  <title>LazyBoy diagrams</title>
+  <style>
+    @font-face {
+      font-family: Huninn;
+      src: url("../apps/web/node_modules/@fontsource/huninn/files/huninn-latin-400-normal.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F;
+    }
+    @font-face {
+      font-family: Huninn;
+      src: url("../apps/web/node_modules/@fontsource/huninn/files/huninn-chinese-traditional-400-normal.woff2") format("woff2");
+      unicode-range: U+4E00-9FFF, U+3400-4DBF, U+F900-FAFF, U+3000-303F, U+FF00-FFEF;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 1280px;
+      height: 720px;
+      overflow: hidden;
+      background: #f3f3f5;
+      color: #161618;
+      font-family: Huninn, "PingFang TC", sans-serif;
+    }
+    .slide {
+      width: 1280px;
+      height: 720px;
+      padding: 32px 48px 30px;
+      display: none;
+      flex-direction: column;
+    }
+    .slide.on { display: flex; }
+    .kicker {
+      font-size: 12px;
+      letter-spacing: .16em;
+      color: #0f766e;
+      margin-bottom: 6px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      font-weight: 400;
+      letter-spacing: .01em;
+    }
+    .sub {
+      margin: 6px 0 20px;
+      color: #6b6b73;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .row { display: flex; gap: 16px; align-items: stretch; flex: 1; min-height: 0; }
+    .col3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; flex: 1; min-height: 0; }
+    .col4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 14px; flex: 1; min-height: 0; }
+    .col5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; flex: 1; min-height: 0; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; flex: 1; min-height: 0; }
+    .rooms {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 14px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 22px;
+      border: 1px solid #ececef;
+      box-shadow: 0 16px 40px rgba(20,20,24,.06);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .card.dark { background: #111113; color: #f1f1f2; border-color: #1c1c20; }
+    .viz {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .copy { padding: 14px 16px 16px; }
+    .copy h2 { margin: 0 0 4px; font-size: 17px; font-weight: 400; }
+    .copy p { margin: 0; color: #6b6b73; font-size: 13px; line-height: 1.45; }
+    .dark .copy p { color: #9a9aa2; }
+    .n {
+      width: 24px; height: 24px; border-radius: 50%;
+      display: grid; place-items: center;
+      background: #3ec5a8; color: #083f34; font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .pill {
+      display: inline-flex; align-items: center;
+      height: 22px; padding: 0 9px; border-radius: 999px;
+      background: #eef8f5; color: #0f766e; font-size: 11px;
+    }
+    .dark .pill { background: #1a2e2a; color: #7ee0c8; }
+    .face { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .blob { width: 36px; height: 36px; flex: 0 0 36px; }
+    .chev {
+      width: 22px; flex: 0 0 22px;
+      display: grid; place-items: center;
+      color: #3ec5a8; font-size: 22px;
+      align-self: center;
+    }
+
+    /* mini chat */
+    .chat-mini {
+      position: absolute; inset: 16px 14px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      justify-content: flex-end;
+    }
+    .b {
+      max-width: 86%;
+      padding: 8px 12px;
+      border-radius: 14px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .me { align-self: flex-end; background: #f1f1ef; color: #1a1a1a; }
+    .them { align-self: flex-start; background: #19191c; color: #eee; }
+    .think-row {
+      display: flex; align-items: center; gap: 8px;
+      color: #85858a; font-size: 11px;
+    }
+
+    /* xfce-ish desktop */
+    .desk {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(circle at 18% 0%, #1a2430 0%, transparent 46%),
+        linear-gradient(180deg, #15202b, #0d1218);
+    }
+    .desk.dim { filter: saturate(.4) brightness(.55); }
+    .desk.off { background: #09090b; }
+    .win {
+      position: absolute;
+      left: 16px; top: 14px; right: 16px; bottom: 26px;
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+      box-shadow: 0 10px 24px rgba(0,0,0,.32);
+      display: grid;
+      grid-template-rows: 22px 26px 1fr;
+    }
+    .win-bar {
+      background: #e8e8ea;
+      display: flex; align-items: center; gap: 5px;
+      padding: 0 8px;
+      color: #666; font-size: 10px;
+    }
+    .win-bar i { width: 7px; height: 7px; border-radius: 50%; background: #c4c4c8; font-style: normal; }
+    .addr {
+      background: #f4f4f6;
+      display: flex; align-items: center;
+      padding: 0 10px;
+      color: #666; font-size: 10px;
+      border-bottom: 1px solid #ececf0;
+    }
+    .page-body {
+      padding: 12px 14px 14px;
+      color: #222;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .page-body h3 { margin: 0 0 4px; font-size: 14px; font-weight: 400; }
+    .page-body p { margin: 0; color: #666; font-size: 11px; line-height: 1.4; }
+    .video {
+      flex: 1;
+      min-height: 40px;
+      margin: 10px 0 8px;
+      border-radius: 8px;
+      background:
+        linear-gradient(160deg, #1c2838 0%, #1a2c2a 55%, #2a8f7a 140%);
+    }
+    .lessons { margin: 8px 0 0; padding: 0; list-style: none; font-size: 11px; color: #555; }
+    .lessons li {
+      display: flex; justify-content: space-between;
+      padding: 5px 0;
+      border-bottom: 1px solid #f0f0f2;
+    }
+    .lessons li.on { color: #0f766e; }
+    .mail { margin-top: 8px; font-size: 11px; color: #444; }
+    .mail .m { padding: 7px 8px; border-radius: 8px; }
+    .mail .m.on { background: #eef8f5; }
+    .progress {
+      margin-top: 8px; height: 6px; border-radius: 99px; background: #ececf0; overflow: hidden;
+    }
+    .progress b { display: block; width: 62%; height: 100%; background: #3ec5a8; }
+    .next {
+      margin-top: 10px; height: 26px; width: 68px;
+      border-radius: 6px; background: #1a1a1c; color: #fff;
+      display: grid; place-items: center; font-size: 11px;
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .btns { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; }
+    .tag {
+      position: absolute;
+      right: -9px; top: -9px;
+      width: 20px; height: 20px; border-radius: 5px;
+      background: #ffe66d; color: #111;
+      display: grid; place-items: center; font-size: 11px;
+      box-shadow: 0 2px 6px rgba(0,0,0,.18);
+    }
+    .panelbar {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 22px;
+      background: #1b242e; border-top: 1px solid #2a3540;
+    }
+    .zzz {
+      position: absolute; right: 18px; top: 14px;
+      color: #cdeae3; font-size: 22px; letter-spacing: 2px;
+    }
+    .house {
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+      color: #3ec5a8; font-size: 13px; text-align: center; line-height: 1.5;
+    }
+
+    /* queue / chips */
+    .stack {
+      position: absolute; inset: 18px 16px;
+      display: flex; flex-direction: column; gap: 8px; justify-content: center;
+    }
+    .job {
+      height: 36px; border-radius: 10px;
+      display: flex; align-items: center; padding: 0 12px;
+      font-size: 12px; gap: 8px;
+    }
+    .job.on { background: #111113; color: #fff; }
+    .job.wait { background: #f1f1ef; color: #666; }
+    .job .dot { width: 7px; height: 7px; border-radius: 50%; background: #3ec5a8; }
+
+    .fork {
+      position: absolute; inset: 16px 12px;
+      display: flex; flex-direction: column; gap: 10px; justify-content: center;
+    }
+    .lane {
+      border-radius: 12px; padding: 10px 12px;
+      font-size: 12px; line-height: 1.4;
+    }
+    .lane.a { background: #eef8f5; color: #0f766e; }
+    .lane.b { background: #111113; color: #f1f1f2; }
+
+    .keys-viz {
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+    }
+    .key {
+      width: 88px; height: 88px;
+    }
+    .clock {
+      width: 120px; height: 120px;
+    }
+    .playbook {
+      position: absolute; inset: 18px 16px;
+      background: #fff; border-radius: 10px;
+      padding: 12px; box-shadow: 0 8px 20px rgba(0,0,0,.08);
+      font-size: 11px; color: #333; line-height: 1.55;
+    }
+    .playbook b { display: block; font-weight: 400; font-size: 13px; margin-bottom: 6px; }
+    .events {
+      position: absolute; inset: 16px 14px;
+      display: flex; flex-direction: column; gap: 7px; justify-content: center;
+    }
+    .ev {
+      background: #fff; border-radius: 10px; padding: 8px 10px;
+      font-size: 11px; color: #333;
+      box-shadow: 0 4px 12px rgba(0,0,0,.06);
+    }
+    .ev em { color: #0f766e; font-style: normal; }
+
+    .dialog {
+      position: absolute; left: 18px; right: 18px; top: 28px; bottom: 28px;
+      background: #f6f6f4; border-radius: 10px;
+      box-shadow: 0 12px 28px rgba(0,0,0,.2);
+      padding: 12px;
+      color: #222; font-size: 12px;
+    }
+    .dialog h4 { margin: 0 0 10px; font-weight: 400; font-size: 13px; }
+    .file { padding: 6px 8px; border-radius: 6px; }
+    .file.on { background: #d7efe8; }
+    .dlg-btn {
+      position: absolute; right: 12px; bottom: 12px;
+      height: 26px; padding: 0 12px; border-radius: 6px;
+      background: #1a1a1c; color: #fff; display: grid; place-items: center; font-size: 11px;
+    }
+
+    .canvas {
+      position: absolute; inset: 16px;
+      background:
+        linear-gradient(#ececf0 1px, transparent 1px) 0 0 / 24px 24px,
+        linear-gradient(90deg, #ececf0 1px, transparent 1px) 0 0 / 24px 24px,
+        #fafafa;
+      border-radius: 10px;
+    }
+    .cross {
+      position: absolute; left: 52%; top: 46%;
+      width: 18px; height: 18px;
+      transform: translate(-50%,-50%);
+    }
+    .cross:before, .cross:after {
+      content: ""; position: absolute; background: #d23b3b;
+    }
+    .cross:before { left: 8px; top: 0; width: 2px; height: 18px; }
+    .cross:after { left: 0; top: 8px; width: 18px; height: 2px; }
+    .xy {
+      position: absolute; left: 54%; top: 52%;
+      font-size: 11px; color: #d23b3b;
+    }
+
+    .alarm {
+      position: absolute; inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+    .cron {
+      margin-top: 8px; font-size: 12px; color: #0f766e;
+      background: #eef8f5; padding: 4px 10px; border-radius: 999px;
+    }
+
+    .room {
+      border-radius: 20px;
+      padding: 18px 18px 16px;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 0;
+    }
+    .room small { opacity: .82; font-size: 13px; line-height: 1.45; }
+    .room h2 { margin: 0 0 4px; font-size: 20px; font-weight: 400; }
+    .room .path { font-size: 11px; opacity: .7; letter-spacing: .02em; }
+    .tiny-ui {
+      margin: 14px 0 10px;
+      background: #1a1a1d;
+      border-radius: 12px;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 54px 1fr 78px;
+    }
+    .tiny-ui > div { border-right: 1px solid #2a2a2e; }
+    .tiny-ui > div:last-child { border: 0; background: #121214; }
+    .form {
+      position: absolute; inset: 22px 18px;
+      background: #fff;
+      border-radius: 12px;
+      padding: 18px;
+      box-shadow: 0 8px 20px rgba(0,0,0,.06);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+    }
+    .form.dark {
+      background: #19191c;
+      color: #eee;
+    }
+    .form label { display: block; font-size: 11px; color: #888; margin-bottom: 8px; }
+    .field {
+      height: 36px; border-radius: 10px;
+      display: flex; align-items: center; padding: 0 12px;
+      font-size: 13px; gap: 8px;
+      background: #f4f4f6;
+    }
+    .form.dark .field { background: #111113; }
+    .ok { margin-left: auto; color: #3ec5a8; font-size: 12px; }
+    .env-lines {
+      font-size: 12px; line-height: 1.8; color: #444;
+      font-family: ui-monospace, Menlo, monospace;
+    }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .chip {
+      background: #f1f1ef; border-radius: 999px;
+      padding: 4px 10px; font-size: 11px; color: #333;
+    }
+    .dark .chip { background: #1c1c20; color: #ddd; }
+  </style>
+</head>
+<body>
+
+<section class="slide" id="map">
+  <div class="kicker">LAZYBOY · 怎麼轉起來</div>
+  <h1>其實只有三個角色</h1>
+  <p class="sub">不是一疊伺服器名詞。你說話、中間有人幫忙想、右邊那台電腦去按。</p>
+  <div class="row">
+    <article class="card">
+      <div class="viz" style="background:#0d0d0e">
+        <div class="chat-mini">
+          <div class="b me">把這堂課看完</div>
+          <div class="b them">好，我去開電腦點 Next。</div>
+          <div class="think-row">右側還能看見它的桌面</div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="face">
+          <svg class="blob" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="#f1f1ef"/><circle cx="32" cy="26" r="8" fill="#c8c8cc"/><path d="M18 46c3-8 9-12 14-12s11 4 14 12" fill="#c8c8cc"/></svg>
+          <div><h2>你</h2><span class="pill">瀏覽器</span></div>
+        </div>
+        <p>聊天、看桌面、必要時接手滑鼠。分頁開著，電腦就不會睡著。</p>
+      </div>
+    </article>
+    <div class="chev">→</div>
+    <article class="card dark">
+      <div class="viz" style="background:#0a0a0c;display:grid;place-items:center">
+        <div style="text-align:center">
+          <svg width="72" height="72" viewBox="0 0 64 64"><path fill="#3ec5a8" d="M33 5c11.5 1 24 11 23 26-1 14-11 27-25 28S6 47 7 31 21 4 33 5z"/><ellipse cx="25.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><ellipse cx="40.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><circle cx="26.8" cy="27.2" r="1.3" fill="#f3f3f6"/><circle cx="41.8" cy="27.2" r="1.3" fill="#f3f3f6"/></svg>
+          <div class="chips" style="justify-content:center">
+            <span class="chip">記憶</span><span class="chip">技能</span><span class="chip">要不要開機</span>
+          </div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="face">
+          <div><h2>LazyBoy</h2><span class="pill">想、記、叫人做事</span></div>
+        </div>
+        <p>把話留給模型、把檔案留給磁碟。問候不會無故開機。</p>
+      </div>
+    </article>
+    <div class="chev">→</div>
+    <article class="card">
+      <div class="viz">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> Chromium</div>
+            <div class="addr">star.example / course / 12</div>
+            <div class="page-body">
+              <h3>Workplace Safety</h3>
+              <p>單元 12／18</p>
+              <div class="video"></div>
+              <div class="progress"><b></b></div>
+              <div class="next">Next</div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="face">
+          <svg class="blob" viewBox="0 0 64 64"><rect x="8" y="12" width="48" height="36" rx="6" fill="#111113"/><rect x="14" y="18" width="36" height="20" fill="#3ec5a8" opacity=".35"/><rect x="20" y="50" width="24" height="4" rx="2" fill="#ccc"/></svg>
+          <div><h2>它的電腦</h2><span class="pill">真的 Linux 桌面</span></div>
+        </div>
+        <p>Debian、視窗、瀏覽器。家目錄在你硬碟上，不在別人雲裡。</p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="chat">
+  <div class="kicker">傳一句話之後</div>
+  <h1>它先決定：聊就好，還是要動手</h1>
+  <p class="sub">同一條路走完。差別只在第四步要不要打開那台電腦。</p>
+  <div class="col5">
+    <article class="card">
+      <div class="viz" style="background:#0d0d0e">
+        <div class="chat-mini">
+          <div class="b me">哈囉</div>
+          <div class="b me" style="opacity:.45">把課看完</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">1</div><h2>你送出</h2><p>訊息進這則對話。同一句話重送不會變兩則。</p></div>
+    </article>
+    <article class="card">
+      <div class="viz" style="background:#f7f7f8">
+        <div class="stack">
+          <div class="job on"><span class="dot"></span>現在這則</div>
+          <div class="job wait">下一則等著</div>
+          <div class="job wait">再下一則</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">2</div><h2>排隊</h2><p>這個 Agent 一次只做一件事。忙完才輪到下一則。</p></div>
+    </article>
+    <article class="card dark">
+      <div class="viz" style="background:#0a0a0c;display:grid;place-items:center">
+        <div style="text-align:center;color:#9a9aa2;font-size:12px;line-height:1.6">
+          <svg width="56" height="56" viewBox="0 0 64 64"><path fill="#3ec5a8" d="M33 5c11.5 1 24 11 23 26-1 14-11 27-25 28S6 47 7 31 21 4 33 5z"/><ellipse cx="25.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><ellipse cx="40.5" cy="29" rx="4.2" ry="5" fill="#1b1b22"/><circle cx="26.8" cy="27.2" r="1.3" fill="#f3f3f6"/><circle cx="41.8" cy="27.2" r="1.3" fill="#f3f3f6"/></svg>
+          <div>記憶 · 技能 · 你剛說的</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">3</div><h2>問模型</h2><p>帶上記憶、技能、你剛說的話。金鑰用你自己的。</p></div>
+    </article>
+    <article class="card">
+      <div class="viz" style="background:#f7f7f8">
+        <div class="fork">
+          <div class="lane a">哈囉 → 直接回你</div>
+          <div class="lane b">「把課看完」→ 開電腦再點</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">4</div><h2>兩條岔路</h2><p>問候不開機。真的要動手，才叫醒那台 Debian。</p></div>
+    </article>
+    <article class="card">
+      <div class="viz">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> Chromium</div>
+            <div class="addr">star.example / course / 13</div>
+            <div class="page-body">
+              <h3>Quiz</h3>
+              <p>右側畫面跟著動</p>
+              <div class="video"></div>
+              <div class="progress"><b style="width:78%"></b></div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">5</div><h2>寫回來</h2><p>回覆出現在聊天裡。右側畫面跟著動。</p></div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="sleep">
+  <div class="kicker">電腦的作息</div>
+  <h1>開著、小睡、關機</h1>
+  <p class="sub">分頁還在看，它就醒著。沒人看才睡，醒來幾乎不用等。</p>
+  <div class="col3">
+    <article class="card dark">
+      <div class="viz">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> Chromium</div>
+            <div class="addr">你還在這個分頁</div>
+            <div class="page-body">
+              <h3>熱機中</h3>
+              <p>每兩秒打一次招呼</p>
+              <div class="video"></div>
+              <div class="progress"><b></b></div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="n">1</div>
+        <h2>開著</h2>
+        <p>記憶體佔著，畫面隨時能進。</p>
+        <div class="chips"><span class="chip">心跳</span><span class="chip">執行中</span></div>
+      </div>
+    </article>
+    <article class="card">
+      <div class="viz">
+        <div class="desk dim">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> Chromium</div>
+            <div class="addr">離開約 10 分鐘</div>
+            <div class="page-body">
+              <h3>凍結</h3>
+              <p>行程還在記憶體裡</p>
+              <div class="video"></div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+        <div class="zzz">Zzz</div>
+      </div>
+      <div class="copy">
+        <div class="n">2</div>
+        <h2>小睡</h2>
+        <p>像筆電合蓋。下次用，大約一秒內醒來。</p>
+        <div class="chips"><span class="chip">凍結</span><span class="chip">不要重開桌面</span></div>
+      </div>
+    </article>
+    <article class="card">
+      <div class="viz">
+        <div class="desk off">
+          <div class="house">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#3ec5a8" stroke-width="1.6"><path d="M4 11.5 12 5l8 6.5V20H4z"/><path d="M9 20v-6h6v6"/></svg>
+            <div>家目錄還在</div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="n">3</div>
+        <h2>關機</h2>
+        <p>約六小時後才真正停掉，把那 2 GB 還你。</p>
+        <div class="chips"><span class="chip">停機</span><span class="chip">家目錄還在</span></div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="look">
+  <div class="kicker">它怎麼「看」螢幕</div>
+  <h1>你看乾淨的，它看有編號的</h1>
+  <p class="sub">模型從來不連你的 VNC。它拿一張蓋了黃字的截圖，點編號，不是猜像素。</p>
+  <div class="split">
+    <article class="card">
+      <div class="copy" style="padding-bottom:8px"><h2>你看到的</h2><p>右側預覽，就是那台 Linux 桌面。沒有黃框、沒有編號。</p></div>
+      <div class="viz" style="min-height:360px">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> Chromium</div>
+            <div class="addr">star.example / course / 12</div>
+            <div class="page-body">
+              <h3>Workplace Safety</h3>
+              <p>單元 12／18 · 看完按 Next</p>
+              <div class="video"></div>
+              <ul class="lessons">
+                <li>11. 防護用具</li>
+                <li class="on">12. 現場巡視</li>
+                <li>13. 測驗</li>
+              </ul>
+              <div class="progress"><b></b></div>
+              <div class="next">Next</div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+    </article>
+    <article class="card dark">
+      <div class="copy" style="padding-bottom:8px"><h2>模型看到的</h2><p>同一瞬間多一層黃字。它說「點 3」，就是點那個按鈕。</p></div>
+      <div class="viz" style="min-height:360px">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> Chromium</div>
+            <div class="addr">star.example / course / 12</div>
+            <div class="page-body">
+              <h3>Workplace Safety</h3>
+              <p>單元 12／18 · 看完按 Next</p>
+              <div class="video"></div>
+              <ul class="lessons">
+                <li>11. 防護用具</li>
+                <li class="on">12. 現場巡視</li>
+                <li>13. 測驗</li>
+              </ul>
+              <div class="progress"><b></b></div>
+              <div class="next">Next<span class="tag">3</span></div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="click">
+  <div class="kicker">動手的三種方式</div>
+  <h1>能認控制項，就不要猜座標</h1>
+  <p class="sub">網頁走瀏覽器、對話框走無障礙樹，實在沒編號才點像素。</p>
+  <div class="col3">
+    <article class="card dark">
+      <div class="viz">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> Chromium</div>
+            <div class="addr">mail.example / inbox</div>
+            <div class="page-body">
+              <h3>收件匣</h3>
+              <div class="mail">
+                <div class="m on">訓練系統 · 請完成單元 12</div>
+                <div class="m">HR · 本週排班</div>
+                <div class="m">IT · 密碼即將到期</div>
+              </div>
+              <div class="btns">
+                <div class="next" style="width:78px">Compose<span class="tag">1</span></div>
+                <div class="next" style="width:64px;background:#444">Reply<span class="tag">2</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="n">1</div>
+        <h2>網頁</h2>
+        <p>Chromium 裡的按鈕、輸入框。點 id，會自己捲到看不見的地方。</p>
+        <div class="chips"><span class="chip">優先</span></div>
+      </div>
+    </article>
+    <article class="card">
+      <div class="viz" style="background:#2a3340">
+        <div class="dialog">
+          <h4>開啟檔案</h4>
+          <div class="file">report.pdf</div>
+          <div class="file on">syllabus.pdf</div>
+          <div class="file">notes.txt</div>
+          <div class="dlg-btn">開啟<span class="tag">4</span></div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="n">2</div>
+        <h2>桌面視窗</h2>
+        <p>檔案選取、系統對話框。用無障礙名稱，不是用視窗外框。</p>
+        <div class="chips"><span class="chip">原生 GUI</span></div>
+      </div>
+    </article>
+    <article class="card">
+      <div class="viz" style="background:#fff">
+        <div class="canvas">
+          <div class="cross"></div>
+          <div class="xy">640, 400</div>
+        </div>
+      </div>
+      <div class="copy">
+        <div class="n">3</div>
+        <h2>座標</h2>
+        <p>畫布、沒有名字的控制項。最後才用。畫面契約是 1280×800。</p>
+        <div class="chips"><span class="chip">不得已</span></div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="teach">
+  <div class="kicker">教會它</div>
+  <h1>你做一次，它記住「為什麼」</h1>
+  <p class="sub">不是錄巨集。它記你點了哪個控制項、填了什麼、去了哪一頁，下次在活的畫面上自己找。</p>
+  <div class="col4">
+    <article class="card">
+      <div class="viz">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> 你在操作</div>
+            <div class="addr">star.example / course / 12</div>
+            <div class="page-body">
+              <h3>Workplace Safety</h3>
+              <p>你正在示範</p>
+              <div class="video"></div>
+              <div class="next">Next<span class="tag">3</span></div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">1</div><h2>你示範</h2><p>畫面交給你，用平常的方式做完。密碼欄不會被記。</p></div>
+    </article>
+    <article class="card dark">
+      <div class="viz" style="background:#0a0a0c">
+        <div class="events">
+          <div class="ev">click <em>Next</em></div>
+          <div class="ev">fill <em>姓名</em></div>
+          <div class="ev">goto <em>/quiz</em></div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">2</div><h2>它在旁邊看</h2><p>記語意事件。畫面沒變就不存，避免一堆廢幀。</p></div>
+    </article>
+    <article class="card">
+      <div class="viz" style="background:#eef2ee">
+        <div class="playbook">
+          <b>技能草稿</b>
+          目標：看完課並交測驗<br/>
+          輸入：學員姓名<br/>
+          步驟：找到 Next → 填表 → 送出<br/>
+          完成：出現分數
+          <div style="margin-top:12px;color:#0f766e;font-size:11px">可改名 · 試跑 · 匯出 JSON</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">3</div><h2>整理成技能</h2><p>目標、可變輸入、步驟、怎麼算做完。你可以改名字再存。</p></div>
+    </article>
+    <article class="card">
+      <div class="viz">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i> 下次自己做</div>
+            <div class="addr">star.example / course / 3</div>
+            <div class="page-body">
+              <h3>另一堂課</h3>
+              <p>在現在的畫面上找 Next</p>
+              <div class="video"></div>
+              <div class="next">Next<span class="tag">2</span></div>
+            </div>
+          </div>
+          <div class="panelbar"></div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">4</div><h2>下次自己做</h2><p>找「Next」，不是重播上次的座標。</p></div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="schedule">
+  <div class="kicker">排程</div>
+  <h1>到點以後，跟你傳訊息同一條路</h1>
+  <p class="sub">不是另一套引擎。鬧鐘響了，就塞進同一個工作隊列。</p>
+  <div class="row">
+    <article class="card">
+      <div class="viz" style="background:#0d0d0e">
+        <div class="chat-mini">
+          <div class="b me">每天九點交報告</div>
+          <div class="think-row">對話裡講，或側欄自己建</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">1</div><h2>你說「每天九點」</h2><p>五欄時間，預設台北。</p></div>
+    </article>
+    <div class="chev">→</div>
+    <article class="card">
+      <div class="viz" style="background:#f7f7f8">
+        <div class="alarm">
+          <svg class="clock" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="52" fill="#fff" stroke="#ececef" stroke-width="4"/>
+            <circle cx="60" cy="60" r="4" fill="#111"/>
+            <line x1="60" y1="60" x2="60" y2="28" stroke="#111" stroke-width="4" stroke-linecap="round"/>
+            <line x1="60" y1="60" x2="88" y2="60" stroke="#3ec5a8" stroke-width="4" stroke-linecap="round"/>
+          </svg>
+          <div class="cron">每天 09:00</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">2</div><h2>鬧鐘記住</h2><p>到點前它只是一列時間。按「立刻跑」也不會把鬧鐘撥亂。</p></div>
+    </article>
+    <div class="chev">→</div>
+    <article class="card dark">
+      <div class="viz" style="background:#0a0a0c">
+        <div class="stack">
+          <div class="job on"><span class="dot"></span>09:00 交報告</div>
+          <div class="job wait">你剛傳的那則</div>
+          <div class="job wait">下一則等著</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">3</div><h2>變成普通工作</h2><p>跟你剛傳的那則訊息一樣：排隊、問模型、必要時開電腦。</p></div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="keys">
+  <div class="kicker">模型金鑰</div>
+  <h1>由近到遠，找到第一把就用</h1>
+  <p class="sub">不管滑鼠。只決定這次要問哪一家模型。</p>
+  <div class="col3">
+    <article class="card dark">
+      <div class="viz" style="background:#0a0a0c">
+        <div class="form dark">
+          <label>這個機器人 · 模型金鑰</label>
+          <div class="field">xai-••••••••••••<span class="ok">用這把</span></div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">1</div><h2>這個機器人</h2><p>它自己若存了 key，用它的。適合不同 Agent 接不同家。</p></div>
+    </article>
+    <article class="card">
+      <div class="viz" style="background:#f7f7f8">
+        <div class="form">
+          <label>本機工作區 · 設定</label>
+          <div class="field" style="color:#999">尚未填寫</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">2</div><h2>工作區設定</h2><p>本機工作區裡填的。畫面上存的會蓋過環境變數。</p></div>
+    </article>
+    <article class="card">
+      <div class="viz" style="background:#f7f7f8">
+        <div class="form">
+          <label>.env</label>
+          <div class="env-lines">XAI_API_KEY=…<br/>OPENAI_API_KEY=</div>
+        </div>
+      </div>
+      <div class="copy"><div class="n">3</div><h2>環境變數</h2><p>什麼都沒填才落到這裡。</p></div>
+    </article>
+  </div>
+</section>
+
+<section class="slide" id="folders">
+  <div class="kicker">想改程式時</div>
+  <h1>把它當成幾間房間，不是分層蛋糕</h1>
+  <p class="sub">從你看得見的畫面往裡走。不必先背 crate 依賴圖。</p>
+  <div class="rooms">
+    <div class="room" style="background:#111113;grid-row:1 / span 2">
+      <div class="path">apps/web</div>
+      <h2>畫面</h2>
+      <div class="tiny-ui">
+        <div style="padding:10px 8px">
+          <div style="height:8px;width:72%;background:#2a2a2e;border-radius:4px;margin-bottom:10px"></div>
+          <div style="height:28px;background:#222;border-radius:8px;margin-bottom:8px"></div>
+          <div style="height:28px;background:#1a1a1d;border-radius:8px"></div>
+        </div>
+        <div style="padding:12px 10px;display:flex;flex-direction:column;gap:8px">
+          <div style="height:8px;width:36%;background:#2a2a2e;border-radius:4px"></div>
+          <div style="height:26px;width:72%;background:#f1f1ef;border-radius:10px;margin-left:auto"></div>
+          <div style="height:26px;width:58%;background:#19191c;border-radius:10px"></div>
+          <div style="height:26px;width:64%;background:#f1f1ef;border-radius:10px;margin-left:auto"></div>
+          <div style="flex:1"></div>
+          <div style="height:28px;border:1px solid #2a2a2e;border-radius:14px"></div>
+        </div>
+        <div style="background:#101012"></div>
+      </div>
+      <small>聊天、電腦預覽、頭像、排程表單。中文在 locales。VNC 在 vnc.html。</small>
+    </div>
+    <div class="room" style="background:#0f766e">
+      <div>
+        <div class="path">crates/api</div>
+        <h2>對話與工作</h2>
+      </div>
+      <small>送訊息、工具、開機、技能、排程、保險箱。加工具從 tools.rs 開始。</small>
+    </div>
+    <div class="room" style="background:#6a6bf5">
+      <div>
+        <div class="path">crates/control</div>
+        <h2>怎麼點</h2>
+      </div>
+      <small>編號、CDP、無障礙樹、滑鼠。桌面上的手。</small>
+    </div>
+    <div class="room" style="background:#f5a03c;color:#1b1206">
+      <div>
+        <div class="path">supervisor + image/computer</div>
+        <h2>怎麼開機</h2>
+      </div>
+      <small>容器的生老病死，以及 XFCE／Chromium 長什麼樣。</small>
+    </div>
+    <div class="room" style="background:#d9508a">
+      <div>
+        <div class="path">crates/harness</div>
+        <h2>問哪一家模型</h2>
+      </div>
+      <small>金鑰從哪來、打哪一個網址。不管滑鼠。</small>
+    </div>
+  </div>
+</section>
+
+<script>
+  const id = new URLSearchParams(location.search).get("p") || "map";
+  document.querySelectorAll(".slide").forEach((el) => {
+    el.classList.toggle("on", el.id === id);
+  });
+</script>
+</body>
+</html>
