@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "LazyBoy：從一句話到完成任務",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "task-flow",
+        "label": "任務主流程",
+        "focus": ["workspace", "api", "supervisor", "desktop", "result"],
+        "note": "沿著主路徑查看指令如何成為可觀察、可接管的桌面操作。"
+      },
+      {
+        "id": "memory-schedule",
+        "label": "記憶與排程",
+        "focus": ["api", "memory", "schedule"],
+        "note": "長期記憶與排程會在需要時補充情境並重新啟動任務。"
+      },
+      {
+        "id": "safety",
+        "label": "隔離與憑證",
+        "focus": ["vault", "supervisor", "desktop"],
+        "note": "登入資料經加密保存，桌面工作負載在獨立容器中執行。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "flow", "label": "任務主流程" },
+    { "id": "automation", "label": "持續自動化" },
+    { "id": "data", "label": "資料與安全", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "intent", "label": "說明目標", "fromCol": 0, "toCol": 1 },
+    { "id": "orchestrate", "label": "理解與編排", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "operate", "label": "執行與回傳", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "agent_core", "label": "Rust Agent Runtime", "lane": "flow", "fromCol": 1, "toCol": 2, "variant": "emphasis" },
+    { "id": "sandbox_boundary", "label": "Docker 隔離邊界", "lane": "flow", "fromCol": 2, "toCol": 3, "variant": "security" },
+    { "id": "durable_context", "label": "排程、記憶與登入資料", "lane": "data", "fromCol": 1, "toCol": 3, "variant": "dashed" }
+  ],
+  "mainPath": ["workspace", "api", "supervisor", "desktop", "result"],
+  "semanticChecks": {
+    "allowedRoots": ["workspace", "schedule", "vault"],
+    "allowedTerminals": ["result", "memory"],
+    "requiredPaths": [
+      { "from": "workspace", "to": "result" },
+      { "from": "schedule", "to": "desktop" },
+      { "from": "vault", "to": "desktop" }
+    ]
+  },
+  "nodes": [
+    { "id": "workspace", "lane": "flow", "col": 0, "type": "frontend", "label": "React 工作空間", "sublabel": "對話・電腦・記憶", "tag": "zh-TW / EN", "width": 150 },
+    { "id": "api", "lane": "flow", "col": 1, "type": "backend", "label": "API + Agent", "sublabel": "模型、工具與技能", "tag": "Rust / Axum", "width": 146 },
+    { "id": "supervisor", "lane": "flow", "col": 2, "type": "security", "label": "Supervisor", "sublabel": "資源限制與生命週期", "width": 146 },
+    { "id": "desktop", "lane": "flow", "col": 3, "type": "cloud", "label": "隔離電腦", "sublabel": "瀏覽器、檔案與輸入", "tag": "noVNC", "width": 146 },
+    { "id": "result", "lane": "flow", "col": 4, "type": "frontend", "label": "即時結果", "sublabel": "畫面、訊息與狀態", "width": 142 },
+    { "id": "schedule", "lane": "automation", "col": 1, "type": "messagebus", "label": "排程", "sublabel": "到點自動執行", "width": 130 },
+    { "id": "memory", "lane": "data", "col": 1, "type": "database", "label": "記憶與事件", "sublabel": "PostgreSQL + pgvector", "width": 154 },
+    { "id": "vault", "lane": "data", "col": 3, "type": "security", "label": "加密憑證庫", "sublabel": "網站登入資料", "width": 142 }
+  ],
+  "edges": [
+    { "id": "workspace-api", "from": "workspace", "to": "api", "label": "HTTP / WebSocket", "variant": "emphasis", "role": "main" },
+    { "id": "api-supervisor", "from": "api", "to": "supervisor", "label": "受控工具呼叫", "variant": "security", "role": "main" },
+    { "id": "supervisor-desktop", "from": "supervisor", "to": "desktop", "label": "啟動・暫停・恢復", "variant": "security", "role": "main" },
+    { "id": "desktop-result", "from": "desktop", "to": "result", "label": "螢幕與事件", "variant": "emphasis", "role": "return" },
+    { "id": "schedule-api", "from": "schedule", "to": "api", "label": "Cron 觸發", "variant": "dashed", "role": "async" },
+    { "id": "api-memory", "from": "api", "to": "memory", "label": "檢索與寫入", "variant": "dashed", "role": "branch" },
+    { "id": "vault-desktop", "from": "vault", "to": "desktop", "label": "僅匹配 HTTPS 網域", "variant": "security", "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "看得見，也接得回來",
+      "items": [
+        "即時觀看 Agent 桌面與目前步驟",
+        "需要時由使用者接管，再交還給 Agent"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "從一次任務到持續自動化",
+      "items": [
+        "示範操作可整理成可重用技能",
+        "排程、長期記憶與 MCP 延伸工作能力"
+      ]
+    }
+  ]
+}

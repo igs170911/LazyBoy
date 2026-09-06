@@ -1,339 +1,334 @@
+<div align="center">
+
 # LazyBoy
 
-![給 Agent 一台真的電腦](./docs/readme-hero.png)
+### 給 Agent 一台真的電腦
 
-在瀏覽器裡開 Agent。每個都有自己的 Linux 桌面：開網頁、敲指令、學你示範過的流程。金鑰、模型、檔案都留在你這台機器上。
+在瀏覽器裡指派工作，讓 AI Agent 在隔離的 Linux 桌面中開網頁、操作應用程式、整理檔案，並在你需要時把控制權交回來。
 
----
+[![Self-hosted](https://img.shields.io/badge/deployment-self--hosted-3ec5a8?style=flat-square)](#快速開始)
+[![Rust 2024](https://img.shields.io/badge/Rust-2024-000000?style=flat-square&logo=rust)](./Cargo.toml)
+[![React 19](https://img.shields.io/badge/React-19-20232a?style=flat-square&logo=react)](./apps/web/package.json)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ed?style=flat-square&logo=docker&logoColor=white)](./docker-compose.yml)
 
-## 需要的硬體
+[快速開始](#快速開始) · [功能](#核心能力) · [運作流程](#一個任務如何完成) · [系統架構](#系統架構) · [二次開發](#二次開發) · [安全](#安全模型)
 
-LazyBoy 是本機系統，不是雲端沙盒。機器要跑四件事：**Postgres**、**API（含網頁）**、**supervisor**、以及每個 Agent 的 **Debian 桌面容器**。
+</div>
 
-| 項目 | 最低能跑 | 建議（一台桌面常開） |
-| --- | --- | --- |
-| 作業系統 | macOS / Linux，已裝 Docker Engine + Compose | 同上，磁碟給 Docker 至少 30 GB |
-| CPU | 4 核 | 8 核以上。每個桌面預設吃 2 核（`LAZYBOY_COMPUTER_CPUS`） |
-| 記憶體 | 8 GB（只能開一台、還會卡） | **16 GB**。每個桌面預設 2 GB（`LAZYBOY_COMPUTER_MEMORY_MB`）再加上 API、Postgres、嵌入模型 |
-| 磁碟 | 約 15 GB（桌面映像 + Postgres） | 家目錄 `data/homes/` 會隨瀏覽器設定檔長大 |
-| GPU | 不需要 | 模型走網路 API，畫面是 CPU 上的 Xvfb |
-| 網路 | 第一次建映像、拉套件需要 | 之後離線也能開 UI；聊天要模型金鑰能連外 |
+![LazyBoy 三欄工作空間：Agent、對話與即時電腦畫面](./docs/readme-hero.png)
 
-每個 Agent 桌面都會套用 Docker 的 CPU、記憶體與 PID 上限，預設是 2 CPU、2 GB、2048 個 PID。可在 `.env` 調整 `LAZYBOY_COMPUTER_CPUS`、`LAZYBOY_COMPUTER_MEMORY_MB`、`LAZYBOY_COMPUTER_PIDS`。Linux 若安裝 LXCFS，將 `LAZYBOY_LXCFS_ROOT` 指到它的 `/var/lib/lxcfs`，容器內的 `htop`、`free` 等也會顯示 cgroup 配額；macOS 仍會套用配額，但 Docker Desktop 不提供這個 `/proc` 虛擬化。桌面容器不掛主機 Docker socket，也不使用 `privileged`；需要一般管理命令時才在 `.env` 設定 `LAZYBOY_COMPUTER_SUDO=true`，權限只在該 Agent 容器內生效。
+LazyBoy 是一套本機優先（local-first）的多 Agent 工作空間。每個 Agent 都能使用瀏覽器、終端、檔案系統與桌面應用程式；執行畫面可即時觀看、可以人工接管，也能把示範整理成技能，之後透過排程重複執行。
 
-預設一個 Team 電腦容器可同時掛最多 **8** 個螢幕（`TEAM_SCREEN_LIMIT`）。再開私人電腦就是再一個容器、再 2 GB。分頁開著時心跳會讓桌面保持熱機；關掉分頁約 10 分鐘後凍結（記憶體還在），約 6 小時後才真正停機。
+> [!IMPORTANT]
+> LazyBoy 會把對話、記憶、憑證與瀏覽器設定檔持久化在自己的主機，但使用外部模型時，完成任務所需的提示詞、工具結果或畫面仍可能傳送給你設定的模型供應商。請依資料敏感度選擇供應商與部署方式。
 
----
+## 為什麼是 LazyBoy？
 
-## 怎麼快速啟動
+| 一般聊天機器人 | LazyBoy |
+| --- | --- |
+| 告訴你怎麼做 | 在隔離桌面中實際操作 |
+| 看不到執行過程 | 即時 noVNC 畫面與步驟狀態 |
+| 人與 Agent 搶控制權 | 接管／釋放租約，安全交接 |
+| 每次重新說明流程 | 示範一次，儲存為可攜技能 |
+| 一次性對話 | Session、長期記憶、排程與群組 |
+| 固定模型與工具 | xAI、OpenCode Go、OpenAI 相容端點與 MCP |
 
-要有 Docker（含 Compose 外掛）和 Make。第一次會編 `lazyboy/computer:local`（Debian + XFCE + Chromium），會比較久。
+## 快速開始
+
+### 需求
+
+- macOS 或 Linux
+- Docker Engine / Docker Desktop（含 Compose）
+- Make、Git
+- 至少 4 核 CPU、8 GB RAM；建議 8 核、16 GB RAM
+- 一組支援的模型 API 金鑰
+
+第一次啟動會建置 Debian、XFCE、Chromium 桌面映像，因此會比後續啟動久。
 
 ```bash
+git clone <your-repository-url>
+cd LazyBoy
+
 make env
-# 在 .env 填 XAI_API_KEY
-# （也可以之後在「本機工作區 → 設定」接 xAI / OpenCode Go / OpenAI 相容端點）
+# 編輯 .env，至少填入 XAI_API_KEY、OPENCODE_GO_API_KEY
+# 或 OPENAI_API_KEY 其中之一
+
 make up
 make health
 ```
 
-打開 [http://127.0.0.1:3101](http://127.0.0.1:3101)，用 `.env` 裡的 `LAZYBOY_APP_TOKEN` 登入，建一個 Agent，傳一句話。
+開啟 [http://127.0.0.1:3101](http://127.0.0.1:3101)，使用 `.env` 中的 `LAZYBOY_APP_TOKEN` 登入，建立第一個 Agent，然後直接描述目標。
 
-沒有 Make：
+```text
+打開指定的訓練網站，完成還沒看完的章節，最後整理進度。
+```
+
+常用指令：
+
+| 指令 | 用途 |
+| --- | --- |
+| `make up` | 建置並啟動完整堆疊 |
+| `make health` | 檢查 API 健康狀態 |
+| `make logs` | 持續查看服務日誌 |
+| `make ps` | 查看容器狀態 |
+| `make down` | 停止服務，保留 PostgreSQL 資料 |
+| `make purge` | 停止服務並刪除 PostgreSQL volume |
+
+沒有 Make 時，可以從 `.env.example` 建立設定後執行：
 
 ```bash
 cp .env.example .env
-# openssl rand -hex 32  → LAZYBOY_APP_TOKEN
-# openssl rand -hex 32  → SANDBOX_SUPERVISOR_TOKEN
-# openssl rand -hex 32  → LAZYBOY_VAULT_KEY
+# 為 LAZYBOY_APP_TOKEN、SANDBOX_SUPERVISOR_TOKEN、
+# LAZYBOY_VAULT_KEY 各自執行一次 openssl rand -hex 32
 docker compose up -d --build
 ```
 
-前端熱重載：`apps/web` 裡 `npm install && npm run dev`，開 [http://127.0.0.1:5173](http://127.0.0.1:5173)。Vite 把 `/api` 和 `/view` 轉到 3101。
+## 核心能力
 
-本機 Rust 開發（Postgres 仍在 Docker）：
+| 能力 | 實際行為 |
+| --- | --- |
+| 可觀察的電腦操作 | 右側 noVNC 顯示 Agent 的 1280×800 桌面；模型觀察與人類畫面分流 |
+| 瀏覽器與原生桌面控制 | 網頁透過 CDP 元素操作；原生 UI 使用 AT-SPI，必要時才退回座標 |
+| 人工接管 | 登入、2FA、驗證碼或敏感步驟可暫停 Agent，由使用者接管後續跑 |
+| 示範教學 | 記錄語意操作事件並整理成 playbook，不依賴固定像素重播 |
+| 長期記憶 | PostgreSQL + pgvector + MiniLM；只保存明確要求記住的內容 |
+| 安全登入 | 每個 Agent 的 AES-256-GCM 憑證庫；只對相符的 HTTPS 網域填入 |
+| 排程 | 五欄 cron、時區支援、立即試跑；到期任務進入一般 run 佇列 |
+| 多 Agent 與群組 | Team 共用電腦可分配不同 DISPLAY；私人模式使用獨立容器 |
+| MCP 與檔案技能 | 支援 stdio、HTTP、SSE MCP，以及 `data/skills/*/SKILL.md` |
+| 語音通話 | 前端提供可設定的即時語音工作階段 |
+| 中英介面 | `zh-TW` 與 English 文案共用完整 key 契約 |
 
-```bash
-make dev              # 準備 .env、Postgres、桌面映像
-make dev-supervisor   # 終端 1
-make dev-api          # 終端 2
+## 一個任務如何完成
+
+```mermaid
+flowchart LR
+    U["你<br/>文字・附件・語音"] --> W["React 工作空間<br/>對話・電腦・記憶"]
+    W -->|HTTP / WebSocket| A["Rust API + Agent<br/>模型・工具・技能"]
+    A -->|受控工具呼叫| S["Supervisor<br/>資源與生命週期"]
+    S -->|啟動 / 暫停 / 恢復| C["隔離 Linux 電腦<br/>Chromium・XFCE・檔案"]
+    C -->|畫面與事件| W
+
+    Q["排程"] -. Cron .-> A
+    A <--> M[("PostgreSQL<br/>Session・記憶・事件")]
+    V["加密憑證庫"] -. 僅相符 HTTPS 網域 .-> C
+
+    classDef ui fill:#151517,stroke:#3ec5a8,color:#f1f1f2
+    classDef core fill:#101012,stroke:#85858a,color:#f1f1f2
+    classDef secure fill:#221c0e,stroke:#fcd68a,color:#f1f1f2
+    class U,W ui
+    class A,M,Q core
+    class S,C,V secure
 ```
 
-| 指令 | 做什麼 |
+<div align="center">
+
+**[開啟可縮放、可搜尋、支援深色模式的互動流程圖 →](./docs/workflow.html)**
+
+</div>
+
+主流程之外還有兩個重要迴圈：
+
+1. **接管迴圈**：使用者接管時，進行中的 run 進入等待；釋放後從目前畫面重新排隊執行。
+2. **技能迴圈**：示範期間記錄控制項與頁面情境，模型整理成 playbook；往後仍在當下畫面重新尋找元素，不重播舊座標。
+
+## 系統架構
+
+LazyBoy 的公開入口只有 API。Supervisor 位於 Compose 內部 control network，不直接對主機開埠；Agent 桌面也不掛載主機 Docker socket。
+
+```text
+Browser
+  │  HTTP / WebSocket / authenticated screen proxy
+  ▼
+lazyboy-api (:3101)
+  ├── React 靜態前端
+  ├── Session / Run / Memory / Schedule / Vault
+  ├── Model provider / MCP client
+  └── PostgreSQL + pgvector
+          │
+          │ authenticated internal control API
+          ▼
+lazyboy-supervisor (:7091, internal only)
+          │
+          ├── provision / pause / resume / stop
+          ├── CPU / memory / PID limits
+          └── isolated computer containers
+                  ├── Chromium + CDP
+                  ├── XFCE + AT-SPI
+                  ├── Xvfb + x11vnc + websockify
+                  └── per-computer persisted home
+```
+
+### 主要元件
+
+| 元件 | 職責 |
 | --- | --- |
-| `make up` / `make down` / `make purge` | 啟動／停止（留資料）／連 Postgres 一起清 |
-| `make logs` `make ps` `make health` | 看狀態 |
-| `make computer` | 只重建桌面映像 |
-| `make postgres` | 只開資料庫 `127.0.0.1:5434` |
+| `apps/web` | Vite + React 19 三欄工作空間、noVNC、語音與雙語 UI |
+| `crates/api` | 對外 Axum API、Agent run、Session、排程、記憶、MCP、保險箱 |
+| `crates/harness` | 模型供應商、憑證解析與語音契約 |
+| `crates/supervisor` | Docker 電腦生命週期、隔離與資源上限 |
+| `crates/control` | CDP、AT-SPI、X11 與畫面觀察操作 |
+| `crates/controld` | 電腦容器內部的 localhost 控制服務 |
+| `crates/contracts` | 跨 crate 的 Bot、Run、Computer、Voice 資料契約 |
+| `PostgreSQL` | 對話、run、記憶、排程、憑證與保留政策 |
 
----
+### 電腦生命週期
 
-## 跟 Grok Bot 比，好在哪
+```mermaid
+stateDiagram-v2
+    [*] --> Stopped
+    Stopped --> Booting: 第一個需要 GUI 的工具
+    Booting --> Running: ready
+    Running --> WaitingTakeover: 使用者接管 / 2FA
+    WaitingTakeover --> Running: 釋放控制權
+    Running --> Suspended: 閒置 10 分鐘
+    Suspended --> Running: 新任務或畫面心跳
+    Suspended --> Stopped: 休眠約 6 小時
+    Running --> Stopped: 手動停止
+```
 
-[Grok Bot](https://grok.com) 是 xAI 的雲端隊友：對話、電腦、排程都在他們的機器上。LazyBoy 走同一類產品（本機開源實作對齊 Rakazo 那條線），差在**誰擁有執行環境**。
+## 安全模型
 
-| | Grok Bot | LazyBoy |
+目前程式碼包含下列防護：
+
+- API session token 與 Supervisor token 分離。
+- Supervisor 只在內部 Compose network，並使用 `no-new-privileges`、唯讀 root filesystem 與 capability drop。
+- 每台電腦有 CPU、RAM、PID 上限；預設 2 CPU、2 GB、2048 PID。
+- API 預設只綁定 `127.0.0.1:3101`。
+- 憑證以獨立 `LAZYBOY_VAULT_KEY` 加密，輪替登入 token 時不應更換此 key。
+- 已保存登入只接受 HTTPS、精確或合法子網域匹配，不對相似惡意網域填入。
+- Markdown 連結限制為 HTTP(S)、`mailto:`、`tel:` 與頁內錨點。
+- 日誌有大小與檔案數上限；診斷資料有可設定的保留週期。
+
+部署注意事項：
+
+1. 對區網或網際網路開放前，先放在 HTTPS reverse proxy 後方，並設定 `LAZYBOY_SECURE_COOKIE=true`。
+2. 不要把 Supervisor `:7091` 對外發布，也不要將 Docker socket 掛進 Agent 電腦。
+3. `LAZYBOY_APP_TOKEN`、`SANDBOX_SUPERVISOR_TOKEN`、`LAZYBOY_VAULT_KEY` 必須使用不同的高熵值。
+4. 模型仍可能看見任務所需的網頁內容與截圖；密碼、token 與高敏感資料不要放進提示詞。
+5. CAPTCHA、2FA 與不確定的敏感操作應由使用者接管。
+
+## 硬體與資源
+
+| 項目 | 最低可執行 | 建議 |
 | --- | --- | --- |
-| 跑在哪 | xAI 雲端 | 你的 Docker |
-| 模型 | Grok | 你帶金鑰：xAI、OpenCode Go、或任何 OpenAI 相容端點 |
-| 電腦 | 廠商提供的桌面 | 你映像裡的 Debian／XFCE／Chromium，家目錄在 `data/homes/` |
-| 資料 | 在服務端 | 對話、記憶、保險箱、瀏覽器設定檔都在本機 Postgres + 磁碟 |
-| 登入帳號 | 跟雲端工作流程走 | 每個 Agent 自己的保險箱（AES-256-GCM），模型只看到帳號 id |
-| 客製 | 封閉 | 開源。工具、MCP、技能 JSON 可改可搬 |
-| 費用形態 | 訂閱／用量 | 電費與硬體；模型金鑰另計 |
-| 多 Agent 同桌 | 產品內建 | Team 電腦一個容器最多 8 螢幕；私人電腦一人一容器 |
-| 教會它 | 看產品當下提供什麼 | 你示範一次，CDP 記語意事件，模型整理成技能 |
+| CPU | 4 核 | 8 核以上 |
+| RAM | 8 GB，單台電腦 | 16 GB 以上 |
+| 磁碟 | 約 15 GB | Docker 至少保留 30 GB |
+| GPU | 不需要 | 模型預設走外部 API |
+| 作業系統 | macOS / Linux | Linux 可選配 LXCFS 顯示容器內 cgroup 配額 |
 
-適合 LazyBoy 的情況：資料不能出門、要自己選模型、要看它點了哪個控制項、或想把「看完訓練影片交測驗」這種流程做成可匯出的技能。
+每台電腦的預設限制可由 `LAZYBOY_COMPUTER_CPUS`、`LAZYBOY_COMPUTER_MEMORY_MB`、`LAZYBOY_COMPUTER_PIDS` 調整。瀏覽器分頁的心跳會維持熱機；沒有工作且約 10 分鐘無人觀看時暫停，持續休眠約 6 小時後停止。
 
-Grok Bot 適合的情況：不想養 Docker、要官方託管、機器不夠力。
+## 設定
 
----
+`make env` 會以 `.env.example` 為基礎建立 `.env`，並保留既有金鑰。
 
-## 每個功能簡介
+| 變數 | 用途 | 預設 |
+| --- | --- | --- |
+| `XAI_API_KEY` | xAI 模型 | 空 |
+| `OPENCODE_GO_API_KEY` | OpenCode Go 模型 | 空 |
+| `OPENAI_API_KEY` | OpenAI 相容端點 | 空 |
+| `LAZYBOY_APP_TOKEN` | Web 登入 token | 必填 |
+| `SANDBOX_SUPERVISOR_TOKEN` | API ↔ Supervisor 驗證 | 必填 |
+| `LAZYBOY_VAULT_KEY` | 憑證庫加密 key | 必填且必須保持穩定 |
+| `LAZYBOY_BIND_IP` | 主機監聽位址 | `127.0.0.1` |
+| `LAZYBOY_SECURE_COOKIE` | HTTPS-only cookie | `false` |
+| `LAZYBOY_COMPUTER_CPUS` | 每台電腦 CPU | `2` |
+| `LAZYBOY_COMPUTER_MEMORY_MB` | 每台電腦記憶體 | `2048` |
+| `LAZYBOY_COMPUTER_PIDS` | 每台電腦 PID 上限 | `2048` |
+| `LAZYBOY_MEMORY_ENABLED` | 長期記憶 | `true` |
 
-**對話與 Session**  
-每個 Agent 多則對話。訊息進 Postgres，同一則用 `clientNonce` 去重。問候、閒聊走純文字，**不會**為了「看一下螢幕」去開 Docker。
+完整清單與保留政策請見 [`.env.example`](./.env.example)。
 
-**Team / 私人電腦**  
-Team：工作區共用一個家目錄，每個 bot 有自己的 `DISPLAY`（`:1`、`:2`…）和瀏覽器設定檔。私人：這個 bot 獨佔一個容器。
+## 二次開發
 
-**即時畫面**  
-右側預覽是 noVNC。瀏覽器連 `/view/{botId}/vnc.html`，API 用已登入的 cookie 轉到容器裡的 websockify。模型看到的截圖另走 `computer_observe`，上面會蓋黃字編號；你盯著的 VNC **沒有**那些編號。
+### 本機開發
 
-**接管 / 釋放**  
-人按接管就拿到控制租約（預設 15 分鐘，心跳續約）。進行中的 run 會進 `waiting_takeover`，放開後從目前畫面接著做。模型遇到登入牆、2FA、驗證碼會呼叫 `request_takeover`。
+```bash
+make dev              # 準備 .env、PostgreSQL、電腦映像
+make dev-supervisor   # 終端 1：Supervisor :7091
+make dev-api          # 終端 2：API :3101
+```
 
-**觀察與操作**  
-- Chromium 網頁：`browser`（CDP，點 element id）  
-- 原生視窗（對話框、檔案管理員、XFCE）：`computer_act`（AT-SPI id，不行再退 xdotool 座標）  
-- 檔案與指令：`list_files` / `read_file` / `write_file` / `shell`  
-點到 `[disabled]` 的控制項會最多等 45 秒等它亮。模型用文字回「我在等」會結束整段 run，所以等待必須是 `wait` 工具。
+前端熱更新：
 
-**教技能**  
-你示範，容器內 CDP 錄「點了哪個控制項、填了什麼、去了哪一頁」，再抽幾個關鍵畫面。停下來後模型整理成意圖級 playbook，之後用普通工具在**當下畫面**找控制項，不是重播座標。密碼欄不錄。技能可匯出 JSON。
+```bash
+cd apps/web
+npm install
+npm run dev           # http://127.0.0.1:5173
+```
 
-**Slash 指令與長目標**
-在 `data/skills/<name>/SKILL.md` 放工作區共用的唯讀技能，就能在輸入框打 `/name 參數` 執行；輸入 `/` 會顯示可用技能。`/goal` 是 harness 的持續執行模式，和錄製示範產生的 playbook 分開。選單支援方向鍵、Enter／Tab 選取、Esc 關閉。`/goal 目標` 會先規劃、執行並檢查結果，直到模型回報已驗證完成；只有需要登入、驗證碼、接管畫面或缺少必要資訊時才會停下來請你處理。缺少必要資訊時會記為等待輸入，補充訊息後接續原目標；停止按鈕可以取消。一般訊息仍維持 40 回合上限，教學技能 80 回合。
+### 檢查與測試
 
-**記憶**  
-`pgvector` + MiniLM（384 維）。只有你叫它記住、或它呼叫 `remember` 的內容會進長期記憶。密碼與 token 會被拒。清除對話不會清記憶。
+```bash
+make fmt
+make clippy
+make test
 
-**保險箱**  
-每個 bot 自己的站名／帳號／密碼。模型用 `list_accounts` 只看到站與使用者名稱，`use_saved_login` 在 Chromium 登入表單填入。金鑰用 `LAZYBOY_VAULT_KEY` 加密。
+cd apps/web
+npm run typecheck
+npm run build
 
-**排程**  
-五欄 cron，預設 `Asia/Taipei`。對話裡講「以後每天九點」或側欄新增。tick 迴圈把到期列變成普通 queued run。
+cd ../..
+node --test tests/frontend.test.mjs
+python3 tests/control.test.py
+python3 tests/log-rotation.test.py
 
-**MCP**  
-工作區級外掛。市集或自訂 stdio／HTTP／SSE。stdio 跑在 API 容器裡。
+# 需要已啟動的 PostgreSQL Compose service
+docker compose up -d postgres
+python3 tests/retention.test.py
+```
 
-**群組**  
-多個 Agent 同一個 thread。Team 電腦上各用各的螢幕。同一 bot 同時只跑一個 run，後面的訊息排隊。
-
-**附件**  
-圖片給當則模型看，不進歷史二進位。要讓電腦開原檔會放 `inbox/`，兩小時後刪。
-
-**頭像與狀態**  
-Blobatar 色塊＋眼睛。啟動、喚醒、連線、換手時，預覽左上角與思考列會顯示對應文字。分頁開著時心跳保住容器，換手不拆 VNC。
-
----
-
-## 系統怎麼轉起來
-
-![其實只有三個角色：你、LazyBoy、它的電腦](./docs/diagrams/map.png)
-
-Compose 裡 supervisor **不**對主機開埠。API 在容器網路連 `supervisor:7091`。家目錄 `data/homes/<homeKey>` bind 進容器的 `/home/lazyboy`。
-
----
-
-## 你送一則訊息
-
-![它先決定：聊就好，還是要動手](./docs/diagrams/chat.png)
-
-同一 bot 已有進行中的工作時，新訊息會排隊（`queuedBehindActive`）。人正在接管時，後面的話只排隊，思考轉圈不會假裝它還在動。問候路徑會把工具表清空，從源頭避免「哈囉」去開電腦。
-
-`execute_run` 每一輪：續租約 → 寫步驟文字 → 問模型 → 沒有工具就結束（技能沒過會再把畫面塞回去）→ 有工具且需要沙盒才 boot → 畫面沒變就不重複塞圖。回合上限：聊天 4、一般 40、教學技能 80；`/goal` 會持續到完成或明確需要人介入。目標執行期間，同一對話送進來的新訊息會作為下一輪的補充指示。
-
----
-
-## 電腦的作息
-
-![開著、小睡、關機](./docs/diagrams/sleep.png)
-
-閒置（`crates/api/src/computer.rs` `idle_loop`）：
-
-1. 執行中、超過 10 分鐘沒人看、也沒有進行中的 run／示範 → `docker pause`，狀態 `suspended`
-2. 休眠超過 6 小時 → `docker stop`，狀態 `stopped`
-3. 分頁還在就心跳，不會進 1
-
-開機／喚醒：已在跑就直接回；凍結中就 `unpause`（約一秒）；沒有容器才 `provision`，等 `/tmp/lazyboy/ready`。畫面走 `/view/{bot}/vnc.html`，已登入的 cookie 轉到 websockify。
-
----
-
-## 它怎麼看、怎麼點
-
-![你看乾淨的，它看有編號的](./docs/diagrams/look.png)
-
-![能認控制項，就不要猜座標](./docs/diagrams/click.png)
-
-模型從不直接連 VNC。它只打 API 工具；工具經 sandbox HTTP 進 supervisor，再 `docker exec` 或打容器內 `controld`。
-
-編號只畫在給模型的 JPEG 上。VNC 是乾淨桌面。每次 navigation／snapshot 會重編號，舊 id 作廢。`computer_act` 點在瀏覽器視窗上會被拒，避免用像素點網頁。解析度契約是 **1280×800**。
-
-每個 bot 一個 `computer_screens` 列：slot、DISPLAY、執行租約、控制租約。人接管寫 `control_holder=user`，worker 在回合邊界停，不跟你搶滑鼠。`view_only` 用 postMessage 切，不重掛 iframe，所以換手時預覽不會黑掉。
-
-`lazyboy-controld` 聽 `127.0.0.1:7070`。Team 多螢幕：slot 0 = `:1`，slot N = `:N+1`。`lazyboy-screen ensure` 在同一個容器裡再長一組 Xvfb。
-
----
-
-## 模型金鑰從哪來
-
-![由近到遠，找到第一把就用](./docs/diagrams/keys.png)
-
-`crates/harness` 不管滑鼠，只決定這次 run 要用哪一家模型。真正的 agent 迴圈在 `crates/api/src/runs.rs`。
-
-金鑰：**這個機器人 → 工作區設定 → 環境變數**。API 跑在 Docker 時，迴圈位址 `127.0.0.1` 會被改成 `host.docker.internal`，才能打到你本機的相容端點。
-
----
-
-## 教會它
-
-![你做一次，它記住為什麼](./docs/diagrams/teach.png)
-
-之後 run 若 prompt 對得上技能名，會把完整 playbook 塞進當則，並清掉舊聊天以免模型複誦上次的「還在倒數」。執行仍用 `browser`／`computer_act`，在**現在**的畫面上找「Next」，不是記像素。
-
----
-
-## 排程怎麼進工作
-
-![到點以後，跟你傳訊息同一條路](./docs/diagrams/schedule.png)
-
-Cron 五欄。時區寫在列上，預設台北。`立刻跑` 只是立刻插一筆 run，不改下一拍時間。
-
----
-
-## 專案目錄（二次開發從這裡找）
-
-![把它當成幾間房間，不是分層蛋糕](./docs/diagrams/folders.png)
-
-Cargo workspace。畫面在 `apps/web`，對話與工作在 `api`，怎麼點在 `control`，開機在 `supervisor` + `image/computer`，問哪一家模型在 `harness`。前端是獨立的 Vite app，由 API 把 `apps/web/dist`（或開發時的 `apps/web`）端出去。
+### 專案結構
 
 ```text
 LazyBoy/
-├── apps/web/                 瀏覽器 UI（Vite + React）
-│   ├── src/App.tsx           幾乎全部畫面：側欄、聊天、電腦、設定
-│   ├── src/schedule.tsx      排程面板
-│   ├── src/avatar.tsx        Blobatar 頭像
-│   ├── src/api.ts            fetch 包裝、401
-│   ├── src/types.ts          跟 API JSON 對齊的型別
-│   ├── src/locales/zh-TW.ts  所有使用者看得到的字
-│   ├── src/*.css             樣式（styles / chat / computer / refinements…）
-│   └── vnc.html              內嵌桌面（noVNC）；API 的 /view 會讀這一檔
+├── apps/web/                 React 前端與 noVNC 頁面
 ├── crates/
-│   ├── contracts/            跨 crate 的型別：Bot、Run、ComputerState、動作 JSON
-│   ├── harness/              模型後端：CredentialChain、resolve_backend、connect_model
-│   ├── control/              桌面契約：螢幕 slot、租約、CDP/AT-SPI/xdotool、overlay
-│   │                         含 a11y.py / cdp.py（容器裡被 exec 的腳本）
-│   ├── sandbox/              API 打 supervisor 的 HTTP 客戶端；fake 給測試
-│   ├── supervisor/           Docker：provision / pause / unpause / exec / observe / act
-│   ├── controld/             打進容器的小 HTTP（127.0.0.1:7070）
-│   └── api/                  唯一對外程序：路由、worker、idle、排程 tick、靜態網頁
-│       └── src/
-│           ├── main.rs       啟動、三條背景迴圈
-│           ├── routes.rs     組 router；bot / computer HTTP 也在這
-│           ├── runs.rs       agent 迴圈（租約、complete_once、nudge）
-│           ├── tools.rs      tool_definitions + dispatch（加工具從這裡）
-│           ├── computer.rs   boot / 凍結 / 心跳 / 螢幕租約
-│           ├── sessions.rs   對話 CRUD、送訊息、SSE
-│           ├── skills.rs     示範錄製與蒸馏
-│           ├── file_skills.rs 讀取 data/skills 下的唯讀 SKILL.md
-│           ├── schedules.rs  cron
-│           ├── vault.rs      登入保險箱
-│           ├── memory.rs     pgvector 記憶
-│           ├── mcp.rs        MCP 連線
-│           ├── screen_proxy.rs  /view 反代
-│           └── db.rs         SQL 與列定義
-├── image/
-│   ├── api/Dockerfile
-│   ├── supervisor/Dockerfile
-│   └── computer/             桌面映像
-│       ├── Dockerfile
-│       ├── start.sh          PID 1：controld + Xvfb/XFCE/VNC
-│       └── lazyboy-screen    Team 額外 DISPLAY
-├── migrations/               sqlx，檔名流水號；API 啟動時自動 migrate
-├── data/homes/               每個電腦的家目錄（bind 進容器 /home/lazyboy）
-├── data/skills/<name>/SKILL.md 工作區共用的 slash 技能（執行時掛載）
-├── tests/                    跨語言的小測試（node:test、Python）
-├── scripts/                  init-env、build-computer-image、dev
-├── docker-compose.yml        正式堆疊（Postgres + supervisor + API）
-├── Makefile                  make up / dev / test
-└── reference/rakazo/         上游參考實作，不要當 runtime 依賴
+│   ├── api/                  對外 API 與 Agent 執行迴圈
+│   ├── contracts/            跨元件資料契約
+│   ├── control/              瀏覽器與桌面控制
+│   ├── controld/             容器內控制服務
+│   ├── harness/              模型與語音後端
+│   ├── sandbox/              API 到 Supervisor 的抽象
+│   └── supervisor/           Docker 生命週期管理
+├── image/                    API、Supervisor、電腦映像
+├── migrations/               SQLx PostgreSQL migrations
+├── tests/                    Rust 以外的契約與回歸測試
+├── scripts/                  環境初始化與執行工具
+├── docs/hero.html            README 首頁視覺原稿
+├── docs/workflow.html        可互動產品流程圖
+├── docker-compose.yml        正式堆疊
+└── Makefile                  常用開發與部署指令
 ```
 
-### 想改什麼，開哪個檔
+## 徽章與開源認證
 
-| 你要做的事 | 先開 |
-| --- | --- |
-| 加一個模型工具（例如 `screenshot_region`） | `crates/api/src/tools.rs`（`tool_definitions` + `dispatch`）；若要 GUI，`runs.rs` 的 `tool_needs_sandbox` / `tool_needs_gui` |
-| 工具對應的滑鼠／鍵盤／CDP | `crates/control/src/{actions,x11,cdp,a11y}.rs` 與同目錄 `.py` |
-| 新的 HTTP 端點 | 功能模組自己的 `router()`（如 `schedules.rs`），在 `routes.rs` `.merge(...)`；電腦／bot 則直接寫在 `routes.rs` |
-| 新狀態、動作 JSON、Run 狀態機 | `crates/contracts/src/`（改完 `api` / 前端 `types.ts` 一起對） |
-| 換模型供應商或金鑰解析 | `crates/harness/src/resolve.rs`、`crates/contracts/src/model.rs`、`workspace.rs` |
-| 容器怎麼開、凍結、等 ready | `crates/supervisor/src/docker.rs`、`crates/api/src/computer.rs` |
-| 桌面裡多裝套件、改 XFCE、開機腳本 | `image/computer/`，然後 `make computer` |
-| 對話 UI、電腦預覽、頭像小卡 | `apps/web/src/App.tsx` + 對應 css |
-| 畫面上的中文 | `apps/web/src/locales/zh-TW.ts`（key 加了 `tsc` 才會過） |
-| 內嵌 VNC 行為（貼上、唯讀） | `apps/web/vnc.html` |
-| 新資料表 | `migrations/0xx_....sql`；列定義補 `crates/api/src/db.rs` |
-| 排程 UI | `apps/web/src/schedule.tsx` |
-| MCP 市集清單 | `crates/api/src/mcp_catalog.rs` |
+README 頂端目前只顯示可以直接從原始碼驗證的資訊徽章，不把「尚未執行的檢查」包裝成通過。
 
-### 加一支工具的最短路徑
+若要取得可公開查驗的安全與品質徽章，建議依序完成：
 
-1. `tools.rs` 的 `tool_definitions` 加 `ToolDefinition`（名稱、說明、JSON Schema）。說明是寫給模型看的。  
-2. 同一個檔的 `dispatch` 加 match arm，回 `ToolOutcome { text, image, pause, blocks }`。  
-3. 若會動到桌面：`runs.rs` 裡 `tool_needs_sandbox` / `tool_needs_gui` 把名字加進去，否則不會 boot、也拿不到螢幕租約。  
-4. 需要新的容器指令就放 `control`（Rust 組 argv，Python 做 CDP/AT-SPI），supervisor 的 `exec` 已經會把 `DISPLAY` 帶進去。  
-5. 前端若要顯示步驟文字，`runs.rs` 的 `describe_step` 加一列。  
-6. `SANDBOX_PROVIDER=fake cargo test -p lazyboy-api` 先過，再對真容器看。
+- [ ] 在公開 GitHub repository 建立正式 mirror；OpenSSF 的公開查驗以 GitHub 為主要整合目標。
+- [ ] 加入完整 `LICENSE`、`SECURITY.md`、`CONTRIBUTING.md` 與行為準則。
+- [ ] 建立 CI：Rust format / Clippy / tests、前端 typecheck / build / tests。
+- [ ] 啟用 Dependabot 或 Renovate、CodeQL、secret scanning 與 branch protection。
+- [ ] 執行並發布 [OpenSSF Scorecard](https://scorecard.dev/) 結果後，再加入 Scorecard 徽章。
+- [ ] 在 [OpenSSF Best Practices](https://www.bestpractices.dev/) 登記專案、誠實完成 Passing 問卷後，再加入認證徽章。
+- [ ] 若提供容器映像，再加入 SBOM、簽章與可重現版本發布流程。
 
-### 本機二次開發迴圈
+> 不建議現在顯示 CI passing、coverage、OpenSSF 或 Best Practices 徽章：目前 repository 沒有對應的公開結果，徽章會失真或直接顯示 unknown。
 
-```bash
-make env && make postgres          # 資料庫
-make computer                      # 桌面映像有改才需要
-make dev-supervisor                # 終端 1，:7091
-make dev-api                       # 終端 2，:3101，會自動跑 migrations
-# 前端另開：
-cd apps/web && npm install && npm run dev    # :5173
-```
+## 專案狀態
 
-- 改 `apps/web/src`：Vite 熱更新。  
-- 改 `crates/api`：停掉 `dev-api` 再 `make dev-api`。  
-- 改 `crates/supervisor`：同樣重跑 supervisor。  
-- 改 `crates/control` 的 `.py`：映像沒重建的話，執行中的容器還是舊腳本；要嘛 `make computer` 後重開電腦，要嘛確認 supervisor exec 讀的是映像內檔案。  
-- 改 `image/computer`：一定 `make computer`，再在 UI 重啟該台電腦。  
-- 契約改了：同時改 `contracts`、呼叫端、`apps/web/src/types.ts`。
+LazyBoy 目前版本為 `0.1.0`，仍屬早期階段。建議先在本機或受信任網路中使用；對外部署前請完成威脅模型、權限檢查、備份與還原演練。
 
-檢查：
-
-```bash
-make fmt && make clippy && make test
-node --test tests/frontend.test.mjs          # 排程 cron、VNC 貼上、登入填表防護
-```
-
-`SANDBOX_PROVIDER=fake` 時 API 不碰 Docker，適合先測 run／工具契約。
-
-`reference/rakazo/` 是對齊用的上游，不要在 LazyBoy runtime import 它。
+Cargo workspace 的授權中繼資料宣告為 MIT。若要正式公開散布，應先在 repository 根目錄補上完整 MIT `LICENSE` 文字，再把上方授權徽章改為連到該檔案。
 
 ---
 
-## 安全（操作時要記得）
+<div align="center">
 
-- Supervisor 只在 Compose 內網，不要對 LAN 開埠  
-- 畫面走已登入 API，VNC 密碼不進瀏覽器 URL  
-- 區網請走 HTTPS；終端是 HTTPS 時設 `LAZYBOY_SECURE_COOKIE=true`  
-- API 綁非本機時 `LAZYBOY_APP_TOKEN` 至少 32 字；supervisor 拒絕空白、過短、`dev-token`  
-- 保險箱用 `LAZYBOY_VAULT_KEY`；換登入 token 時這把 key 要留著  
-- 模型看不到密碼本文；2FA／CAPTCHA 一定要人在**它的**畫面上處理
+用自然語言交代工作，保留看得見、接得回來的控制權。
+
+</div>
