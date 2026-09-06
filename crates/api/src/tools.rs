@@ -33,6 +33,7 @@ pub struct ToolCtx {
     pub last_click_key: Mutex<Option<String>>,
     pub click_misses: Mutex<u32>,
     pub takeover_requested: Mutex<bool>,
+    pub connection_check_attempted: Mutex<bool>,
     pub pool: PgPool,
     pub memory: MemoryService,
     pub actor: Actor,
@@ -172,6 +173,13 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "connection_check".into(),
+            description: "Try one normal click on a visible Cloudflare connection-check checkbox. First use computer_observe and locate the checkbox in the latest screenshot; pass its screen x/y. Only for a connection-check page, never image/audio puzzles, passwords or 2FA. Waits up to 15 seconds, returns a fresh observation, and requests human takeover if still blocked. Limited to one attempt per run. Never claim success until the requested page content is visible.".into(),
+            parameters: json!({"type":"object","properties":{
+                "x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0}
+            },"required":["x","y"]}),
+        },
+        ToolDefinition {
             name: "request_takeover".into(),
             description: "Ask the user to take over the live screen for passwords, 2FA, CAPTCHA, or a login wall when no saved account fits. Never ask them to paste secrets in chat. Prefer use_saved_login when list_accounts has a matching site.".into(),
             parameters: json!({
@@ -191,7 +199,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "use_saved_login".into(),
-            description: "Fill the current Chromium login form with a saved account. Pass only accountId from list_accounts. The password never appears in chat. If 2FA or CAPTCHA appears afterwards, call request_takeover.".into(),
+            description: "Fill the current Chromium login form with a saved account. Pass only accountId from list_accounts. The password never appears in chat. For a simple Cloudflare checkbox use computer_observe then connection_check once; for other CAPTCHA or 2FA call request_takeover.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{"accountId":{"type":"string"}},
@@ -285,6 +293,7 @@ pub async fn dispatch(ctx: &ToolCtx, name: &str, args: &Value) -> ToolOutcome {
         "computer_act" => act(ctx, args).await,
         "wait" => wait_then_observe(ctx, args).await,
         "browser" => browser(ctx, args).await,
+        "connection_check" => connection_check(ctx, args).await,
         "shell" => shell(ctx, args).await,
         "list_files" => list_files(ctx, args).await,
         "read_file" => read_file(ctx, args).await,
@@ -636,6 +645,72 @@ async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
     }
 }
 
+fn is_connection_check(page: &CdpPage) -> bool {
+    let text = format!("{} {}", page.title, page.text).to_lowercase();
+    page.ok && (text.contains("需要確認您的連線是安全") || (text.contains("cloudflare") && [
+        "verify you are human", "verifying you are human", "checking your browser",
+        "checking if the site connection is secure", "needs to review the security",
+        "驗證您是人類", "验证您是人类", "確認您的連線是安全", "確認您的人類身分",
+    ].iter().any(|marker| text.contains(marker))))
+}
+
+fn connection_takeover(ctx: &ToolCtx, reason: &str) -> ToolOutcome {
+    *ctx.takeover_requested.lock().unwrap() = true;
+    ToolOutcome {
+        text: reason.into(), image: None, pause: true,
+        blocks: login_blocks(&json!({"reason":reason,"site":"網站連線驗證",
+            "why":"完成驗證後，繼續原本的瀏覽任務。"})),
+    }
+}
+
+async fn connection_check(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
+    if let Some(blocked) = vision_guard(ctx) { return blocked; }
+    let (Some(x), Some(y)) = (args.get("x").and_then(Value::as_u64), args.get("y").and_then(Value::as_u64)) else {
+        return text_outcome("Take a fresh computer_observe and provide the visible checkbox's non-negative screen x/y.");
+    };
+    if x > i32::MAX as u64 || y > i32::MAX as u64 {
+        return text_outcome("Checkbox coordinates are out of range.");
+    }
+    let page = cdp_call(ctx, json!({"action":"snapshot","ensure":false})).await;
+    if !is_connection_check(&page) {
+        return text_outcome("No supported Cloudflare connection-check page was confirmed. Re-observe; use request_takeover for other CAPTCHA, login or 2FA. No click was sent.");
+    }
+    let already_attempted = {
+        let mut attempted = ctx.connection_check_attempted.lock().unwrap();
+        let previous = *attempted;
+        *attempted = true;
+        previous
+    };
+    if already_attempted {
+        return connection_takeover(ctx, "這次任務已嘗試過連線驗證，請接管完成驗證。");
+    }
+    let actions = match parse_computer_actions(&json!([{"kind":"click","x":x,"y":y}])) {
+        Ok(actions) => actions,
+        Err(error) => return text_outcome(error.to_string()),
+    };
+    let adapter = ctx.adapter();
+    let result = ctx.sandbox.act(&ctx.computer_ref(), ActionRequest {
+        actions, observe:false, settle_ms:350,
+        display:adapter.display.clone(), profile_path:adapter.profile_path.clone(),
+    }, &adapter).await;
+    if result.is_err() {
+        return connection_takeover(ctx, "無法確認驗證點擊是否完成，請接管檢查。");
+    }
+    for _ in 0..3 {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let after = cdp_call(ctx, json!({"action":"snapshot","ensure":false})).await;
+        // Disappearance alone is not proof of success: loading/error pages
+        // can also remove the checkbox. Return evidence for the task check.
+        if after.ok && !is_connection_check(&after) && !after.text.trim().is_empty() {
+            let mut outcome = observe(ctx).await;
+            outcome.text = format!("Connection-check markers disappeared. This is NOT proof of success. Confirm the requested content is actually visible before continuing; if a challenge/error remains, request_takeover.\n{}\n{}",
+                browser_result_text("snapshot", &after), outcome.text);
+            return outcome;
+        }
+    }
+    connection_takeover(ctx, "已嘗試一次驗證並等待，仍無法確認通過。請接管完成驗證，之後繼續原任務。")
+}
+
 async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     if let Some(blocked) = vision_guard(ctx) {
         return blocked;
@@ -706,6 +781,9 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         return text_outcome(text);
     }
     let mut text = browser_result_text(action, &page);
+    if is_connection_check(&page) {
+        text.push_str("\nConnection check detected. Take computer_observe; if a simple verification checkbox is visible, use connection_check with its current screen coordinates once. For other puzzles use request_takeover. The requested content has NOT been retrieved.");
+    }
     if let Some(seconds) = page.waited_seconds {
         text.push_str(&format!(
             " (the control was disabled; waited {seconds:.0}s for it to enable before clicking)"
@@ -1314,7 +1392,7 @@ async fn use_saved_login(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         .and_then(|value| value.get("submitted").and_then(Value::as_bool))
         .unwrap_or(false);
     text_outcome(format!(
-        "Filled {} as {}. {} If a 2FA/CAPTCHA wall is next, call request_takeover.",
+        "Filled {} as {}. {} For a simple Cloudflare checkbox, observe and try connection_check once; for other CAPTCHA or 2FA, call request_takeover.",
         account.site,
         account.username,
         if submitted {
@@ -1433,5 +1511,20 @@ fn schedule_state(ctx: &ToolCtx) -> crate::state::AppState {
         memory: ctx.memory.clone(),
         mcp: ctx.mcp.clone(),
         calls: crate::state::CallRegistry::default(),
+    }
+}
+
+#[cfg(test)]
+mod connection_check_tests {
+    use super::*;
+    #[test]
+    fn recognizes_connection_wall_but_not_cloudflare_footer() {
+        for text in ["Cloudflare 驗證您是人類", "Cloudflare Verify you are human", "Dcard 需要確認您的連線是安全的"] {
+            assert!(is_connection_check(&CdpPage { ok:true, text:text.into(), ..Default::default() }));
+        }
+        for text in ["Article text. Protected by Cloudflare", "Sign in with your password", ""] {
+            assert!(!is_connection_check(&CdpPage { ok:true, text:text.into(), ..Default::default() }));
+        }
+        assert!(!is_connection_check(&CdpPage { ok:false, text:"Cloudflare Verify you are human".into(), ..Default::default() }));
     }
 }

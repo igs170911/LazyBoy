@@ -55,7 +55,7 @@ Waiting is a tool call, never a reply. Ending your turn with \"waiting for X\" s
 
 Multi-step tasks and taught skills: you are done only when the playbook's check passes (for example the course shows completed, the form shows a confirmation). Do not stop with a status sentence in the middle; keep calling tools until the check passes or you are truly blocked, then say exactly why. Never repeat an earlier reply word for word; describe the current screen.
 
-Never ask for passwords, codes, or tokens in chat. At a login wall: call list_accounts, then use_saved_login {accountId} when a saved account matches. If none matches, or 2FA/CAPTCHA appears, call request_takeover with site and why so the human signs in on YOUR screen. Recurring work uses create_schedule (five-field cron, Asia/Taipei unless told otherwise).
+Never ask for passwords, codes, or tokens in chat. At a login wall: call list_accounts, then use_saved_login {accountId} when a saved account matches. For a simple Cloudflare connection-check checkbox, first take computer_observe and use connection_check once with coordinates from that screenshot. Check the returned page content before continuing; disappearance of the checkbox alone is not success. Never reload repeatedly or restart the browser to retry. For other CAPTCHA, 2FA, an unsuccessful connection check, or no matching saved login, call request_takeover with site and why so the human signs in on YOUR screen. Recurring work uses create_schedule (five-field cron, Asia/Taipei unless told otherwise).
 
 computer_act examples (native windows only):
 - {\"kind\":\"click\",\"element\":1}
@@ -449,6 +449,7 @@ async fn execute_run(
         last_click_key: std::sync::Mutex::new(None),
         click_misses: std::sync::Mutex::new(0),
         takeover_requested: std::sync::Mutex::new(false),
+        connection_check_attempted: std::sync::Mutex::new(false),
         pool: state.pool().clone(),
         memory: state.memory.clone(),
         actor: actor.clone(),
@@ -954,6 +955,7 @@ async fn execute_run(
                     | "open_path"
                     | "launch_app"
                     | "browser"
+                    | "connection_check"
                     | "wait"
                     | "use_saved_login"
                     | "request_takeover"
@@ -2053,6 +2055,7 @@ fn tool_needs_sandbox(name: &str) -> bool {
             | "computer_observe"
             | "computer_act"
             | "browser"
+            | "connection_check"
             | "open_path"
             | "launch_app"
             | "wait"
@@ -2067,6 +2070,7 @@ fn tool_needs_gui(name: &str) -> bool {
         "computer_observe"
             | "computer_act"
             | "browser"
+            | "connection_check"
             | "open_path"
             | "launch_app"
             | "wait"
@@ -2178,6 +2182,7 @@ fn describe_step(name: &str, args: &Value) -> String {
     let get = |key: &str| args.get(key).and_then(Value::as_str);
     let detail = match name {
         "computer_observe" => "看畫面".to_string(),
+        "connection_check" => "嘗試連線驗證並確認結果".to_string(),
         "computer_act" => args
             .get("actions")
             .and_then(Value::as_array)

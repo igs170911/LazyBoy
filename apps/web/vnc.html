@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LazyBoy desktop</title>
     <style>
       html, body, #screen {
@@ -14,7 +15,26 @@
       #status {
         display: none;
       }
+      body { display:flex; flex-direction:column; }
+      #screen { flex:1; min-height:0; height:auto; }
       #screen canvas { cursor: default; }
+      #mobile-controls { display:none; flex:none; padding:6px 8px max(6px,env(safe-area-inset-bottom));
+        background:#172033; color:#f8fafc; font:12px system-ui; border-top:1px solid #334155; }
+      #mobile-controls .buttons { display:flex; gap:5px; overflow-x:auto; }
+      #mobile-controls button { flex:1 0 auto; min-height:44px; padding:8px 10px;
+        border:1px solid #64748b; border-radius:8px; background:#25334a; color:inherit; font:inherit; touch-action:manipulation; }
+      #mobile-controls button[aria-pressed="true"] { background:#155e75; border-color:#67e8f9; }
+      #mobile-controls button:disabled { opacity:.4; }
+      #pointer-help { margin:5px 0 0; line-height:1.4; }
+      #mobile-cursor { display:none; position:fixed; width:18px; height:18px; border:2px solid white;
+        border-radius:50%; box-shadow:0 0 0 1px #000,0 1px 5px #000; transform:translate(-50%,-50%);
+        pointer-events:none; z-index:5; }
+      #mobile-cursor::after { content:""; position:absolute; width:4px; height:4px; background:#fff;
+        border-radius:50%; left:7px; top:7px; }
+      @media(any-pointer:coarse) { #mobile-controls { display:block; } }
+      /* Keep a real editable element on screen for iOS/Android keyboards. */
+      #mobile-keyboard { position:fixed; bottom:0; left:0; width:1px; height:1px;
+        padding:0; border:0; opacity:.01; font-size:16px; pointer-events:none; }
     </style>
     <script type="module">
       import RFB from "./core/rfb.js";
@@ -48,6 +68,221 @@
       let rfb = null;
       let reconnectTimer = null;
       const parentOrigin = window.location.origin;
+      const keyboard = document.getElementById("mobile-keyboard");
+      const sentinel = "\u200b";
+      let composing = false;
+      let touchStart = null;
+
+      const controls = document.getElementById("mobile-controls");
+      const cursor = document.getElementById("mobile-cursor");
+      const modeButton = document.getElementById("pointer-mode");
+      const dragButton = document.getElementById("pointer-drag");
+      const pointerHelp = document.getElementById("pointer-help");
+      let trackpad = false;
+      let dragging = false;
+      let gesture = null;
+      let pointer = { x: .5, y: .5 };
+
+      function pointerGeometry() {
+        const canvas = document.querySelector("#screen canvas");
+        const rect = canvas?.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+      }
+      function paintPointer() {
+        const rect = pointerGeometry();
+        if (!cursor?.style) return;
+        cursor.style.display = trackpad && rect && rfb && !rfb.viewOnly ? "block" : "none";
+        if (rect) {
+          cursor.style.left = `${rect.left + pointer.x * rect.width}px`;
+          cursor.style.top = `${rect.top + pointer.y * rect.height}px`;
+        }
+      }
+      // Pointer adapter for the pinned noVNC 1.7.0. These methods take scaled
+      // canvas coordinates and preserve noVNC's throttling/protocol handling.
+      function sendPointer(mask = null) {
+        const rect = pointerGeometry();
+        if (!rect || !rfb || rfb.viewOnly) return;
+        const x = Math.min(rect.width - 1, Math.max(0, pointer.x * rect.width));
+        const y = Math.min(rect.height - 1, Math.max(0, pointer.y * rect.height));
+        if (mask === null) rfb._handleMouseMove(x, y);
+        else rfb._handleMouseButton(x, y, mask);
+        paintPointer();
+      }
+      function releaseDrag() {
+        if (dragging) sendPointer(0);
+        dragging = false;
+        dragButton?.setAttribute?.("aria-pressed", "false");
+      }
+      function pointerClick(mask) {
+        releaseDrag();
+        sendPointer(mask);
+        sendPointer(0);
+      }
+      function scrollPointer(deltaX, deltaY) {
+        const rect = pointerGeometry();
+        if (!rect || !rfb || rfb.viewOnly) return;
+        rfb._handleWheel({ clientX:rect.left + pointer.x * rect.width,
+          clientY:rect.top + pointer.y * rect.height, deltaX, deltaY, deltaMode:0,
+          buttons:0, preventDefault(){}, stopPropagation(){} });
+      }
+      function updatePointerControls() {
+        modeButton?.setAttribute?.("aria-pressed", String(trackpad));
+        if (modeButton) modeButton.textContent = trackpad ? "觸控板" : "直接點選";
+        if (pointerHelp) pointerHelp.textContent = trackpad
+          ? "滑動移游標・輕點左鍵・雙指捲動／輕點右鍵・拖曳按完再按一次放開"
+          : "點畫面定位並開鍵盤・長按右鍵・精準操作可切換觸控板";
+        for (const button of controls?.querySelectorAll?.("button[data-action]") || []) {
+          button.disabled = !rfb || rfb.viewOnly;
+        }
+        paintPointer();
+      }
+      function showKeyboard() {
+        if (!rfb || rfb.viewOnly) return;
+        rfb.focusOnClick = false;
+        keyboard.focus({ preventScroll: true });
+        keyboard.setSelectionRange(keyboard.value.length, keyboard.value.length);
+      }
+      window.addEventListener("click", event => {
+        const button = event.target.closest?.("#mobile-controls button");
+        if (!button) return;
+        const action = button.dataset.action;
+        if (action === "mode") {
+          releaseDrag(); gesture = null; touchStart = null;
+          trackpad = !trackpad; keyboard.blur(); updatePointerControls(); return;
+        }
+        if (!rfb || rfb.viewOnly) return;
+        if (action === "keyboard") { releaseDrag(); showKeyboard(); return; }
+        if (action === "left") pointerClick(1);
+        if (action === "right") pointerClick(4);
+        if (action === "up") { releaseDrag(); scrollPointer(0, -100); }
+        if (action === "down") { releaseDrag(); scrollPointer(0, 100); }
+        if (action === "drag") {
+          if (!trackpad) { trackpad = true; keyboard.blur(); }
+          dragging = !dragging; sendPointer(dragging ? 1 : 0);
+          dragButton.setAttribute("aria-pressed", String(dragging));
+          updatePointerControls();
+        }
+      });
+      function stopTouch(event) { event.preventDefault(); event.stopImmediatePropagation(); }
+      function touchCenter(touches) {
+        const points = Array.from(touches);
+        return { x:points.reduce((sum,p)=>sum+p.clientX,0)/points.length,
+          y:points.reduce((sum,p)=>sum+p.clientY,0)/points.length };
+      }
+      function startPointerTouch(event) {
+        if (!trackpad || !event.target.closest?.("#screen")) return false;
+        stopTouch(event);
+        if (!rfb || rfb.viewOnly) {
+          window.parent.postMessage({ type:"lazyboy-request-control" }, parentOrigin);
+          return true;
+        }
+        const center = touchCenter(event.touches);
+        if (event.touches.length > 1) releaseDrag();
+        gesture = { last:center, start:center, fingers:event.touches.length,
+          moved:false, time:Date.now() };
+        return true;
+      }
+      function movePointerTouch(event) {
+        if (!trackpad || !gesture) return false;
+        stopTouch(event);
+        if (!rfb || rfb.viewOnly) { gesture = null; return true; }
+        const center = touchCenter(event.touches);
+        if (event.touches.length !== gesture.fingers) {
+          gesture.last = center; gesture.moved = true; return true;
+        }
+        const dx = center.x - gesture.last.x, dy = center.y - gesture.last.y;
+        gesture.last = center;
+        if (Math.hypot(center.x - gesture.start.x, center.y - gesture.start.y) > 5) gesture.moved = true;
+        if (gesture.fingers === 2) { scrollPointer(-dx, -dy); return true; }
+        const rect = pointerGeometry();
+        if (rect && gesture.fingers === 1 && gesture.moved) {
+          pointer.x = Math.max(0, Math.min(1, pointer.x + dx / rect.width));
+          pointer.y = Math.max(0, Math.min(1, pointer.y + dy / rect.height));
+          sendPointer();
+        }
+        return true;
+      }
+      function endPointerTouch(event) {
+        if (!trackpad || !gesture) return false;
+        stopTouch(event);
+        if (event.touches.length) return true;
+        if (!gesture.moved && Date.now() - gesture.time < 450 && !dragging) {
+          if (gesture.fingers === 1) pointerClick(1);
+          if (gesture.fingers === 2) pointerClick(4);
+        }
+        gesture = null;
+        return true;
+      }
+      window.addEventListener("blur", () => { gesture = null; releaseDrag(); });
+      window.addEventListener("pagehide", () => { gesture = null; releaseDrag(); });
+
+      function resetKeyboard() {
+        keyboard.value = sentinel;
+        composing = false;
+      }
+      function mobileKey(key) {
+        if (!rfb || rfb.viewOnly) return;
+        window.parent.postMessage({ type: "lazyboy-mobile-key", key }, parentOrigin);
+      }
+      function commitKeyboard() {
+        if (composing) return;
+        const value = keyboard.value;
+        if (!rfb || rfb.viewOnly) { resetKeyboard(); return; }
+        if (!value) mobileKey("BackSpace");
+        else {
+          const text = value.startsWith(sentinel) ? value.slice(1) : value;
+          if (text) pasteIntoDesktop(text);
+        }
+        resetKeyboard();
+      }
+      resetKeyboard();
+      window.addEventListener("compositionstart", event => {
+        if (event.target === keyboard) composing = true;
+      });
+      window.addEventListener("compositionend", event => {
+        if (event.target !== keyboard) return;
+        composing = false;
+        commitKeyboard();
+      });
+      window.addEventListener("input", event => {
+        if (event.target === keyboard && !event.isComposing) commitKeyboard();
+      });
+      window.addEventListener("beforeinput", event => {
+        if (event.target !== keyboard || composing || event.isComposing) return;
+        if (event.inputType === "insertLineBreak" || event.inputType === "insertParagraph") {
+          event.preventDefault(); mobileKey("Return"); resetKeyboard();
+        }
+      });
+      // Focus synchronously in the user's tap, before iOS loses activation.
+      // VNC pixels cannot reveal whether the remote target is a text field.
+      window.addEventListener("touchstart", event => {
+        if (event.target === keyboard) return;
+        if (startPointerTouch(event)) { touchStart = null; return; }
+        const point = event.touches[0];
+        const rect = pointerGeometry();
+        if (point && rect && event.target.closest?.("#screen")) {
+          pointer.x = Math.max(0, Math.min(1, (point.clientX - rect.left) / rect.width));
+          pointer.y = Math.max(0, Math.min(1, (point.clientY - rect.top) / rect.height));
+        }
+        touchStart = event.touches.length === 1 && event.target.closest?.("#screen")
+          ? { x: point.clientX, y: point.clientY } : null;
+        if (rfb) rfb.focusOnClick = false;
+      }, { passive: false, capture: true });
+      window.addEventListener("touchmove", event => {
+        if (movePointerTouch(event)) return;
+        const point = event.touches[0];
+        if (touchStart && (!point || event.touches.length !== 1 ||
+            Math.hypot(point.clientX - touchStart.x, point.clientY - touchStart.y) > 10)) touchStart = null;
+      }, { passive: false, capture: true });
+      window.addEventListener("touchcancel", () => { touchStart = null; gesture = null; releaseDrag(); }, true);
+      window.addEventListener("touchend", event => {
+        if (endPointerTouch(event)) return;
+        const tapped = touchStart && event.touches.length === 0;
+        touchStart = null;
+        if (!tapped || !rfb || rfb.viewOnly) return;
+        keyboard.focus({ preventScroll: true });
+        keyboard.setSelectionRange(keyboard.value.length, keyboard.value.length);
+      }, { passive: false, capture: true });
 
       function pasteIntoDesktop(text) {
         if (!rfb || rfb.viewOnly || !text) return;
@@ -70,7 +305,10 @@
 
       function applyViewOnly(value) {
         if (!rfb) return;
+        if (value) { releaseDrag(); gesture = null; }
         rfb.viewOnly = Boolean(value);
+        updatePointerControls();
+        if (rfb.viewOnly) { keyboard.blur(); resetKeyboard(); }
       }
 
       function connect() {
@@ -82,12 +320,17 @@
         rfb.clipViewport = false;
         rfb.background = "#0f172a";
         pinTaskbar();
+        updatePointerControls();
         rfb.addEventListener("connect", () => {
           pinTaskbar();
+          updatePointerControls();
           try { rfb.focus(); } catch (_) {}
           window.parent.postMessage({ type: "lazyboy-desktop-ready" }, parentOrigin);
         });
         rfb.addEventListener("disconnect", (event) => {
+          releaseDrag(); gesture = null;
+          applyViewOnly(true);
+          keyboard.blur(); resetKeyboard();
           window.parent.postMessage({ type: "lazyboy-desktop-lost" }, parentOrigin);
           const clean = event && event.detail && event.detail.clean;
           setStatus(clean ? "Disconnected — retrying" : "Desktop connection lost — retrying");
@@ -105,6 +348,16 @@
       // Capture before noVNC forwards the shortcut; otherwise stale remote
       // clipboard contents can be pasted once before the local text arrives.
       window.addEventListener("keydown", async (event) => {
+        if (event.target === keyboard) {
+          if (event.isComposing || composing || event.keyCode === 229) return;
+          const keys = { Enter: "Return", Backspace: "BackSpace", Tab: "Tab", Escape: "Escape",
+            ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down" };
+          if (keys[event.key]) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            mobileKey(keys[event.key]); resetKeyboard();
+          }
+          return;
+        }
         if (rfb && !rfb.viewOnly && event.metaKey && event.code === "KeyC") {
           event.preventDefault(); event.stopImmediatePropagation();
           window.parent.postMessage({type:"lazyboy-copy-request"},parentOrigin); return;
@@ -121,9 +374,10 @@
         }
       }, true);
       connect();
-      window.addEventListener("resize", pinTaskbar);
-      window.addEventListener("pointerdown", () => {
-        try { if (rfb) rfb.focus(); } catch (_) {}
+      window.addEventListener("resize", () => { pinTaskbar(); paintPointer(); });
+      window.addEventListener("pointerdown", (event) => {
+        if (event.target === keyboard || event.target.closest?.("#mobile-controls")) return;
+        try { if (rfb && event.pointerType !== "touch") { rfb.focusOnClick = true; rfb.focus(); } } catch (_) {}
         if (rfb && rfb.viewOnly) {
           window.parent.postMessage({ type: "lazyboy-request-control" }, parentOrigin);
         }
@@ -134,6 +388,7 @@
         if (!text) return;
         event.preventDefault();
         pasteIntoDesktop(text);
+        if (event.target === keyboard) resetKeyboard();
       });
       window.addEventListener("message", (event) => {
         if (event.origin !== parentOrigin || event.source !== window.parent) return;
@@ -150,5 +405,20 @@
   <body>
     <div id="status" hidden>Loading desktop…</div>
     <div id="screen"></div>
+    <div id="mobile-cursor" aria-hidden="true"></div>
+    <nav id="mobile-controls" aria-label="遠端滑鼠">
+      <div class="buttons">
+        <button id="pointer-mode" data-action="mode" aria-pressed="false" title="切換直接點選與觸控板">直接點選</button>
+        <button data-action="left">左鍵</button>
+        <button data-action="right">右鍵</button>
+        <button id="pointer-drag" data-action="drag" aria-pressed="false">拖曳</button>
+        <button data-action="up" aria-label="向上捲動">↑</button>
+        <button data-action="down" aria-label="向下捲動">↓</button>
+        <button data-action="keyboard">鍵盤</button>
+      </div>
+      <p id="pointer-help"></p>
+    </nav>
+    <textarea id="mobile-keyboard" aria-label="Remote desktop keyboard" tabindex="-1"
+      autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
   </body>
 </html>
