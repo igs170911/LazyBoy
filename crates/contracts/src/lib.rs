@@ -6,6 +6,7 @@ mod model;
 mod room;
 mod run;
 mod session;
+mod voice;
 
 pub use action::*;
 pub use bot::*;
@@ -15,5 +16,6 @@ pub use model::*;
 pub use room::*;
 pub use run::*;
 pub use session::*;
+pub use voice::*;
 
 pub type Id = String;

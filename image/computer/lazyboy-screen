@@ -103,7 +103,7 @@ start_xvfb() {
     return 0
   fi
   rm -f "/tmp/.X${number}-lock" "/tmp/.X11-unix/X${number}"
-  Xvfb "$display" -screen 0 1280x800x24 -ac +extension RANDR +render -noreset >"${log}-xvfb.log" 2>&1 &
+  Xvfb "$display" -screen 0 1280x800x24 -ac +extension RANDR +render -noreset >>"${log}-xvfb.log" 2>&1 &
   echo $! > "${log}-xvfb.pid"
   wait_display "$display"
 }
@@ -141,11 +141,11 @@ start_atspi() {
     fi
   done
   if [[ -n "$launcher" ]]; then
-    DISPLAY="$display" "$launcher" --launch-immediately >"${log}-atspi-bus.log" 2>&1 &
+    DISPLAY="$display" "$launcher" --launch-immediately >>"${log}-atspi-bus.log" 2>&1 &
     echo $! >"${log}-atspi-bus.pid"
   fi
   if [[ -n "$registry" ]]; then
-    DISPLAY="$display" "$registry" >"${log}-atspi-registry.log" 2>&1 &
+    DISPLAY="$display" "$registry" >>"${log}-atspi-registry.log" 2>&1 &
     echo $! >"${log}-atspi-registry.pid"
   fi
   sleep 0.2
@@ -175,12 +175,12 @@ start_desktop() {
     xfconfd --daemon >/dev/null 2>&1 || true
   fi
   if command -v xfwm4 >/dev/null 2>&1; then
-    xfwm4 --compositor=off --display="$display" --sm-client-disable >"${log}-wm.log" 2>&1 &
+    xfwm4 --compositor=off --display="$display" --sm-client-disable >>"${log}-wm.log" 2>&1 &
     echo $! >"${log}-wm.pid"
     sleep 0.3
-    xfdesktop --disable-wm-check --sm-client-disable >"${log}-desktop.log" 2>&1 &
+    xfdesktop --disable-wm-check --sm-client-disable >>"${log}-desktop.log" 2>&1 &
     echo $! >"${log}-desktop.pid"
-    xfce4-panel --disable-wm-check --sm-client-disable >"${log}-panel.log" 2>&1 &
+    xfce4-panel --disable-wm-check --sm-client-disable >>"${log}-panel.log" 2>&1 &
     echo $! >"${log}-panel.pid"
   else
     echo "XFCE is missing" >&2
@@ -196,7 +196,7 @@ start_vnc() {
   local log="$4"
   if ! port_open "$vnc_port"; then
     x11vnc -display "$display" -forever -shared -nopw -listen 127.0.0.1 -rfbport "$vnc_port" \
-      -xkb -repeat -cursor arrow -noxdamage -ncache 0 >"${log}-x11vnc.log" 2>&1 &
+      -xkb -repeat -cursor arrow -noxdamage -ncache 0 >>"${log}-x11vnc.log" 2>&1 &
   fi
   if ! port_open "$view_port"; then
     local novnc=/usr/share/novnc
@@ -205,7 +205,7 @@ start_vnc() {
       return 1
     fi
     websockify --heartbeat=30 --web="$novnc" "0.0.0.0:${view_port}" "127.0.0.1:${vnc_port}" \
-      >"${log}-novnc.log" 2>&1 &
+      >>"${log}-novnc.log" 2>&1 &
   fi
   wait_port "$vnc_port"
   wait_port "$view_port"
@@ -217,7 +217,7 @@ start_xterm() {
   if alive_pidfile "${log}-xterm.pid"; then
     return 0
   fi
-  DISPLAY="$display" SHELL=/bin/zsh lazyboy-terminal >"${log}-xterm.log" 2>&1 &
+  DISPLAY="$display" SHELL=/bin/zsh lazyboy-terminal >>"${log}-xterm.log" 2>&1 &
   echo $! > "${log}-xterm.pid"
 }
 
@@ -235,7 +235,7 @@ start_browser() {
   fi
   rm -f "$profile/SingletonLock" "$profile/SingletonCookie" "$profile/SingletonSocket"
   DISPLAY="$display" HOME="$HOME" LAZYBOY_BROWSER_PROFILE="$profile" \
-    lazyboy-browser https://duckduckgo.com >"${log}-browser.log" 2>&1 &
+    lazyboy-browser https://duckduckgo.com >>"${log}-browser.log" 2>&1 &
   echo $! > "${log}-browser.pid"
 }
 

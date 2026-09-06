@@ -9,7 +9,7 @@ use bollard::container::{
     StartContainerOptions, StopContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::models::{HostConfig, PortBinding};
+use bollard::models::{HostConfig, HostConfigLogConfig, PortBinding};
 use bollard::network::CreateNetworkOptions;
 use futures_util::StreamExt;
 use lazyboy_control::{
@@ -117,7 +117,7 @@ impl DockerHost {
         let mut labels = HashMap::new();
         labels.insert("lazyboy.homeKey".into(), home_key.to_string());
         labels.insert("lazyboy.spaceId".into(), space_id.to_string());
-        labels.insert("lazyboy.controlVersion".into(), "2".into());
+        labels.insert("lazyboy.controlVersion".into(), "3".into());
 
         let mut port_bindings = HashMap::new();
         let mut exposed = HashMap::new();
@@ -134,13 +134,37 @@ impl DockerHost {
         }
 
         let host_config = HostConfig {
-            binds: Some(vec![format!("{home_path}:{HOME}")]),
+            log_config: Some(HostConfigLogConfig {
+                typ: Some("json-file".into()),
+                config: Some(HashMap::from([
+                    ("max-size".into(), "10m".into()),
+                    ("max-file".into(), "3".into()),
+                ])),
+            }),
+            binds: Some(
+                std::iter::once(format!("{home_path}:{HOME}"))
+                    .chain(lxcfs_binds())
+                    .collect(),
+            ),
             port_bindings: Some(port_bindings),
             memory: Some(computer_memory_bytes()),
             nano_cpus: Some(computer_nano_cpus()),
             pids_limit: Some(computer_pids_limit()),
-            cap_drop: Some(vec!["ALL".into()]),
-            security_opt: Some(vec!["no-new-privileges:true".into()]),
+            cap_drop: if computer_sudo_enabled() {
+                None
+            } else {
+                Some(vec!["ALL".into()])
+            },
+            cap_add: if computer_sudo_enabled() {
+                None
+            } else {
+                Some(vec!["SETUID".into(), "SETGID".into()])
+            },
+            security_opt: if computer_sudo_enabled() {
+                None
+            } else {
+                Some(vec!["no-new-privileges:true".into()])
+            },
             privileged: Some(false),
             shm_size: Some(512 * 1024 * 1024),
             network_mode: Some(network),
@@ -149,7 +173,10 @@ impl DockerHost {
 
         let config = Config {
             image: Some(self.image.clone()),
-            user: Some("1000:1000".into()),
+            // The entrypoint starts as root so it can apply the env-only sudo
+            // policy, then drops the desktop process to the unprivileged user.
+            // Exec requests below still run explicitly as 1000:1000.
+            user: None,
             hostname: Some(name.clone()),
             env: Some(vec![
                 "DISPLAY=:1".into(),
@@ -157,6 +184,10 @@ impl DockerHost {
                 format!(
                     "LAZYBOY_CONTROL_TOKEN={}",
                     scoped_control_token(&self.control_token, home_key)
+                ),
+                format!(
+                    "LAZYBOY_COMPUTER_SUDO={}",
+                    if computer_sudo_enabled() { "true" } else { "false" }
                 ),
             ]),
             labels: Some(labels),
@@ -624,7 +655,7 @@ PY"#,
             .and_then(|c| c.labels.as_ref())
             .and_then(|l| l.get("lazyboy.controlVersion"))
             .map(String::as_str)
-            != Some("2")
+            != Some("3")
         {
             return Ok(false);
         }
@@ -997,6 +1028,26 @@ fn computer_pids_limit() -> i64 {
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| *value >= 64)
         .unwrap_or(2048)
+}
+
+fn computer_sudo_enabled() -> bool {
+    matches!(std::env::var("LAZYBOY_COMPUTER_SUDO").as_deref(), Ok("1" | "true" | "yes"))
+}
+
+/// LXCFS supplies cgroup-aware /proc views so tools such as htop and free
+/// report the Agent container's quota instead of the Docker host. It is
+/// optional because Docker Desktop (macOS/Windows) does not ship LXCFS.
+fn lxcfs_binds() -> impl Iterator<Item = String> {
+    let root = std::env::var("LAZYBOY_LXCFS_ROOT").ok();
+    ["cpuinfo", "loadavg", "meminfo", "stat", "swaps", "uptime"]
+        .into_iter()
+        .filter_map(move |name| {
+            let root = root.as_deref()?;
+            let source = PathBuf::from(root).join("proc").join(name);
+            source
+                .is_file()
+                .then(|| format!("{}:/proc/{name}:ro", source.display()))
+        })
 }
 
 fn docker_already(error: &str, needle: &str) -> bool {

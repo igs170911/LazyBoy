@@ -18,7 +18,9 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::rooms::router())
         .merge(crate::mcp::router())
         .merge(crate::workspace::router())
+        .merge(crate::voice::router())
         .merge(crate::skills::router())
+        .route("/api/file-skills", get(file_skills))
         .merge(crate::vault::router())
         .merge(crate::schedules::router())
         .route("/api/bots", get(list_bots).post(create_bot))
@@ -49,6 +51,10 @@ pub fn router(state: AppState) -> Router {
             crate::auth::require_auth,
         ))
         .with_state(state)
+}
+
+async fn file_skills(State(state): State<AppState>) -> Json<Vec<crate::file_skills::FileSkill>> {
+    Json(crate::file_skills::list(&state.data_dir))
 }
 
 async fn actor(state: &AppState) -> Result<Actor, StatusCode> {
@@ -602,12 +608,12 @@ async fn restart(
 async fn stop(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    let actor = actor(&state).await?;
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let actor = actor(&state).await.map_err(|status| (status, Json(json!({"message":"無法取得工作區"}))))?;
     computer::stop(&state, &actor, &id)
         .await
         .map(|status| Json(serde_json::to_value(status).unwrap()))
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({"message":error}))))
 }
 
 async fn screen_url(

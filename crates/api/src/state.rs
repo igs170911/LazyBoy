@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use lazyboy_control::SandboxProvider;
@@ -10,6 +11,48 @@ use crate::db::{Actor, Db};
 use crate::mcp::McpHub;
 use crate::memory::MemoryService;
 
+#[derive(Clone, Default)]
+pub struct CallRegistry {
+    inner: Arc<std::sync::Mutex<HashMap<String, String>>>,
+}
+
+impl CallRegistry {
+    /// Returns a lease that releases the slot when dropped, so a websocket
+    /// upgrade that never completes cannot leave the bot marked as busy.
+    pub fn try_begin(&self, bot_id: &str, call_id: &str) -> Option<CallLease> {
+        let mut map = self.lock();
+        if map.contains_key(bot_id) {
+            return None;
+        }
+        map.insert(bot_id.to_string(), call_id.to_string());
+        drop(map);
+        Some(CallLease {
+            registry: self.clone(),
+            bot_id: bot_id.to_string(),
+            call_id: call_id.to_string(),
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+        self.inner.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+pub struct CallLease {
+    registry: CallRegistry,
+    bot_id: String,
+    call_id: String,
+}
+
+impl Drop for CallLease {
+    fn drop(&mut self) {
+        let mut map = self.registry.lock();
+        if map.get(&self.bot_id).is_some_and(|held| *held == self.call_id) {
+            map.remove(&self.bot_id);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
@@ -18,6 +61,7 @@ pub struct AppState {
     pub auth: AuthConfig,
     pub memory: MemoryService,
     pub mcp: McpHub,
+    pub calls: CallRegistry,
 }
 
 impl AppState {
@@ -39,6 +83,7 @@ impl AppState {
             auth: AuthConfig::from_env(),
             memory: MemoryService::from_env(),
             mcp: McpHub::new(),
+            calls: CallRegistry::default(),
         })
     }
 

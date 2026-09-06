@@ -1,0 +1,2 @@
+ALTER TABLE spaces
+    ADD COLUMN voice_enabled BOOLEAN NOT NULL DEFAULT FALSE;
