@@ -329,7 +329,6 @@ export function App(){
         <div className="account-wrap" onClick={event=>event.stopPropagation()}>
           {accountOpen&&<div className="account-menu" role="menu">
             <button type="button" role="menuitem" onClick={()=>openAccount("phone")}><Smartphone/>{t("openOnPhone")}</button>
-            <button type="button" role="menuitem" onClick={()=>setLocale(getLocale()==="zh-TW"?"en":"zh-TW")}>{t("language")}: {getLocale()==="zh-TW"?t("languageEn"):t("languageZh")}</button>
             <button type="button" role="menuitem" onClick={()=>openAccount("settings")}><Settings/>{t("settings")}</button>
             <button type="button" role="menuitem" onClick={()=>openAccount("model")}><BotIcon/>{t("modelSettings")}</button>
             <button type="button" role="menuitem" onClick={()=>openAccount("voice")}><PhoneIcon/>{t("voiceSettings")}</button>
@@ -854,11 +853,12 @@ function FeedbackDialog({close}:{close:()=>void}){
 function LoginScreen({authenticated}:{authenticated:()=>void}){
   useLocale();
   const[token,setToken]=useState("");const[busy,setBusy]=useState(false);const[error,setError]=useState("");
-  return <main className="login-screen"><form className="dialog compact login-dialog" onSubmit={async e=>{e.preventDefault();if(!token)return;setBusy(true);setError("");try{await api("/api/session",{method:"POST",body:JSON.stringify({token})});authenticated()}catch(err){setError(err instanceof Error?localizeError(err.message):t("loginFailed"))}finally{setBusy(false)}}}>
-    <div className="login-lang">
-      <button type="button" className={getLocale()==="zh-TW"?"picked":""} onClick={()=>setLocale("zh-TW")}>{t("languageZh")}</button>
-      <button type="button" className={getLocale()==="en"?"picked":""} onClick={()=>setLocale("en")}>{t("languageEn")}</button>
+  return <main className="login-screen">
+    <div className="login-lang" role="group" aria-label={t("language")}>
+      <button type="button" aria-pressed={getLocale()==="zh-TW"} className={getLocale()==="zh-TW"?"picked":""} onClick={()=>setLocale("zh-TW")}>{t("languageZh")}</button>
+      <button type="button" aria-pressed={getLocale()==="en"} className={getLocale()==="en"?"picked":""} onClick={()=>setLocale("en")}>{t("languageEn")}</button>
     </div>
+    <form className="dialog compact login-dialog" onSubmit={async e=>{e.preventDefault();if(!token)return;setBusy(true);setError("");try{await api("/api/session",{method:"POST",body:JSON.stringify({token})});authenticated()}catch(err){setError(err instanceof Error?localizeError(err.message):t("loginFailed"))}finally{setBusy(false)}}}>
     <Avatar name="L" size={58}/><h1>{t("loginTitle")}</h1><p>{t("loginDescription")}</p><label>{t("accessToken")}<input type="password" autoFocus autoComplete="current-password" value={token} onChange={e=>setToken(e.target.value)}/></label>{error&&<div className="login-error">{error}</div>}<button className="primary" disabled={busy||!token}>{busy?t("verifying"):t("login")}</button>
   </form></main>;
 }

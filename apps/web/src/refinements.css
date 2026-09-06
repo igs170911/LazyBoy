@@ -587,7 +587,7 @@
 .memory-clear-confirm{display:flex;align-items:center;gap:8px;margin-right:auto;color:var(--muted);font-size:13px}
 
 
-.login-screen{display:grid;min-height:100%;place-items:center;padding:20px;background:radial-gradient(circle at 50% 20%,#18201e 0,#080809 55%)}
+.login-screen{position:relative;display:grid;min-height:100%;place-items:center;padding:88px 20px;background:radial-gradient(circle at 50% 20%,#18201e 0,#080809 55%)}
 
 .login-dialog{display:grid;justify-items:stretch}
 
@@ -599,7 +599,7 @@
 
 .login-error{color:var(--danger-soft);font-size:13px}
 
-.login-lang{display:flex;justify-content:center;gap:6px;margin-bottom:4px}
+.login-lang{position:absolute;top:24px;right:24px;display:flex;align-items:center;gap:6px}
 
 .login-lang button{height:32px;padding:0 12px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--muted);cursor:pointer}
 
