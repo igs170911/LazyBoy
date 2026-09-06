@@ -1,0 +1,11 @@
+# Portable x86_64 codegen (SSE2 baseline). Do not set target-cpu=native.
+# AVX kernels belong in CPU-dispatched libraries (Microsoft ONNX Runtime),
+# not in the Rust binary itself.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=x86-64"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64"]

@@ -102,6 +102,7 @@ services:
       LAZYBOY_DB_WARN_MB: ${LAZYBOY_DB_WARN_MB:-1024}
       LAZYBOY_WEB_DIR: /web
       LAZYBOY_SCREEN_UPSTREAM: host.docker.internal
+      ORT_DYLIB_PATH: /usr/local/lib/libonnxruntime.so
     ports:
       - "${LAZYBOY_BIND_IP:-127.0.0.1}:3101:3100"
     volumes:
