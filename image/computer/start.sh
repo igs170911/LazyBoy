@@ -19,8 +19,10 @@ rm -f /tmp/lazyboy/ready
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 cd "$HOME"
 
+python3 /usr/local/bin/lazyboy-rotate-logs &
+
 if [[ -n "${LAZYBOY_CONTROL_TOKEN:-}" ]]; then
-  lazyboy-controld >/tmp/lazyboy/control.log 2>&1 &
+  lazyboy-controld >>/tmp/lazyboy/control.log 2>&1 &
 fi
 
 if command -v dbus-launch >/dev/null 2>&1; then

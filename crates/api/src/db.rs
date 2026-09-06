@@ -95,6 +95,11 @@ pub struct SpaceRow {
     pub default_model_id: String,
     pub default_model_base_url: Option<String>,
     pub default_model_api_key: Option<String>,
+    pub voice_enabled: bool,
+    pub voice_provider: Option<String>,
+    pub voice_model_id: Option<String>,
+    pub voice_id: Option<String>,
+    pub voice_api_key: Option<String>,
 }
 
 impl Db {
@@ -125,7 +130,8 @@ impl Db {
     pub async fn get_space(&self, actor: &Actor) -> Result<Option<SpaceRow>, sqlx::Error> {
         sqlx::query_as(
             "SELECT id, user_id, name, default_model_provider, default_model_id,
-                    default_model_base_url, default_model_api_key
+                    default_model_base_url, default_model_api_key,
+                    voice_enabled, voice_provider, voice_model_id, voice_id, voice_api_key
              FROM spaces WHERE id = $1 AND user_id = $2",
         )
         .bind(&actor.space_id)
@@ -171,6 +177,51 @@ impl Db {
                 .bind(provider)
                 .bind(model_id)
                 .bind(base_url)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+        self.get_space(actor).await?.ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn update_voice_settings(
+        &self,
+        actor: &Actor,
+        enabled: Option<bool>,
+        provider: &str,
+        model_id: &str,
+        voice_id: &str,
+        api_key: Option<Option<&str>>,
+    ) -> Result<SpaceRow, sqlx::Error> {
+        match api_key {
+            Some(key) => {
+                sqlx::query(
+                    "UPDATE spaces
+                     SET voice_provider = $3, voice_model_id = $4, voice_id = $5, voice_api_key = $6, voice_enabled = COALESCE($7, voice_enabled)
+                     WHERE id = $1 AND user_id = $2",
+                )
+                .bind(&actor.space_id)
+                .bind(&actor.user_id)
+                .bind(provider)
+                .bind(model_id)
+                .bind(voice_id)
+                .bind(key)
+                .bind(enabled)
+                .execute(&self.pool)
+                .await?;
+            }
+            None => {
+                sqlx::query(
+                    "UPDATE spaces
+                     SET voice_provider = $3, voice_model_id = $4, voice_id = $5, voice_enabled = COALESCE($6, voice_enabled)
+                     WHERE id = $1 AND user_id = $2",
+                )
+                .bind(&actor.space_id)
+                .bind(&actor.user_id)
+                .bind(provider)
+                .bind(model_id)
+                .bind(voice_id)
+                .bind(enabled)
                 .execute(&self.pool)
                 .await?;
             }

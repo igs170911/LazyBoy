@@ -2,9 +2,11 @@ mod attachments;
 mod auth;
 mod computer;
 mod db;
+mod file_skills;
 mod mcp;
 mod mcp_catalog;
 mod memory;
+mod retention;
 mod rooms;
 mod routes;
 mod runs;
@@ -15,15 +17,17 @@ mod skills;
 mod state;
 mod tools;
 mod vault;
+mod voice;
+mod voice_call;
+mod web_static;
 mod workspace;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use state::AppState;
-use tower_http::services::ServeDir;
+
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -51,6 +55,9 @@ async fn main() {
         mcp_state.mcp.reconnect_all(mcp_state.pool(), &actor).await;
     });
 
+    let retention_state = state.clone();
+    tokio::spawn(async move { retention::retention_loop(retention_state).await; });
+
     let worker_state = state.clone();
     tokio::spawn(async move {
         runs::worker_loop(worker_state).await;
@@ -73,14 +80,13 @@ async fn main() {
     }
 
     let web_dir = std::env::var("LAZYBOY_WEB_DIR").unwrap_or_else(|_| "apps/web/dist".into());
-    let app = Router::new()
+    let app = web_static::static_router(&web_dir)
         .route(
             "/api/health",
             axum::routing::get(|| async { axum::Json(serde_json::json!({"ok": true})) }),
         )
         .merge(auth::public_router(state.clone()))
         .merge(routes::router(state.clone()))
-        .fallback_service(ServeDir::new(web_dir))
         .layer(DefaultBodyLimit::max(28 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             state,

@@ -38,6 +38,8 @@ RUN printf '%s\n' \
     procps \
     python3 \
     python3-websocket \
+    sudo \
+    gosu \
     util-linux \
     websockify \
     wmctrl \
@@ -97,6 +99,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/zsh lazyboy \
     && chown -R 1000:1000 /home/lazyboy /tmp/lazyboy
 
 COPY --from=controld --chmod=755 /lazyboy-controld /usr/local/bin/lazyboy-controld
+COPY --chmod=755 image/computer/rotate-logs.py /usr/local/bin/lazyboy-rotate-logs
 COPY --chmod=755 image/computer/lazyboy-screen /usr/local/bin/lazyboy-screen
 COPY --chmod=755 image/computer/lazyboy-browser /usr/local/bin/lazyboy-browser
 COPY --chmod=755 image/computer/lazyboy-terminal /usr/local/bin/lazyboy-terminal
@@ -132,11 +135,12 @@ COPY --chmod=644 image/computer/xfce/helper-browser.desktop /usr/share/xfce4/hel
 COPY --chmod=755 image/computer/chromium /usr/local/bin/chromium
 RUN sed -i 's|^Exec=/usr/bin/chromium|Exec=/usr/local/bin/lazyboy-browser|' /usr/share/applications/chromium.desktop || true
 COPY --chmod=755 image/computer/start.sh /usr/local/bin/lazyboy-computer
+COPY --chmod=755 image/computer/entrypoint.sh /usr/local/bin/lazyboy-entrypoint
 
-USER 1000:1000
+USER root
 ENV HOME=/home/lazyboy DISPLAY=:1 SHELL=/bin/zsh TERM=xterm-256color \
     LANG=zh_TW.UTF-8 LC_ALL=zh_TW.UTF-8 LANGUAGE=zh_TW:zh:en \
     GTK_MODULES=atk-bridge GTK_A11Y=atspi GNOME_ACCESSIBILITY=1 NO_AT_BRIDGE=0
 WORKDIR /home/lazyboy
 EXPOSE 6080 6081 6082 6083 6084 6085 6086 6087
-CMD ["/usr/local/bin/lazyboy-computer"]
+CMD ["/usr/local/bin/lazyboy-entrypoint"]

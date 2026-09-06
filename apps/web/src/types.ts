@@ -15,6 +15,7 @@ export interface PlaybookInput { name:string; description?:string; example?:stri
 export interface Playbook { name?:string; whenToUse?:string; intent?:string; inputs?:PlaybookInput[]; preconditions?:string[]; steps?:(PlaybookStep|string)[]; howToCheck?:string; whatToReturn?:string; cautions?:string[] }
 export type TaughtSkillStatus = "recording"|"drafting"|"draft"|"saved"|"failed"|"cancelled";
 export interface TaughtSkill { id:string; botId:string; threadId:string|null; name:string; goal:string; status:TaughtSkillStatus; playbook:Playbook; error:string|null; startedAt:string|null; expiresAt:string|null; stoppedAt:string|null; createdAt:string; updatedAt:string; eventCount:number; frameCount:number }
+export interface FileSkill { name:string; description:string }
 export interface MemoryItem { id:string; sessionId:string|null; sourceRunId:string|null; sourceMessageId:string|null; content:string; importance:number; revision:number; createdAt:string; updatedAt:string }
 export type McpTransport = "stdio" | "http" | "sse";
 export interface McpTool { name:string; exposedName:string; description:string }
@@ -22,6 +23,22 @@ export interface McpServer { id:string; name:string; transport:McpTransport; com
 export interface McpSecretField { name:string; required:boolean; secret:boolean; hint:string }
 export interface McpCatalogEntry { id:string; title:string; description:string; transport:McpTransport; command:string|null; args:string[]; url:string|null; envKeys:McpSecretField[]; headerKeys:McpSecretField[]; source:"featured"|"registry"; remote:boolean }
 export type ModelProviderId = "xai" | "opencode-go" | "openai-compatible";
+export type VoiceProviderId = "xai" | "openai" | "scripted";
+export interface VoiceSettings {
+  enabled: boolean;
+  provider: VoiceProviderId;
+  modelId: string;
+  voiceId: string;
+  ready: boolean;
+  missing?: string | null;
+  apiKeySet: boolean;
+  envKeySet: boolean;
+  envKeyName: string;
+  reusesTextKey: boolean;
+  providers: { id: VoiceProviderId; name: string; envKeyName: string }[];
+  models: { id: string; name: string }[];
+  voices: { id: string; name: string }[];
+}
 export interface WorkspaceProvider { id:ModelProviderId; name:string; needsBaseUrl:boolean; needsKey:boolean; defaultBaseUrl:string|null; defaultModel:string|null }
 export interface WorkspaceModel { id:string; name:string }
 export interface WorkspaceSettings { provider:ModelProviderId; modelId:string; baseUrl:string; apiKeySet:boolean; envKeySet:boolean; envKeyName:string; providers:WorkspaceProvider[]; models:WorkspaceModel[] }

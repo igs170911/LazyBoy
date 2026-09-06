@@ -41,7 +41,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-tokio-tungstenite = { version = "0.26", features = ["connect"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-tungstenite = { version = "0.26", features = ["connect", "rustls-tls-native-roots"] }
 futures-util = "0.3"
 bollard = "0.18"
 hmac = "0.12"

@@ -1,3 +1,4 @@
+use lazyboy_harness::execution::{ExecutionMode, GoalOutcome, goal_request, goal_outcome, GOAL_INSTRUCTIONS, GOAL_CONTINUE};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -130,7 +131,31 @@ pub async fn send(
             }));
         }
     }
-    let run_id = Uuid::new_v4().to_string();
+    // A message sent while a single-bot /goal is active is steering for that
+    // run. Reuse its id so it is delivered by the persistent loop rather than
+    // creating a duplicate queued run that would repeat the work afterwards.
+    let merged_goal_run: Option<String> = if room_id.is_none() {
+        sqlx::query_scalar(
+            "SELECT id FROM runs
+             WHERE bot_id=$1 AND thread_id=$2
+               AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
+               AND btrim(prompt) ~ '^/goal($|[[:space:]])'
+             ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(bot_id)
+        .bind(thread_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?
+    } else {
+        None
+    };
+    let merged_goal = merged_goal_run.is_some();
+    let run_id = merged_goal_run.unwrap_or_else(|| Uuid::new_v4().to_string());
+    if merged_goal {
+        sqlx::query("UPDATE runs SET status='queued', retry_count=0, updated_at=now() WHERE id=$1 AND status='waiting_input'")
+            .bind(&run_id).execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    }
     let message_id = Uuid::new_v4().to_string();
     let seq: i32 = sqlx::query_scalar(
         "UPDATE threads
@@ -176,6 +201,9 @@ pub async fn send(
         member_ids.push(bot_id.to_string());
     }
     for (index, member_id) in member_ids.iter().enumerate() {
+        if merged_goal && index == 0 {
+            continue;
+        }
         let member_run = if index == 0 {
             run_id.clone()
         } else {
@@ -213,15 +241,19 @@ pub async fn send(
     .execute(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
-    let queued_behind_active: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM runs WHERE bot_id=$1 AND id<>$2
-         AND status IN ('queued','leased','running','waiting_input','waiting_takeover'))",
-    )
-    .bind(bot_id)
-    .bind(&run_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|error| error.to_string())?;
+    let queued_behind_active = if merged_goal {
+        true
+    } else {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE bot_id=$1 AND id<>$2
+             AND status IN ('queued','leased','running','waiting_input','waiting_takeover'))",
+        )
+        .bind(bot_id)
+        .bind(&run_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?
+    };
     if let Some(room_id) = room_id.as_deref() {
         sqlx::query("UPDATE rooms SET updated_at=now() WHERE id=$1")
             .bind(room_id)
@@ -508,12 +540,31 @@ async fn execute_run(
             });
         }
     }
+    let goal_mode = goal_request(prompt).is_some();
+    let goal_text = prompt
+        .trim()
+        .strip_prefix("/goal")
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let file_skill = if !resume_after_takeover && !goal_mode {
+        crate::file_skills::slash(prompt, &state.data_dir)
+    } else {
+        None
+    };
+    let initial_prompt = if goal_mode {
+        format!("Execute this goal until it is verified complete:\n{}", goal_text)
+    } else if let Some((skill, args)) = &file_skill {
+        format!("Run the /{} skill with these arguments: {}", skill.name, args)
+    } else {
+        prompt.to_string()
+    };
     let mut first = if resume_after_takeover {
         vec![UserContent::text(
             "The user finished collaborating and released control. Continue the original task from the CURRENT screen. Do not restart from scratch.",
         )]
     } else {
-        vec![UserContent::text(prompt)]
+        vec![UserContent::text(initial_prompt)]
     };
     let blocks: Vec<Value> = if resume_after_takeover {
         Vec::new()
@@ -537,11 +588,18 @@ async fn execute_run(
     if !resume_after_takeover {
         // The user named a taught skill: hand the model the full playbook up
         // front so it does not have to guess or call use_skill first.
-        if let Some(skill) = crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await {
+        if let Some(skill) = if goal_mode || file_skill.is_some() { None } else { crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await } {
             first.push(UserContent::text(crate::skills::format_playbook_for_run(
                 &skill,
             )));
             skill_check = Some(crate::skills::skill_check_hint(&skill));
+        }
+        if let Some((skill, args)) = &file_skill {
+            first.push(UserContent::text(format!(
+                "File skill /{} (read-only source, follow its instructions):\n{}\nArguments: {}",
+                skill.name, skill.instructions, args
+            )));
+            skill_check = Some(format!("完成 /{} 的指令，並用工具驗證結果。", skill.name));
         }
     }
     let mut earlier_replies: Vec<String> = assistant_texts(&history);
@@ -560,7 +618,7 @@ async fn execute_run(
     // Greetings and small talk must not even *see* desktop tools: models
     // otherwise "check the screen" or `ls` the home on "hi" and boot Docker.
     let chat_only =
-        !resume_after_takeover && skill_check.is_none() && !workspace_file && is_plain_chat(prompt);
+        !resume_after_takeover && !goal_mode && file_skill.is_none() && skill_check.is_none() && !workspace_file && is_plain_chat(prompt);
     if chat_only {
         // Memory is recalled separately and injected into the preamble below.
         // Do not expose even memory tools here: a plain greeting must be one
@@ -570,14 +628,16 @@ async fn execute_run(
     }
     // Taught skills run long (a 24-page course is 24 clicks); plain chats stay
     // bounded tighter so a confused model cannot burn budget for as long.
-    let max_turns: u32 = if skill_check.is_some() {
-        80
+    let execution_mode = if goal_mode {
+        ExecutionMode::Goal
+    } else if skill_check.is_some() && file_skill.is_none() {
+        ExecutionMode::Bounded(80)
     } else if chat_only {
-        4
+        ExecutionMode::Bounded(4)
     } else {
-        40
+        ExecutionMode::Bounded(40)
     };
-    let mut nudges: u8 = 0;
+    let mut nudges: u32 = 0;
     let mut screenshots: u32 = 0;
     let mut screenshot_bytes: u64 = 0;
     if resume_after_takeover {
@@ -618,6 +678,11 @@ async fn execute_run(
         .and_then(Value::as_u64)
         .unwrap_or(0)
         .min(u32::MAX as u64) as u32;
+    // Messages sent to this same thread while a /goal run is working are
+    // steering input. Keep the run alive and deliver each new message once
+    // before the next model turn instead of waiting for a second run to win
+    // the bot lease.
+    let mut steering_seq = checkpoint.get("steeringSeq").and_then(Value::as_i64).map(|seq| seq as i32).unwrap_or(current_seq);
     let mut used_gui = false;
     let memory = if ctx.memory_enabled {
         match state
@@ -677,10 +742,19 @@ async fn execute_run(
         preamble.push_str("\n\n");
         preamble.push_str(&memory);
     }
+    if goal_mode {
+        preamble.push_str("\n\n");
+        preamble.push_str(GOAL_INSTRUCTIONS);
+    }
     if !chat_only {
         if let Some(index) = crate::skills::skills_preamble(&skills) {
             preamble.push_str("\n\n");
             preamble.push_str(&index);
+        }
+        let file_skill_index = crate::file_skills::index(&state.data_dir);
+        if !file_skill_index.is_empty() {
+            preamble.push_str("\n\n");
+            preamble.push_str(&file_skill_index);
         }
         if let Ok(accounts) = crate::vault::list_on(state.pool(), actor, bot_id).await {
             if !accounts.is_empty() {
@@ -696,8 +770,37 @@ async fn execute_run(
         }
     }
 
-    for _ in turns..max_turns {
-        turns += 1;
+    while execution_mode.allows_turn(turns) {
+        turns = turns.saturating_add(1);
+        if goal_mode {
+            let steering: Vec<(i32, String)> = sqlx::query_as(
+                "SELECT seq, body FROM messages
+                 WHERE thread_id=$1 AND role='user' AND seq>$2
+                 ORDER BY seq ASC LIMIT 12",
+            )
+            .bind(thread_id)
+            .bind(steering_seq)
+            .fetch_all(state.pool())
+            .await
+            .map_err(|error| error.to_string())?;
+            if let Some((last_seq, _)) = steering.last() {
+                steering_seq = *last_seq;
+                let guidance = steering
+                    .iter()
+                    .map(|(_, body)| body.trim())
+                    .filter(|body| !body.is_empty())
+                    .collect::<Vec<_>>();
+                if !guidance.is_empty() {
+                    let text = format!(
+                        "The user added this guidance in the same goal thread. Incorporate it into the current goal and continue verifying the result:\n{}",
+                        guidance.join("\n")
+                    );
+                    if let Message::User { content } = &mut pending {
+                        content.push(UserContent::text(text));
+                    }
+                }
+            }
+        }
         if let Some(halt) = renew_or_halt(state, run_id, lease_owner).await? {
             return finish_halt(
                 state,
@@ -761,7 +864,12 @@ async fn execute_run(
             let parroted = earlier_replies
                 .iter()
                 .any(|earlier| earlier == final_text.trim());
-            let nudge = if parroted {
+            let nudge = if goal_mode {
+                match goal_outcome(&final_text) {
+                    GoalOutcome::Continue => Some(GOAL_CONTINUE.to_string()),
+                    GoalOutcome::Complete | GoalOutcome::NeedsInput => None,
+                }
+            } else if parroted {
                 Some(
                     "Your reply repeats an earlier message word for word, so it cannot describe the current screen. Below is what the screen shows RIGHT NOW. Act on it with a tool call. Waiting is done by calling wait or by clicking the control (the click waits for it to enable), never by replying. Reply in text only once the task is finished or you are truly blocked (say why).".to_string(),
                 )
@@ -773,8 +881,8 @@ async fn execute_run(
                 })
             };
             match nudge {
-                Some(text) if nudges < 6 && turns + 2 < max_turns => {
-                    nudges += 1;
+                Some(text) if goal_mode || (nudges < 6 && execution_mode.allows_turn(turns.saturating_add(2))) => {
+                    nudges = nudges.saturating_add(1);
                     tracing::info!(
                         run_id,
                         turn = turns,
@@ -958,7 +1066,7 @@ async fn execute_run(
             results.extend(screenshot_parts(png));
         }
         pending = Message::User { content: results };
-        save_harness_checkpoint(state, run_id, lease_owner, &history, &pending, turns).await?;
+        save_harness_checkpoint(state, run_id, lease_owner, &history, &pending, turns, steering_seq).await?;
     }
 
     let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
@@ -980,15 +1088,26 @@ async fn execute_run(
         )
         .await;
     }
+    let needs_input = goal_mode && goal_outcome(&final_text) == GoalOutcome::NeedsInput;
+    if needs_input {
+        let next = Message::User { content: vec![UserContent::text("The goal was paused for required user input. Read the user's new information and continue from completed work.")] };
+        save_harness_checkpoint(state, run_id, lease_owner, &history, &next, turns, steering_seq).await?;
+    }
+    let final_text = final_text
+        .replace("[GOAL_COMPLETE]", "")
+        .replace("[GOAL_BLOCKED]", "")
+        .trim()
+        .to_string();
     append_bot_message(state, thread_id, run_id, bot_id, &final_text).await?;
     let completed = sqlx::query(
         "UPDATE runs
-         SET status='completed', completed_at=now(), updated_at=now(),
+         SET status=$3, completed_at=CASE WHEN $3='completed' THEN now() ELSE NULL END, updated_at=now(),
              lease_owner=NULL, lease_expires_at=NULL
          WHERE id=$1 AND lease_owner=$2 AND status='running'",
     )
     .bind(run_id)
     .bind(lease_owner)
+    .bind(if needs_input { "waiting_input" } else { "completed" })
     .execute(state.pool())
     .await
     .map_err(|error| error.to_string())?;
@@ -1001,7 +1120,7 @@ async fn execute_run(
         state,
         thread_id,
         run_id,
-        "run.completed",
+        if needs_input { "run.paused" } else { "run.completed" },
         turns,
         screenshots,
         screenshot_bytes,
@@ -1199,6 +1318,7 @@ async fn save_harness_checkpoint(
     history: &[Message],
     pending: &Message,
     turns: u32,
+    steering_seq: i32,
 ) -> Result<(), String> {
     let mut history = history.to_vec();
     let mut pending = pending.clone();
@@ -1210,7 +1330,7 @@ async fn save_harness_checkpoint(
             });
         }
     }
-    let value = json!({"harnessHistory":history,"harnessPending":pending,"toolsStarted":false,"harnessTurns":turns});
+    let value = json!({"harnessHistory":history,"harnessPending":pending,"toolsStarted":false,"harnessTurns":turns,"steeringSeq":steering_seq});
     // Large/unsupported checkpoints fail closed: keep the uncertain-effects flag.
     if value.to_string().len() > 1024 * 1024 {
         return Ok(());

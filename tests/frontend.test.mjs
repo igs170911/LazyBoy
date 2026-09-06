@@ -43,6 +43,22 @@ const mdBox={exports:{},require:(name)=>{
 }};
 vm.runInNewContext(mdJs,mdBox);
 const {sanitizeMarkdownUrl}=mdBox.exports;
+const audioJs=ts.transpileModule(fs.readFileSync('apps/web/src/call-audio.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+const audioBox={exports:{},require:()=>{throw new Error('unexpected import')}};
+vm.runInNewContext(audioJs,audioBox);
+const {floatToPcm16,pcm16ToFloat,resample,VOICE_SAMPLE_RATE}=audioBox.exports;
+test('pcm16 roundtrip keeps amplitude sign and resample identity at 24 kHz',()=>{
+  const source=new Float32Array([0,0.5,-0.5,1,-1]);
+  const bytes=floatToPcm16(source);
+  const back=pcm16ToFloat(bytes.buffer);
+  assert.equal(back.length,source.length);
+  assert.ok(back[1]>0.49&&back[1]<0.51);
+  assert.ok(back[2]< -0.49&&back[2]> -0.51);
+  const same=resample(source,VOICE_SAMPLE_RATE,VOICE_SAMPLE_RATE);
+  assert.equal(same,source);
+  const down=resample(new Float32Array([0,1,0,1]),48000,24000);
+  assert.equal(down.length,2);
+});
 test('markdown links only keep http(s), mailto, tel, and in-page hashes',()=>{
  assert.equal(sanitizeMarkdownUrl('https://example.com/docs'),'https://example.com/docs');
  assert.equal(sanitizeMarkdownUrl('mailto:hi@example.com'),'mailto:hi@example.com');
@@ -51,3 +67,15 @@ test('markdown links only keep http(s), mailto, tel, and in-page hashes',()=>{
  assert.equal(sanitizeMarkdownUrl('data:text/html,<script>alert(1)</script>'),undefined);
  assert.equal(sanitizeMarkdownUrl('/relative'),undefined);
 });
+
+ test('hanging up before microphone permission resolves releases the late stream',async()=>{
+   let grant; let stopped=0;
+   const context={exports:{},navigator:{mediaDevices:{getUserMedia:()=>new Promise(resolve=>grant=resolve)}}};
+   vm.runInNewContext(audioJs,context);
+   const audio=new context.exports.CallAudio({onCapture(){},onError(){}});
+   const starting=audio.start();
+   audio.stop();
+   grant({getTracks:()=>[{stop(){stopped++;}}]});
+   await starting;
+   assert.equal(stopped,1);
+ });

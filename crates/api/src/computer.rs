@@ -722,9 +722,12 @@ pub async fn stop(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "computer not found".to_string())?;
+    if computer_has_active_work(state, &computer_id).await {
+        return Err("電腦仍有工作或示範進行中，請先停止工作再關閉電腦。".into());
+    }
     if let Some(provider_ref) = &computer.provider_ref {
         let ctx = adapter_context(actor, bot_id, "stop");
-        let _ = state
+        state
             .sandbox
             .stop(
                 &lazyboy_control::ComputerRef {
@@ -736,7 +739,8 @@ pub async fn stop(state: &AppState, actor: &Actor, bot_id: &str) -> Result<Compu
                 },
                 &ctx,
             )
-            .await;
+            .await
+            .map_err(|error| format!("無法關閉電腦：{error}"))?;
     }
     sqlx::query(
         "UPDATE computers SET state = 'stopped', control_holder = 'none', control_lease_id = NULL,

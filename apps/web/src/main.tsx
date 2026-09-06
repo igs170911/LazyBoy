@@ -8,6 +8,7 @@ import "./avatar.css";
 import "./chat.css";
 import "./computer.css";
 import "./schedule.css";
+import "./call.css";
 import "./responsive.css";
 import { App } from "./App";
 ReactDOM.createRoot(document.getElementById("root")!).render(<App />);

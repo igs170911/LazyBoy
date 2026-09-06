@@ -19,6 +19,8 @@ LazyBoy 是本機系統，不是雲端沙盒。機器要跑四件事：**Postgre
 | GPU | 不需要 | 模型走網路 API，畫面是 CPU 上的 Xvfb |
 | 網路 | 第一次建映像、拉套件需要 | 之後離線也能開 UI；聊天要模型金鑰能連外 |
 
+每個 Agent 桌面都會套用 Docker 的 CPU、記憶體與 PID 上限，預設是 2 CPU、2 GB、2048 個 PID。可在 `.env` 調整 `LAZYBOY_COMPUTER_CPUS`、`LAZYBOY_COMPUTER_MEMORY_MB`、`LAZYBOY_COMPUTER_PIDS`。Linux 若安裝 LXCFS，將 `LAZYBOY_LXCFS_ROOT` 指到它的 `/var/lib/lxcfs`，容器內的 `htop`、`free` 等也會顯示 cgroup 配額；macOS 仍會套用配額，但 Docker Desktop 不提供這個 `/proc` 虛擬化。桌面容器不掛主機 Docker socket，也不使用 `privileged`；需要一般管理命令時才在 `.env` 設定 `LAZYBOY_COMPUTER_SUDO=true`，權限只在該 Agent 容器內生效。
+
 預設一個 Team 電腦容器可同時掛最多 **8** 個螢幕（`TEAM_SCREEN_LIMIT`）。再開私人電腦就是再一個容器、再 2 GB。分頁開著時心跳會讓桌面保持熱機；關掉分頁約 10 分鐘後凍結（記憶體還在），約 6 小時後才真正停機。
 
 ---
@@ -111,6 +113,9 @@ Team：工作區共用一個家目錄，每個 bot 有自己的 `DISPLAY`（`:1`
 **教技能**  
 你示範，容器內 CDP 錄「點了哪個控制項、填了什麼、去了哪一頁」，再抽幾個關鍵畫面。停下來後模型整理成意圖級 playbook，之後用普通工具在**當下畫面**找控制項，不是重播座標。密碼欄不錄。技能可匯出 JSON。
 
+**Slash 指令與長目標**
+在 `data/skills/<name>/SKILL.md` 放工作區共用的唯讀技能，就能在輸入框打 `/name 參數` 執行；輸入 `/` 會顯示可用技能。`/goal` 是 harness 的持續執行模式，和錄製示範產生的 playbook 分開。選單支援方向鍵、Enter／Tab 選取、Esc 關閉。`/goal 目標` 會先規劃、執行並檢查結果，直到模型回報已驗證完成；只有需要登入、驗證碼、接管畫面或缺少必要資訊時才會停下來請你處理。缺少必要資訊時會記為等待輸入，補充訊息後接續原目標；停止按鈕可以取消。一般訊息仍維持 40 回合上限，教學技能 80 回合。
+
 **記憶**  
 `pgvector` + MiniLM（384 維）。只有你叫它記住、或它呼叫 `remember` 的內容會進長期記憶。密碼與 token 會被拒。清除對話不會清記憶。
 
@@ -148,7 +153,7 @@ Compose 裡 supervisor **不**對主機開埠。API 在容器網路連 `supervis
 
 同一 bot 已有進行中的工作時，新訊息會排隊（`queuedBehindActive`）。人正在接管時，後面的話只排隊，思考轉圈不會假裝它還在動。問候路徑會把工具表清空，從源頭避免「哈囉」去開電腦。
 
-`execute_run` 每一輪：續租約 → 寫步驟文字 → 問模型 → 沒有工具就結束（技能沒過會再把畫面塞回去）→ 有工具且需要沙盒才 boot → 畫面沒變就不重複塞圖。回合上限：聊天 4、一般 40、技能 80。
+`execute_run` 每一輪：續租約 → 寫步驟文字 → 問模型 → 沒有工具就結束（技能沒過會再把畫面塞回去）→ 有工具且需要沙盒才 boot → 畫面沒變就不重複塞圖。回合上限：聊天 4、一般 40、教學技能 80；`/goal` 會持續到完成或明確需要人介入。目標執行期間，同一對話送進來的新訊息會作為下一輪的補充指示。
 
 ---
 
@@ -242,6 +247,7 @@ LazyBoy/
 │           ├── computer.rs   boot / 凍結 / 心跳 / 螢幕租約
 │           ├── sessions.rs   對話 CRUD、送訊息、SSE
 │           ├── skills.rs     示範錄製與蒸馏
+│           ├── file_skills.rs 讀取 data/skills 下的唯讀 SKILL.md
 │           ├── schedules.rs  cron
 │           ├── vault.rs      登入保險箱
 │           ├── memory.rs     pgvector 記憶
@@ -257,6 +263,7 @@ LazyBoy/
 │       └── lazyboy-screen    Team 額外 DISPLAY
 ├── migrations/               sqlx，檔名流水號；API 啟動時自動 migrate
 ├── data/homes/               每個電腦的家目錄（bind 進容器 /home/lazyboy）
+├── data/skills/<name>/SKILL.md 工作區共用的 slash 技能（執行時掛載）
 ├── tests/                    跨語言的小測試（node:test、Python）
 ├── scripts/                  init-env、build-computer-image、dev
 ├── docker-compose.yml        正式堆疊（Postgres + supervisor + API）

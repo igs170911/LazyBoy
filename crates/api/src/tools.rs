@@ -1432,5 +1432,6 @@ fn schedule_state(ctx: &ToolCtx) -> crate::state::AppState {
         auth: crate::auth::AuthConfig::from_env(),
         memory: ctx.memory.clone(),
         mcp: ctx.mcp.clone(),
+        calls: crate::state::CallRegistry::default(),
     }
 }

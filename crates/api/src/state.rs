@@ -1,14 +1,39 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use lazyboy_control::SandboxProvider;
 use lazyboy_sandbox::{DockerSandbox, FakeSandbox};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
+use tokio::sync::Mutex;
 
 use crate::auth::AuthConfig;
 use crate::db::{Actor, Db};
 use crate::mcp::McpHub;
 use crate::memory::MemoryService;
+
+#[derive(Clone, Default)]
+pub struct CallRegistry {
+    inner: Arc<Mutex<HashMap<String, String>>>,
+}
+
+impl CallRegistry {
+    pub async fn try_begin(&self, bot_id: &str, call_id: &str) -> bool {
+        let mut map = self.inner.lock().await;
+        if map.contains_key(bot_id) {
+            return false;
+        }
+        map.insert(bot_id.to_string(), call_id.to_string());
+        true
+    }
+
+    pub async fn end(&self, bot_id: &str, call_id: &str) {
+        let mut map = self.inner.lock().await;
+        if map.get(bot_id).is_some_and(|held| held == call_id) {
+            map.remove(bot_id);
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -18,6 +43,7 @@ pub struct AppState {
     pub auth: AuthConfig,
     pub memory: MemoryService,
     pub mcp: McpHub,
+    pub calls: CallRegistry,
 }
 
 impl AppState {
@@ -39,6 +65,7 @@ impl AppState {
             auth: AuthConfig::from_env(),
             memory: MemoryService::from_env(),
             mcp: McpHub::new(),
+            calls: CallRegistry::default(),
         })
     }
 
