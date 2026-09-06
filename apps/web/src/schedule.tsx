@@ -1,4 +1,4 @@
-import { t } from "./i18n";
+import { getLocale, t } from "./i18n";
 
 export type CronFreq = "Every hour" | "Every day" | "Weekdays" | "Every week" | "Every month" | "Interval" | "Advanced";
 export type CronUnit = "minutes" | "hours" | "days";
@@ -31,7 +31,7 @@ export function cronFromPreset(input: CronPreset): string {
   if (input.freq === "Advanced") return input.cron.trim();
   if (input.freq === "Every hour") return "0 * * * *";
   if (input.freq === "Interval") {
-    if (!Number.isInteger(input.n) || input.n < 1 || input.n > 365) throw new Error("間隔必須為 1–365 的整數");
+    if (!Number.isInteger(input.n) || input.n < 1 || input.n > 365) throw new Error(t("schedInvalidInterval"));
     return `@every ${input.n}${({minutes:"m",hours:"h",days:"d"})[input.unit]}`;
   }
   const { hour, minute } = parseClock(input.time);
@@ -75,6 +75,59 @@ function formatClock(hour: number, minute: number): string {
   return `${h12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
+export function clockLabel(time: string): string {
+  const { hour, minute } = parseClock(time);
+  if (getLocale() === "en") return formatClock(hour, minute);
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+export function describeCron(cron: string): string {
+  const preset = presetFromCron(cron);
+  const time = clockLabel(preset.time);
+  if (preset.freq === "Every hour") return t("schedEveryHour");
+  if (preset.freq === "Every day") return t("schedHumanDaily", { time });
+  if (preset.freq === "Weekdays") return t("schedHumanWeekdays", { time });
+  if (preset.freq === "Every week") return t("schedHumanWeekly", { time });
+  if (preset.freq === "Every month") return t("schedHumanMonthly", { time });
+  if (preset.freq === "Interval") {
+    const unit =
+      preset.unit === "hours" ? t("schedHours") : preset.unit === "days" ? t("schedDays") : t("schedMinutes");
+    return t("schedHumanInterval", { n: preset.n, unit });
+  }
+  return cron;
+}
+
+export function describeCronHuman(human: string): string {
+  const text = human.trim();
+  if (!text) return "";
+  if (text === "每小時" || text === "Every hour") return t("schedEveryHour");
+  if (text === "每分鐘" || text === "Every minute") return t("schedEveryMinute");
+  let match: RegExpExecArray | null;
+  if ((match = /^(?:每天|Daily at) (.+)$/.exec(text))) return t("schedHumanDaily", { time: clockLabel(match[1]) });
+  if ((match = /^(?:工作日|Weekdays at) (.+)$/.exec(text))) return t("schedHumanWeekdays", { time: clockLabel(match[1]) });
+  if ((match = /^(?:每週一|Mondays at) (.+)$/.exec(text))) return t("schedHumanWeekly", { time: clockLabel(match[1]) });
+  if ((match = /^(?:每月 1 日|Monthly on the 1st at) (.+)$/.exec(text))) {
+    return t("schedHumanMonthlyDay", { time: clockLabel(match[1]) });
+  }
+  if ((match = /^(?:每月|Monthly at) (.+)$/.exec(text))) return t("schedHumanMonthly", { time: clockLabel(match[1]) });
+  if ((match = /^(?:每隔 (\d+) 分鐘（固定間隔）|Every (\d+) minutes \(elapsed\))$/.exec(text))) {
+    return t("schedHumanElapsed", { n: match[1] || match[2] });
+  }
+  if ((match = /^(?:每 (\d+) 分鐘|Every (\d+) minutes)$/.exec(text))) {
+    return t("schedHumanEveryMinutes", { n: match[1] || match[2] });
+  }
+  if ((match = /^(?:每 (\d+) 小時|Every (\d+) hours)$/.exec(text))) {
+    return t("schedHumanEveryHours", { n: match[1] || match[2] });
+  }
+  if ((match = /^(?:日曆排程：|Calendar schedule: )(.+)$/.exec(text))) return t("schedCalendar", { expr: match[1] });
+  return text;
+}
+
+export function scheduleWhen(cron?: string, human?: string): string {
+  if (cron) return describeCron(cron);
+  return describeCronHuman(human || "");
+}
+
 function freqLabel(freq: CronFreq): string {
   return ({
     "Every hour": t("schedEveryHour"),
@@ -112,7 +165,7 @@ export function ScheduleList({
             <i className={`sched-dot ${item.enabled ? "on" : "off"}`} />
             <span>
               <strong>{item.name}</strong>
-              <small>{item.enabled ? item.human : t("schedPaused")}</small>
+              <small>{item.enabled ? describeCron(item.cron) : t("schedPaused")}</small>
             </span>
           </button>
           <button type="button" className="outline" disabled={runningId === item.id} onClick={() => onRun(item)}>
@@ -179,7 +232,7 @@ export function ScheduleEditor({
           </>}
           {TIMED.includes(preset.freq) && (
             <select value={preset.time} onChange={e => patchPreset({ time: e.target.value })}>
-              {times.map(time => <option key={time} value={time}>{time}</option>)}
+              {times.map(time => <option key={time} value={time}>{clockLabel(time)}</option>)}
             </select>
           )}
           {preset.freq === "Advanced" && (
@@ -187,7 +240,7 @@ export function ScheduleEditor({
           )}
         </div>
       </div>
-      {preset.freq === "Interval" && <small className="memory-help">固定經過時間；一天為 24 小時，不因月底或日光節約時間重置。</small>}
+      {preset.freq === "Interval" && <small className="memory-help">{t("schedIntervalHint")}</small>}
       {error && <div className="pane-error">{error}</div>}
       <div className="pane-actions">
         {onDelete && <button type="button" className="danger" disabled={saving} onClick={onDelete}>{t("delete")}</button>}

@@ -1,4 +1,4 @@
-:root{font-family:"Huninn","jf open 粉圓",sans-serif;color:#dfdfe2;background:#050506;font-synthesis:none;--page:#050506;--side:#0b0b0c;--main:#0d0d0e;--panel:#0a0a0b;--inset:#101012;--line:#202023;--border:#29292d;--surface:#151517;--ink:#f1f1f2;--muted:#85858a;--faint:#626267;--cream:#f1f1ef;--accent:#3ec5a8;--danger:#ef5555;--success:#4ecb71}
+:root{font-family:"Huninn","jf open 粉圓",sans-serif;color:var(--ink);background:var(--page);font-synthesis:none;--page:#050506;--side:#0b0b0c;--main:#0d0d0e;--panel:#0a0a0b;--inset:#101012;--line:#202023;--border:#29292d;--surface:#151517;--ink:#f1f1f2;--muted:#85858a;--faint:#626267;--cream:#f1f1ef;--accent:#3ec5a8;--danger:#ef5555;--success:#4ecb71;--hairline:#171719;--elevated:#121214;--menu:#18181b;--input:#0c0c0d;--dialog:#111113;--on-cream:#1a1a1a;--on-send:#1b1b1c;--online:#22c55e;--unread:#3b82f6;--surface-hover:rgba(255,255,255,.06);--focus:#4b4b50;--error-bg:#2a1717;--error-fg:#fca5a5;--error-border:#5a2a2a;--danger-fill:#8f2828;--danger-line:#a43b3b;--danger-soft:#ff8585;--warn-bg:#221c0e;--warn-fg:#fcd68a;--warn-border:#5a4a1f}
 
 *{box-sizing:border-box}
 
@@ -10,7 +10,7 @@ button{color:inherit}
 
 .app-shell{height:100%;display:grid;grid-template-columns:280px minmax(420px,1fr) minmax(340px,420px);background:var(--page);overflow:hidden}
 
-.sidebar,.chat-panel,.computer-panel{min-width:0;min-height:0;border-right:1px solid #171719}
+.sidebar,.chat-panel,.computer-panel{min-width:0;min-height:0;border-right:1px solid var(--hairline)}
 
 .sidebar{display:flex;flex-direction:column;background:var(--side);padding:14px}
 
@@ -28,7 +28,7 @@ button{color:inherit}
 
 .icon-button svg{width:18px;height:18px}
 
-.search{height:44px;display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:14px;background:#121214;padding:0 13px;color:var(--muted);margin:10px 5px 16px}
+.search{height:44px;display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:14px;background:var(--elevated);padding:0 13px;color:var(--muted);margin:10px 5px 16px}
 
 .search svg{width:15px}
 
@@ -38,7 +38,7 @@ button{color:inherit}
 
 .bot-row{display:flex;align-items:center;gap:12px;width:100%;padding:11px;border:0;border-radius:13px;background:transparent;text-align:left;cursor:pointer}
 
-.bot-row:hover,.bot-row.selected{background:#171719}
+.bot-row:hover,.bot-row.selected{background:var(--hairline)}
 
 .bot-row>span:nth-child(2){min-width:0;display:grid;gap:2px}
 
@@ -46,7 +46,7 @@ button{color:inherit}
 
 .bot-row small{color:var(--muted)}
 
-.sidebar-bottom{margin-top:auto;border-top:1px solid #171719;padding-top:12px}
+.sidebar-bottom{margin-top:auto;border-top:1px solid var(--hairline);padding-top:12px}
 
 .account{width:100%;display:flex;align-items:center;gap:10px;padding:8px;border:0;background:transparent;border-radius:12px}
 
@@ -56,7 +56,7 @@ button{color:inherit}
 
 .chat-panel{position:relative;display:flex;flex-direction:column;background:var(--main)}
 
-.topbar{height:72px;flex:0 0 72px;padding:0 24px;gap:12px;border-bottom:1px solid #171719}
+.topbar{height:72px;flex:0 0 72px;padding:0 24px;gap:12px;border-bottom:1px solid var(--hairline)}
 
 .grow{flex:1}
 
@@ -74,11 +74,11 @@ button{color:inherit}
 
 .composer-plus,.send{width:42px;height:42px;border:0;border-radius:50%;display:grid;place-items:center;cursor:pointer}
 
-.send{background:var(--cream);color:#1b1b1c}
+.send{background:var(--cream);color:var(--on-send)}
 
 .send:disabled{opacity:.28}
 
-.error-banner{position:absolute;bottom:92px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;max-width:80%;padding:10px 14px;border:1px solid #5a2a2a;border-radius:10px;background:#2a1717;color:#fca5a5;font-size:13px}
+.error-banner{position:absolute;bottom:92px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;max-width:80%;padding:10px 14px;border:1px solid var(--error-border);border-radius:10px;background:var(--error-bg);color:var(--error-fg);font-size:13px}
 
 .error-banner button{border:0;background:none;color:inherit}
 
@@ -88,15 +88,15 @@ button{color:inherit}
 
 .panel-head>span{color:var(--ink);font-weight:600;margin-right:auto}
 
-.preview{aspect-ratio:16/10;width:100%;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:#101012}
+.preview{aspect-ratio:16/10;width:100%;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--inset)}
 
 .primary,.outline,.danger{min-height:36px;border-radius:10px;padding:0 15px;border:1px solid var(--border);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
 
-.primary{background:var(--cream);border-color:var(--cream);color:#181819;font-weight:600}
+.primary{background:var(--cream);border-color:var(--cream);color:var(--on-cream);font-weight:600}
 
 .outline{background:transparent}
 
-.danger{background:#8f2828;border-color:#a43b3b;color:#fff}
+.danger{background:var(--danger-fill);border-color:var(--danger-line);color:#fff}
 
 .primary:disabled,.outline:disabled{opacity:.35;cursor:not-allowed}
 
@@ -104,7 +104,7 @@ button{color:inherit}
 
 .modal-backdrop{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.68);backdrop-filter:blur(8px)}
 
-.dialog{width:min(520px,100%);display:grid;gap:20px;border:1px solid var(--border);border-radius:18px;background:#111113;padding:22px;box-shadow:0 24px 80px #000}
+.dialog{width:min(520px,100%);display:grid;gap:20px;border:1px solid var(--border);border-radius:18px;background:var(--dialog);padding:22px;box-shadow:0 24px 80px #000}
 
 .dialog.compact{width:min(430px,100%)}
 
@@ -120,13 +120,13 @@ button{color:inherit}
 
 .dialog label{display:grid;gap:8px;color:var(--muted);font-size:13px}
 
-.dialog input{height:44px;border:1px solid var(--border);border-radius:10px;background:#0c0c0d;color:var(--ink);padding:0 12px;outline:0}
+.dialog input,.dialog select{height:44px;border:1px solid var(--border);border-radius:10px;background:var(--input);color:var(--ink);padding:0 12px;outline:0}
 
-.dialog input:focus{border-color:#4b4b50}
+.dialog input:focus,.dialog select:focus{border-color:var(--focus)}
 
 .mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 
-.mode-grid button{display:grid;justify-items:start;gap:7px;padding:16px;border:1px solid var(--border);border-radius:13px;background:#0c0c0d;text-align:left}
+.mode-grid button{display:grid;justify-items:start;gap:7px;padding:16px;border:1px solid var(--border);border-radius:13px;background:var(--input);text-align:left}
 
 .mode-grid button.picked{border-color:var(--accent);background:rgba(62,197,168,.07)}
 

@@ -5,7 +5,6 @@ use lazyboy_control::SandboxProvider;
 use lazyboy_sandbox::{DockerSandbox, FakeSandbox};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
-use tokio::sync::Mutex;
 
 use crate::auth::AuthConfig;
 use crate::db::{Actor, Db};
@@ -14,23 +13,42 @@ use crate::memory::MemoryService;
 
 #[derive(Clone, Default)]
 pub struct CallRegistry {
-    inner: Arc<Mutex<HashMap<String, String>>>,
+    inner: Arc<std::sync::Mutex<HashMap<String, String>>>,
 }
 
 impl CallRegistry {
-    pub async fn try_begin(&self, bot_id: &str, call_id: &str) -> bool {
-        let mut map = self.inner.lock().await;
+    /// Returns a lease that releases the slot when dropped, so a websocket
+    /// upgrade that never completes cannot leave the bot marked as busy.
+    pub fn try_begin(&self, bot_id: &str, call_id: &str) -> Option<CallLease> {
+        let mut map = self.lock();
         if map.contains_key(bot_id) {
-            return false;
+            return None;
         }
         map.insert(bot_id.to_string(), call_id.to_string());
-        true
+        drop(map);
+        Some(CallLease {
+            registry: self.clone(),
+            bot_id: bot_id.to_string(),
+            call_id: call_id.to_string(),
+        })
     }
 
-    pub async fn end(&self, bot_id: &str, call_id: &str) {
-        let mut map = self.inner.lock().await;
-        if map.get(bot_id).is_some_and(|held| held == call_id) {
-            map.remove(bot_id);
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+        self.inner.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+pub struct CallLease {
+    registry: CallRegistry,
+    bot_id: String,
+    call_id: String,
+}
+
+impl Drop for CallLease {
+    fn drop(&mut self) {
+        let mut map = self.registry.lock();
+        if map.get(&self.bot_id).is_some_and(|held| *held == self.call_id) {
+            map.remove(&self.bot_id);
         }
     }
 }

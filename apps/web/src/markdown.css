@@ -22,13 +22,13 @@
 }
 .md-body a:hover{color:#7ee0c8}
 .md-body code{
-  border:1px solid var(--border);border-radius:.35em;background:#101012;
+  border:1px solid var(--border);border-radius:.35em;background:var(--inset);
   padding:.08em .32em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:.88em;direction:ltr;unicode-bidi:isolate
 }
 .md-body pre{
   max-width:100%;overflow-x:auto;margin:0;border:1px solid var(--border);
-  border-radius:12px;background:#0c0c0d;padding:.75em .9em;direction:ltr;unicode-bidi:isolate
+  border-radius:12px;background:var(--input);padding:.75em .9em;direction:ltr;unicode-bidi:isolate
 }
 .md-body pre code{border:0;background:transparent;padding:0;font-size:.84em;white-space:pre}
 .md-pre-wrap{position:relative;margin:.65em 0}
@@ -51,6 +51,6 @@
 .md-body img{display:block;max-width:100%;height:auto;margin:.65em 0;border-radius:12px}
 .md-body input[type="checkbox"]{margin-right:.4em;accent-color:var(--accent)}
 .message-body.md{white-space:normal}
-.user .md-body code,.user .md-body pre,.user .md-body th{background:#e8e8e6;border-color:#d4d4d2;color:#1a1a1a}
+.user .md-body code,.user .md-body pre,.user .md-body th{background:#e8e8e6;border-color:#d4d4d2;color:var(--on-cream)}
 .user .md-body a{color:#0f766e}
 .user .md-copy{background:#ececea;color:#555}

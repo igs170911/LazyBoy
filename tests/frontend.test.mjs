@@ -3,9 +3,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from '../apps/web/node_modules/typescript/lib/typescript.js';
+function loadCatalog(file){
+  const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+  const sandbox={exports:{},require:()=>({})};
+  vm.runInNewContext(code,sandbox);
+  return sandbox.exports.zhTW||sandbox.exports.en;
+}
+const zhTW=loadCatalog('apps/web/src/locales/zh-TW.ts');
+const en=loadCatalog('apps/web/src/locales/en.ts');
+const catalogs={'zh-TW':zhTW,en};
+const i18n={locale:'en',t:(key,params)=>{const message=catalogs[i18n.locale]?.[key]??key;return params?message.replace(/\{(\w+)\}/g,(m,name)=>Object.hasOwn(params,name)?String(params[name]):m):message},getLocale:()=>i18n.locale};
 const raw=fs.readFileSync('apps/web/src/schedule.tsx','utf8');
 const js=ts.transpileModule(raw,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText;
-const box={exports:{},require:()=>({t:x=>x})};vm.runInNewContext(js,box);const {cronFromPreset,presetFromCron,defaultCronPreset}=box.exports;
+const box={exports:{},require:()=>i18n};vm.runInNewContext(js,box);const {cronFromPreset,presetFromCron,defaultCronPreset,describeCron,describeCronHuman}=box.exports;
 test('fixed intervals retain exact elapsed units',()=>{
  for (const unit of ['minutes','hours','days']) {const p={...defaultCronPreset(),freq:'Interval',n:45,unit};const cron=cronFromPreset(p);const restored=presetFromCron(cron);assert.equal(restored.n,45);assert.equal(restored.unit,unit);}
 });
@@ -46,7 +56,14 @@ const {sanitizeMarkdownUrl}=mdBox.exports;
 const audioJs=ts.transpileModule(fs.readFileSync('apps/web/src/call-audio.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
 const audioBox={exports:{},require:()=>{throw new Error('unexpected import')}};
 vm.runInNewContext(audioJs,audioBox);
-const {floatToPcm16,pcm16ToFloat,resample,VOICE_SAMPLE_RATE}=audioBox.exports;
+const {floatToPcm16,pcm16ToFloat,resample,VOICE_SAMPLE_RATE,CAPTURE_CHUNK_SAMPLES}=audioBox.exports;
+function fakePlaybackContext(rendered){
+  return {
+    sampleRate:VOICE_SAMPLE_RATE,currentTime:0,
+    createBuffer:(_channels,length,rate)=>{const data=new Float32Array(length);rendered.push(data);return {length,duration:length/rate,getChannelData:()=>data}},
+    createBufferSource:()=>({buffer:null,connect(){},start(){},stop(){}}),
+  };
+}
 test('pcm16 roundtrip keeps amplitude sign and resample identity at 24 kHz',()=>{
   const source=new Float32Array([0,0.5,-0.5,1,-1]);
   const bytes=floatToPcm16(source);
@@ -68,6 +85,29 @@ test('markdown links only keep http(s), mailto, tel, and in-page hashes',()=>{
  assert.equal(sanitizeMarkdownUrl('/relative'),undefined);
 });
 
+test('zh-TW and en catalogs share keys and placeholders',()=>{
+  const zhKeys=Object.keys(zhTW).sort();
+  const enKeys=Object.keys(en).sort();
+  assert.deepEqual(enKeys,zhKeys);
+  for(const key of zhKeys){
+    const slots=s=>[...String(s).matchAll(/\{(\w+)\}/g)].map(m=>m[1]).sort();
+    assert.deepEqual(slots(en[key]),slots(zhTW[key]),key);
+    assert.notEqual(String(en[key]).trim(),'');
+    assert.notEqual(String(zhTW[key]).trim(),'');
+  }
+});
+
+test('describeCron and stored Chinese human strings follow the UI locale',()=>{
+  i18n.locale='en';
+  assert.equal(describeCron('0 9 * * *'),'Daily at 9:00 AM');
+  assert.equal(describeCron('0 9 * * 1-5'),'Weekdays at 9:00 AM');
+  assert.equal(describeCronHuman('每天 09:00'),'Daily at 9:00 AM');
+  assert.equal(describeCronHuman('每隔 45 分鐘（固定間隔）'),'Every 45 minutes (elapsed)');
+  i18n.locale='zh-TW';
+  assert.equal(describeCron('0 9 * * *'),'每天 09:00');
+  assert.equal(describeCronHuman('Daily at 9:00 AM'),'每天 09:00');
+});
+
  test('hanging up before microphone permission resolves releases the late stream',async()=>{
    let grant; let stopped=0;
    const context={exports:{},navigator:{mediaDevices:{getUserMedia:()=>new Promise(resolve=>grant=resolve)}}};
@@ -79,3 +119,28 @@ test('markdown links only keep http(s), mailto, tel, and in-page hashes',()=>{
    await starting;
    assert.equal(stopped,1);
  });
+
+test('odd-sized audio frames stay sample-aligned instead of turning into noise',()=>{
+  const rendered=[];
+  const audio=new audioBox.exports.CallAudio({onCapture(){},onError(){}});
+  audio.context=fakePlaybackContext(rendered);
+  const source=new Int16Array([1000,-1000,2000,-2000,3000,-3000,4000,-4000]);
+  const bytes=new Uint8Array(source.buffer);
+  let offset=0;
+  for(const size of [3,5,7,1]){audio.play(bytes.slice(offset,offset+size).buffer);offset+=size}
+  const played=rendered.flatMap(chunk=>[...chunk]);
+  const expected=[...pcm16ToFloat(bytes.slice().buffer)];
+  assert.equal(played.length,expected.length);
+  expected.forEach((value,index)=>assert.ok(Math.abs(played[index]-value)<1e-6,`sample ${index}`));
+});
+
+test('microphone frames are batched instead of sent one websocket message per block',()=>{
+  const sent=[];
+  const audio=new audioBox.exports.CallAudio({onCapture:pcm=>sent.push(pcm.length),onError(){}});
+  const block=new Float32Array(64);
+  const blocksPerChunk=CAPTURE_CHUNK_SAMPLES/block.length;
+  for(let i=0;i<blocksPerChunk-1;i++)audio.queueCapture(block);
+  assert.deepEqual(sent,[]);
+  audio.queueCapture(block);
+  assert.deepEqual(sent,[CAPTURE_CHUNK_SAMPLES*2]);
+});

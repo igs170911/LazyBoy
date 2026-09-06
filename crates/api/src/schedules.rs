@@ -421,7 +421,7 @@ async fn enqueue(state: &AppState, row: &ScheduleRow, from_tick: bool) -> Result
     .bind(&thread_id)
     .bind(seq)
     .bind(&body)
-    .bind(json!([{"kind":"scheduleRun","scheduleId":row.id,"name":row.name,"human":describe_cron(&row.cron)}]))
+    .bind(json!([{"kind":"scheduleRun","scheduleId":row.id,"name":row.name,"cron":row.cron,"human":describe_cron(&row.cron)}]))
     .bind(&run_id)
     .execute(&mut *tx)
     .await

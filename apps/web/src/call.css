@@ -1,10 +1,11 @@
 .call-overlay{position:absolute;inset:0;z-index:40;display:grid;place-items:center;background:rgba(5,5,6,.82);padding:24px}
-.call-card{width:min(420px,100%);display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 24px 22px;border:1px solid var(--border);border-radius:28px;background:#121214;box-shadow:0 30px 80px rgba(0,0,0,.55);text-align:center}
+.call-card{width:min(420px,100%);display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 24px 22px;border:1px solid var(--border);border-radius:28px;background:var(--elevated);box-shadow:0 30px 80px rgba(0,0,0,.55);text-align:center}
 .call-kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
 .call-name{margin-top:4px;font-size:22px}
 .call-phase{min-height:1.4em;color:var(--accent);font-size:14px}
 .call-phase.working{color:#ffe08a}
 .call-caption{min-height:3.2em;margin:4px 0 0;color:var(--muted);font-size:14.5px;line-height:1.5}
+.call-caption.assistant{color:var(--ink)}
 .call-error{margin:0;color:var(--danger);font-size:13px}
 .call-time{color:var(--faint);font-variant-numeric:tabular-nums;font-size:13px}
 .call-actions{display:flex;gap:10px;margin-top:8px}

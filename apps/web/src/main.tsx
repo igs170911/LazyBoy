@@ -11,4 +11,5 @@ import "./schedule.css";
 import "./call.css";
 import "./responsive.css";
 import { App } from "./App";
-ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
+import { LocaleRoot } from "./i18n";
+ReactDOM.createRoot(document.getElementById("root")!).render(<LocaleRoot><App /></LocaleRoot>);

@@ -42,18 +42,17 @@ pub async fn call_ws(
     };
     match prepare_call(&state, &actor, &session_id).await {
         Ok(prep) => {
-            if !state.calls.try_begin(&prep.bot_id, &prep.call_id).await {
+            let Some(lease) = state.calls.try_begin(&prep.bot_id, &prep.call_id) else {
                 return (
                     StatusCode::CONFLICT,
                     Json(json!({"message":"already on a call"})),
                 )
                     .into_response();
-            }
+            };
             let provider = create_voice(prep.provider);
             let socket = match provider.connect(prep.connect.clone()).await {
                 Ok(socket) => socket,
                 Err(error) => {
-                    state.calls.end(&prep.bot_id, &prep.call_id).await;
                     return (
                         StatusCode::BAD_GATEWAY,
                         Json(json!({"message": error.to_string()})),
@@ -61,11 +60,26 @@ pub async fn call_ws(
                         .into_response();
                 }
             };
-            ws.on_upgrade(move |client| run_call(state, actor, session_id, prep, client, socket))
-                .into_response()
+            ws.on_upgrade(move |client| {
+                run_call(state, actor, session_id, prep, client, socket, lease)
+            })
+            .into_response()
         }
         Err((status, message)) => (status, Json(json!({"message": message}))).into_response(),
     }
+}
+
+/// The client asks for a barge-in over the text channel; audio frames stay binary.
+fn is_interrupt_request(text: &str) -> bool {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .is_some_and(|kind| kind == "interrupt")
 }
 
 async fn prepare_call(
@@ -138,6 +152,7 @@ async fn run_call(
     prep: PreparedCall,
     client: WebSocket,
     mut provider: Box<dyn VoiceSocket>,
+    _lease: crate::state::CallLease,
 ) {
     let call_id = prep.call_id.clone();
     let bot_id = prep.bot_id.clone();
@@ -159,9 +174,14 @@ async fn run_call(
     let mut user_partial = String::new();
     let mut assistant_partial = String::new();
     let mut last_progress = String::new();
+    let mut response_active = false;
     let mut last_spoken_at = std::time::Instant::now()
         .checked_sub(Duration::from_secs(30))
         .unwrap_or_else(std::time::Instant::now);
+    // A fresh `sleep` inside `select!` would be cancelled by every microphone
+    // frame (one every few milliseconds), so the poll must own its own timer.
+    let mut watchdog = tokio::time::interval(Duration::from_millis(800));
+    watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -178,7 +198,14 @@ async fn run_call(
                             break;
                         }
                     }
-                    Some(Ok(AxumMessage::Text(_))) => {}
+                    Some(Ok(AxumMessage::Text(text))) => {
+                        if is_interrupt_request(&text) && response_active {
+                            response_active = false;
+                            if provider.send(VoiceEvent::CancelResponse).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             provider_msg = provider.recv() => {
@@ -195,6 +222,7 @@ async fn run_call(
                             event,
                             &mut user_partial,
                             &mut assistant_partial,
+                            &mut response_active,
                         )
                         .await
                         .is_err()
@@ -204,7 +232,7 @@ async fn run_call(
                     }
                 }
             }
-            _ = tokio::time::sleep(Duration::from_millis(800)) => {
+            _ = watchdog.tick() => {
                 let _ = watch_computer(
                     &state,
                     &actor,
@@ -220,8 +248,6 @@ async fn run_call(
             }
         }
     }
-
-    state.calls.end(&bot_id, &call_id).await;
 }
 
 async fn handle_provider_event(
@@ -234,9 +260,15 @@ async fn handle_provider_event(
     event: VoiceEvent,
     user_partial: &mut String,
     assistant_partial: &mut String,
+    response_active: &mut bool,
 ) -> Result<(), ()> {
     match event {
+        VoiceEvent::ResponseStarted => *response_active = true,
+        VoiceEvent::ResponseFinished => *response_active = false,
         VoiceEvent::AudioPcm(bytes) => {
+            // Not every provider announces `response.created`; flowing audio is
+            // proof enough that there is something to cancel on a barge-in.
+            *response_active = true;
             client_write
                 .lock()
                 .await
@@ -277,6 +309,7 @@ async fn handle_provider_event(
         }
         VoiceEvent::OutputTranscript { text, final_ } => {
             if final_ {
+                *response_active = false;
                 let body = if text.trim().is_empty() {
                     assistant_partial.trim().to_string()
                 } else {
@@ -599,8 +632,16 @@ async fn send_json(
 
 #[cfg(test)]
 mod tests {
-    use super::speakable_progress;
+    use super::{is_interrupt_request, speakable_progress};
     use serde_json::json;
+
+    #[test]
+    fn only_a_typed_interrupt_frame_cancels_the_reply() {
+        assert!(is_interrupt_request(r#"{"type":"interrupt"}"#));
+        assert!(!is_interrupt_request(r#"{"type":"hangup"}"#));
+        assert!(!is_interrupt_request("interrupt"));
+        assert!(!is_interrupt_request(""));
+    }
 
     #[test]
     fn takeover_and_idle_after_work_are_spoken_once() {

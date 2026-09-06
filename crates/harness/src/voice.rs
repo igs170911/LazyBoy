@@ -127,6 +127,9 @@ pub enum VoiceEvent {
     SpeakNow { text: String },
     InjectContext { text: String },
     ResponseCreate,
+    ResponseStarted,
+    ResponseFinished,
+    CancelResponse,
     Error { message: String },
 }
 
@@ -374,6 +377,9 @@ pub fn encode_provider_event(provider: VoiceProvider, event: &VoiceEvent) -> Opt
         VoiceEvent::ResponseCreate => Some(Message::Text(
             json!({ "type": "response.create" }).to_string().into(),
         )),
+        VoiceEvent::CancelResponse => Some(Message::Text(
+            json!({ "type": "response.cancel" }).to_string().into(),
+        )),
         VoiceEvent::InjectContext { text } => Some(Message::Text(
             json!({
                 "type": "conversation.item.create",
@@ -421,6 +427,10 @@ pub fn parse_provider_event(text: &str) -> Option<VoiceEvent> {
     match kind {
         "input_audio_buffer.speech_started" => Some(VoiceEvent::SpeechStarted),
         "input_audio_buffer.speech_stopped" => Some(VoiceEvent::SpeechStopped),
+        "response.created" => Some(VoiceEvent::ResponseStarted),
+        "response.done" | "response.completed" | "response.cancelled" => {
+            Some(VoiceEvent::ResponseFinished)
+        }
         "conversation.item.input_audio_transcription.delta"
         | "response.input_audio_transcription.delta" => {
             let text = event.get("delta")?.as_str()?.to_string();

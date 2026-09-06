@@ -23,10 +23,12 @@ function phaseLabel(phase: CallPhase, computer: ComputerEvent | null): string {
   if (computer?.takeover) return t("takeOverToContinue");
   if (phase === "connecting") return t("callConnecting");
   if (phase === "speaking") return t("speaking");
-  if (phase === "working" || computer?.status === "running" || computer?.status === "queued") {
-    return t("workingOnComputer");
-  }
+  if (phase === "working") return t("workingOnComputer");
   return t("listening");
+}
+
+function computerIsBusy(computer: ComputerEvent | null): boolean {
+  return computer?.status === "running" || computer?.status === "queued" || Boolean(computer?.takeover);
 }
 
 export function PhoneIcon({ size = 16 }: { size?: number }) {
@@ -50,8 +52,9 @@ export function CallOverlay({
   onHangUp: () => void;
   onTakeOver: () => void;
 }) {
-  const [phase, setPhase] = useState<CallPhase>("connecting");
-  const [caption, setCaption] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [caption, setCaption] = useState<{ role: "user" | "assistant"; text: string } | null>(null);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [computer, setComputer] = useState<ComputerEvent | null>(null);
@@ -70,7 +73,11 @@ export function CallOverlay({
 
   function interrupt() {
     audioRef.current?.interrupt();
-    setPhase("listening");
+    // Stopping local playback alone lets the model keep streaming the rest of
+    // its answer, so the provider has to be told to abandon the response too.
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: "interrupt" }));
+    }
   }
 
   useEffect(() => {
@@ -82,7 +89,8 @@ export function CallOverlay({
       onCapture: (pcm) => {
         if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(pcm);
       },
-      onError: (message) => setError(message),
+      onError: () => setError(t("callAudioFailed")),
+      onPlaybackChange: setSpeaking,
     });
     audioRef.current = audio;
     const socket = new WebSocket(wsUrl(sessionId));
@@ -95,7 +103,7 @@ export function CallOverlay({
         socket.close();
         setError(err instanceof Error && /NotAllowedError|PermissionDenied/.test(err.name + err.message) ? t("micDenied") : t("micFailed"));
       });
-      setPhase("listening");
+      setConnected(true);
     };
     socket.onmessage = (event) => {
       if (typeof event.data !== "string") {
@@ -105,20 +113,15 @@ export function CallOverlay({
       let payload: ServerEvent;
       try { payload = JSON.parse(event.data) as ServerEvent; } catch { return; }
       if (payload.type === "speech") {
-        if (payload.state === "started") {
-          audio.interrupt();
-          setPhase("listening");
-        } else setPhase("listening");
+        if (payload.state === "started") audio.interrupt();
         return;
       }
       if (payload.type === "transcript") {
-        setCaption(payload.text);
-        if (payload.role === "assistant") setPhase(payload.final ? "listening" : "speaking");
+        setCaption({ role: payload.role, text: payload.text });
         return;
       }
       if (payload.type === "computer") {
         setComputer(payload);
-        if (payload.status === "running" || payload.status === "queued" || payload.takeover) setPhase("working");
         return;
       }
       if (payload.type === "error") setError(payload.message);
@@ -149,6 +152,13 @@ export function CallOverlay({
   const minutes = Math.floor(elapsed / 60);
   const seconds = String(elapsed % 60).padStart(2, "0");
   const showTakeover = takeover || Boolean(computer?.takeover);
+  const phase: CallPhase = !connected
+    ? "connecting"
+    : speaking
+      ? "speaking"
+      : computerIsBusy(computer)
+        ? "working"
+        : "listening";
 
   return (
     <div className="call-overlay" role="dialog" aria-label={t("call")}>
@@ -157,7 +167,7 @@ export function CallOverlay({
         <Avatar lookId={bot.id} name={bot.name} color={bot.avatarColor} shape={bot.avatarShape as AvatarShape} active online size={72} />
         <strong className="call-name">{bot.name}</strong>
         <div className={`call-phase ${phase}`}>{phaseLabel(phase, computer)}</div>
-        <p className="call-caption">{caption || t("callPrompt")}</p>
+        <p className={`call-caption ${caption ? caption.role : ""}`}>{caption?.text || t("callPrompt")}</p>
         {error ? <p className="call-error">{error}</p> : null}
         <div className="call-time">{minutes}:{seconds}</div>
         <div className="call-actions">
