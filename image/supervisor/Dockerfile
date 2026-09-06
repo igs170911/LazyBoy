@@ -2,6 +2,7 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
 COPY crates crates
 COPY migrations migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \

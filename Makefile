@@ -154,5 +154,6 @@ dev-api: ## Run lazyboy-api on the host (terminal 2)
 	 export API_BIND="$${API_BIND:-0.0.0.0:3101}"; \
 	 export LAZYBOY_WEB_DIR="$${LAZYBOY_WEB_DIR:-$$PWD/$(WEB_DIR)}"; \
 	 mkdir -p "$$DATA_DIR"; \
+	 export ORT_DYLIB_PATH="$${ORT_DYLIB_PATH:-$$(./scripts/fetch-onnxruntime.sh "$$DATA_DIR/onnxruntime")}"; \
 	 echo "starting api on $$API_BIND (web dir $$LAZYBOY_WEB_DIR)"; \
 	 exec cargo run -p lazyboy-api

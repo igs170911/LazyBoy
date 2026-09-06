@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 FROM rust:1-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
 COPY crates crates
 COPY migrations migrations
 COPY apps/web/vnc.html apps/web/vnc.html
@@ -30,10 +31,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,id=lazyboy-api-release,sharing=locked \
     cargo build --locked --release -p lazyboy-api && cp /src/target/release/lazyboy-api /lazyboy-api
 
+FROM debian:trixie-slim AS onnxruntime
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/fetch-onnxruntime.sh /fetch-onnxruntime.sh
+RUN chmod +x /fetch-onnxruntime.sh \
+    && TARGETARCH="${TARGETARCH}" /fetch-onnxruntime.sh /opt/onnxruntime
+
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates python3 python3-lxml \
+        ca-certificates python3 python3-lxml libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=onnxruntime /opt/onnxruntime/lib/ /usr/local/lib/
 COPY --from=web /usr/local/bin/node /usr/local/bin/node
 COPY --from=web /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 COPY --from=python /opt/python /opt/python
@@ -51,7 +61,8 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && node -v && npx --version \
     && PYTHONPATH=/opt/python python3 -c "import mcp_server_fetch"
 ENV LAZYBOY_WEB_DIR=/web \
-    PYTHONPATH=/opt/python
+    PYTHONPATH=/opt/python \
+    ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 ENV NPM_CONFIG_FUND=false
 RUN useradd --create-home --uid 1000 lazyboy

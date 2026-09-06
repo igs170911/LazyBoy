@@ -32,7 +32,7 @@ tokio-tungstenite.workspace = true
 futures-util = "0.3"
 http-body-util = "0.1"
 dotenvy = "0.15"
-fastembed = "6.0.2"
+fastembed = { version = "6.0.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-load-dynamic"] }
 rmcp = { version = "3.2", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 http = "1"
 aes-gcm = "0.10"
