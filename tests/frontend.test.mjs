@@ -144,3 +144,100 @@ test('microphone frames are batched instead of sent one websocket message per bl
   audio.queueCapture(block);
   assert.deepEqual(sent,[CAPTURE_CHUNK_SAMPLES*2]);
 });
+
+function mobileViewer(){
+ const source=fs.readFileSync('apps/web/vnc.html','utf8').match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/import RFB[^;]+;/,'');
+ const handlers={},options={},sent=[];
+ const keyboard={value:'',focused:false,focus(){this.focused=true},blur(){this.focused=false},setSelectionRange(){}};
+ const pointerEvents=[];
+ const canvas={style:{},closest:selector=>selector==='#screen'?{}:null,getBoundingClientRect:()=>({left:0,top:0,width:300,height:200})};
+ const elements={};
+ const element=id=>elements[id]||(elements[id]={style:{},attributes:{},setAttribute(k,v){this.attributes[k]=v},querySelectorAll(){return []}});
+ let rfb;
+ class RFB{constructor(){rfb=this}addEventListener(){}focus(){keyboard.focused=false}
+  _handleMouseMove(x,y){pointerEvents.push({type:'move',x,y})}
+  _handleMouseButton(x,y,mask){pointerEvents.push({type:'button',x,y,mask})}
+  _handleWheel(event){pointerEvents.push({type:'wheel',dx:event.deltaX,dy:event.deltaY})}
+ }
+ const window={location:{pathname:'/vnc.html',protocol:'http:',host:'localhost',origin:'http://localhost',hash:''},parent:{postMessage:x=>sent.push(x)},addEventListener:(n,f,o)=>{handlers[n]=f;options[n]=o}};
+ vm.runInNewContext(source,{window,document:{location:{href:'http://localhost/vnc.html?view_only=false'},getElementById:id=>id==='mobile-keyboard'?keyboard:element(id),querySelector:selector=>selector==='#screen canvas'?canvas:null},navigator:{},RFB,setTimeout(){},clearTimeout(){}});
+ return {handlers,options,sent,keyboard,canvas,rfb,window,pointerEvents,elements};
+}
+test('mobile tap focuses editable input before noVNC stops touch propagation; drag and multi-touch do not',()=>{
+ const {handlers:h,options,keyboard,canvas,rfb}=mobileViewer();
+ for(const name of ['touchstart','touchmove','touchend'])assert.equal(options[name].capture,true);
+ const point={clientX:20,clientY:30};
+ h.touchstart({target:canvas,touches:[point]});h.touchend({touches:[]});
+ assert.equal(keyboard.focused,true);assert.equal(rfb.focusOnClick,false);
+ keyboard.blur();h.touchstart({target:canvas,touches:[point]});h.touchmove({touches:[{clientX:50,clientY:30}]});h.touchend({touches:[]});assert.equal(keyboard.focused,false);
+ h.touchstart({target:canvas,touches:[point,point]});h.touchend({touches:[]});assert.equal(keyboard.focused,false);
+ rfb.viewOnly=true;h.touchstart({target:canvas,touches:[point]});h.touchend({touches:[]});assert.equal(keyboard.focused,false);
+});
+test('mobile IME sends committed Chinese once and supports input-only backspace and Enter',()=>{
+ const {handlers:h,keyboard,sent}=mobileViewer();
+ sent.length=0;
+ h.compositionstart({target:keyboard});keyboard.value+='中文';
+ h.input({target:keyboard,isComposing:true});assert.equal(sent.length,0);
+ h.compositionend({target:keyboard});h.input({target:keyboard,isComposing:false});
+ assert.equal(sent.length,1);assert.equal(sent[0].text,'中文');
+ keyboard.value='';h.input({target:keyboard,inputType:'deleteContentBackward'});
+ let prevented=false;h.beforeinput({target:keyboard,inputType:'insertLineBreak',preventDefault(){prevented=true}});
+ assert.equal(prevented,true);
+ assert.deepEqual(sent.map(x=>x.text||x.key),['中文','BackSpace','Return']);
+});
+test('mobile keyboard is cleared and blurred when control is released; foreign messages cannot change control',()=>{
+ const {handlers:h,keyboard,sent,window}=mobileViewer();
+ keyboard.focus();keyboard.value+='secret';
+ h.message({origin:window.location.origin,source:{},data:{type:'lazyboy-view-only',viewOnly:true}});
+ assert.equal(keyboard.focused,true);
+ h.message({origin:window.location.origin,source:window.parent,data:{type:'lazyboy-view-only',viewOnly:true}});
+ assert.equal(keyboard.focused,false);assert.equal(keyboard.value,'\u200b');
+ sent.length=0;keyboard.value+='blocked';h.input({target:keyboard});assert.equal(sent.length,0);
+});
+
+function pointerButton(viewer,action){
+ viewer.handlers.click({target:{closest:()=>({dataset:{action}})}});
+}
+function pointerTouch(viewer,name,points){
+ let prevented=false,stopped=false;
+ viewer.handlers[name]({target:viewer.canvas,touches:points.map(([clientX,clientY])=>({clientX,clientY})),preventDefault(){prevented=true},stopImmediatePropagation(){stopped=true}});
+ return prevented&&stopped;
+}
+test('trackpad moves relative to cursor, clamps edges and taps without opening keyboard',()=>{
+ const v=mobileViewer();pointerButton(v,'mode');
+ assert.equal(pointerTouch(v,'touchstart',[[30,30]]),true);
+ pointerTouch(v,'touchmove',[[60,40]]);pointerTouch(v,'touchend',[]);
+ assert.equal(v.pointerEvents.length,1);assert.equal(v.pointerEvents[0].x,180);assert.ok(Math.abs(v.pointerEvents[0].y-110)<.001);
+ assert.equal(v.keyboard.focused,false);
+ pointerTouch(v,'touchstart',[[10,10]]);pointerTouch(v,'touchend',[]);
+ assert.deepEqual(v.pointerEvents.slice(-2).map(e=>e.mask),[1,0]);
+ pointerTouch(v,'touchstart',[[10,10]]);pointerTouch(v,'touchmove',[[1000,-1000]]);pointerTouch(v,'touchend',[]);
+ assert.equal(v.pointerEvents.at(-1).x,299);assert.equal(v.pointerEvents.at(-1).y,0);
+ pointerButton(v,'keyboard');assert.equal(v.keyboard.focused,true);
+});
+test('two-finger trackpad scroll and right tap do not also left click',()=>{
+ const v=mobileViewer();pointerButton(v,'mode');
+ pointerTouch(v,'touchstart',[[20,20],[50,20]]);pointerTouch(v,'touchmove',[[20,80],[50,80]]);pointerTouch(v,'touchend',[]);
+ assert.deepEqual(v.pointerEvents,[{type:'wheel',dx:-0,dy:-60}]);
+ pointerTouch(v,'touchstart',[[20,20],[50,20]]);pointerTouch(v,'touchend',[[20,20]]);pointerTouch(v,'touchend',[]);
+ assert.deepEqual(v.pointerEvents.slice(-2).map(e=>e.mask),[4,0]);
+});
+test('drag is released on cancellation, mode switch, blur and control handoff',()=>{
+ for(const release of ['cancel','mode','blur','handoff']){
+  const v=mobileViewer();pointerButton(v,'drag');
+  assert.equal(v.pointerEvents.at(-1).mask,1);
+  if(release==='cancel')v.handlers.touchcancel();
+  if(release==='mode')pointerButton(v,'mode');
+  if(release==='blur')v.handlers.blur();
+  if(release==='handoff')v.handlers.message({origin:v.window.location.origin,source:v.window.parent,data:{type:'lazyboy-view-only',viewOnly:true}});
+  assert.equal(v.pointerEvents.at(-1).mask,0,release);
+  assert.equal(v.elements['pointer-drag'].attributes['aria-pressed'],'false');
+ }
+});
+test('view-only pointer controls never send mouse input and trackpad asks for control',()=>{
+ const v=mobileViewer();pointerButton(v,'mode');v.rfb.viewOnly=true;
+ for(const action of ['left','right','drag','up','down'])pointerButton(v,action);
+ pointerTouch(v,'touchstart',[[20,20]]);pointerTouch(v,'touchmove',[[50,50]]);pointerTouch(v,'touchend',[]);
+ assert.equal(v.pointerEvents.length,0);
+ assert.equal(v.sent.at(-1).type,'lazyboy-request-control');
+});

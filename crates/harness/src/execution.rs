@@ -35,7 +35,7 @@ pub fn goal_outcome(reply: &str) -> GoalOutcome {
     }
 }
 
-pub const GOAL_INSTRUCTIONS: &str = "Persistent goal execution: plan the requested work, execute it, and verify each requested outcome. Intermediate progress replies do not finish the run. Preserve completed work and incorporate user steering. End your final reply with a standalone [GOAL_COMPLETE] line only when all outcomes are verified; explain the verification. When required information or human action is missing, explain exactly what is needed and end with a standalone [GOAL_BLOCKED] line. For login, CAPTCHA or 2FA use request_takeover. Never claim completion merely because you planned the work.";
+pub const GOAL_INSTRUCTIONS: &str = "Persistent goal execution: plan the requested work, execute it, and verify each requested outcome. Intermediate progress replies do not finish the run. Preserve completed work and incorporate user steering. End your final reply with a standalone [GOAL_COMPLETE] line only when all outcomes are verified; explain the verification. When required information or human action is missing, explain exactly what is needed and end with a standalone [GOAL_BLOCKED] line. For a simple Cloudflare connection-check checkbox, observe the current screen and try connection_check once, then verify the requested content. For other CAPTCHA, failed verification, login or 2FA use request_takeover. Never claim completion merely because you planned the work.";
 pub const GOAL_CONTINUE: &str = "The goal remains active. Continue the plan with tools and verify the outcome. Finish only with a standalone [GOAL_COMPLETE] line after verification, or [GOAL_BLOCKED] when required human input is missing.";
 
 #[cfg(test)]
