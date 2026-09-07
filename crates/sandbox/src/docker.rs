@@ -3,8 +3,9 @@ use base64::Engine;
 use lazyboy_contracts::ComputerCapabilities;
 use lazyboy_contracts::{ActiveWindow, ComputerObservation, CursorPosition, SandboxKind};
 use lazyboy_control::{
-    ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult, ComputerRef,
-    EnsureScreenRequest, EnsureScreenResult, FileEntry, ProvisionRequest, SandboxError,
+    ActionRequest, ActionResult, AdapterContext, BrowserRequest, CdpPage, CommandRequest,
+    CommandResult, ComputerRef, EnsureScreenRequest, EnsureScreenResult, FileEntry,
+    ProvisionRequest, RecordingRequest, RecordingResult, RecordingSession, SandboxError,
     SandboxProvider, ScreenSession, observation_from_png, observation_with_elements,
     parse_ui_elements,
 };
@@ -249,6 +250,93 @@ impl SandboxProvider for DockerSandbox {
                 None
             },
         })
+    }
+
+    async fn browser(
+        &self,
+        computer: &ComputerRef,
+        request: BrowserRequest,
+        context: &AdapterContext,
+    ) -> Result<CdpPage, SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/browser", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        serde_json::from_value(body).map_err(|error| SandboxError::message(error.to_string()))
+    }
+
+    async fn start_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<RecordingSession, SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/recording/start", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        serde_json::from_value(body).map_err(|error| SandboxError::message(error.to_string()))
+    }
+
+    async fn stop_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/recording/stop", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(SandboxError::message(format!(
+                "stop recording failed: {}",
+                response.status()
+            )))
+        }
+    }
+
+    async fn collect_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<RecordingResult, SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/recording/collect", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        serde_json::from_value(body).map_err(|error| SandboxError::message(error.to_string()))
     }
 
     async fn connect_screen(

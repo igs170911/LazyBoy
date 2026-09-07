@@ -390,7 +390,14 @@ async fn events(
     // afterwards would open a window in which a commit could knock on a channel
     // this reader is not listening to yet.
     let wakes = state.wakes.subscribe();
-    let stream_state = (state, id, actor, after, Vec::<(i32, String, Value)>::new(), wakes);
+    let stream_state = (
+        state,
+        id,
+        actor,
+        after,
+        Vec::<(i32, String, Value)>::new(),
+        wakes,
+    );
     let output = stream::unfold(
         stream_state,
         |(state, id, actor, mut after, mut pending, mut wakes)| async move {
@@ -402,10 +409,7 @@ async fn events(
                         .event(kind)
                         .json_data(payload)
                         .unwrap_or_else(|_| Event::default().event("error").data("{}"));
-                    return Some((
-                        Ok(event),
-                        (state, id, actor, after, pending, wakes),
-                    ));
+                    return Some((Ok(event), (state, id, actor, after, pending, wakes)));
                 }
                 match sqlx::query_as::<_, (i32, String, Value)>(
                     "SELECT e.seq,e.type,e.payload FROM events e

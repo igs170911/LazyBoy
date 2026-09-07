@@ -47,7 +47,10 @@ pub struct CallLease {
 impl Drop for CallLease {
     fn drop(&mut self) {
         let mut map = self.registry.lock();
-        if map.get(&self.bot_id).is_some_and(|held| *held == self.call_id) {
+        if map
+            .get(&self.bot_id)
+            .is_some_and(|held| *held == self.call_id)
+        {
             map.remove(&self.bot_id);
         }
     }

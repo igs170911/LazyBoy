@@ -4,10 +4,10 @@ use lazyboy_contracts::{
     ComputerAction, ComputerMode, ComputerObservation, PointerType, UiElement,
 };
 use lazyboy_control::{
-    ActionError, ActionRequest, AdapterContext, CdpPage, CommandRequest, ComputerRef,
-    SandboxProvider, a11y_command_on, apply_element_targets, browser_gui_block, cdp_command_on,
-    click_fingerprint, element_id, format_ui_elements, frames_match, merge_ui_elements,
-    cdp_stdin_command_on, overlay_elements, parse_a11y_page, parse_cdp_page, parse_computer_actions,
+    ActionError, ActionRequest, AdapterContext, BrowserRequest, CdpPage, CommandRequest,
+    ComputerRef, SandboxProvider, a11y_command_on, apply_element_targets, browser_gui_block,
+    cdp_stdin_command_on, click_fingerprint, element_id, format_ui_elements, frames_match,
+    merge_ui_elements, overlay_elements, parse_a11y_page, parse_cdp_page, parse_computer_actions,
     resolve_bot_workspace_cwd, resolve_bot_workspace_path, should_block_stale_click,
 };
 use rig_core::completion::ToolDefinition;
@@ -454,9 +454,11 @@ fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
 }
 
 fn observation_text(note: &str, observation: &ComputerObservation, unchanged: bool) -> String {
-    let label = if observation.elements.iter().any(|element| {
-        matches!(element.kind.as_deref(), Some("dom") | Some("a11y"))
-    }) {
+    let label = if observation
+        .elements
+        .iter()
+        .any(|element| matches!(element.kind.as_deref(), Some("dom") | Some("a11y")))
+    {
         "Clickable controls"
     } else {
         "Clickable windows"
@@ -481,7 +483,11 @@ async fn observe(ctx: &ToolCtx) -> ToolOutcome {
     if let Some(blocked) = vision_guard(ctx) {
         return blocked;
     }
-    match ctx.sandbox.observe(&ctx.computer_ref(), &ctx.adapter()).await {
+    match ctx
+        .sandbox
+        .observe(&ctx.computer_ref(), &ctx.adapter())
+        .await
+    {
         Ok(observation) => {
             let (observation, note) =
                 attach_ui_elements(ctx, observation, "computer observed").await;
@@ -509,7 +515,11 @@ async fn wait_then_observe(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     if vision_guard(ctx).is_some() {
         return text_outcome(format!("waited {seconds:.0}s"));
     }
-    match ctx.sandbox.observe(&ctx.computer_ref(), &ctx.adapter()).await {
+    match ctx
+        .sandbox
+        .observe(&ctx.computer_ref(), &ctx.adapter())
+        .await
+    {
         Ok(observation) => {
             let note = format!("waited {seconds:.0}s");
             let (observation, note) = attach_ui_elements(ctx, observation, &note).await;
@@ -559,11 +569,7 @@ async fn a11y_snapshot(ctx: &ToolCtx, include_browser: bool) -> Option<lazyboy_c
         json!({"action": "snapshot", "includeBrowser": include_browser}),
     )
     .await;
-    if page.ok {
-        Some(page)
-    } else {
-        None
-    }
+    if page.ok { Some(page) } else { None }
 }
 
 async fn a11y_call(ctx: &ToolCtx, request: serde_json::Value) -> lazyboy_control::A11yPage {
@@ -607,41 +613,26 @@ async fn cdp_snapshot(ctx: &ToolCtx, ensure: bool) -> Option<CdpPage> {
 
 async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
     let adapter = ctx.adapter();
-    let display = adapter.display.as_deref().unwrap_or(":1");
-    // Clicks may sit through a page's stay timer (CLICK_WAIT_MS in cdp.py).
-    let timeout_ms = if request.get("action").and_then(Value::as_str) == Some("click") {
-        let wait = request
-            .get("waitMs")
-            .and_then(Value::as_u64)
-            .unwrap_or(45_000)
-            .min(120_000);
-        wait + 25_000
-    } else {
-        20_000
-    };
-    let argv = cdp_command_on(display, adapter.profile_path.as_deref(), &request);
+    let mut browser_request: BrowserRequest =
+        serde_json::from_value(request.clone()).unwrap_or_default();
+    if browser_request.action.is_empty() {
+        browser_request.action = request
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("snapshot")
+            .to_string();
+    }
+    if let Some(ensure) = request.get("ensure").and_then(Value::as_bool) {
+        browser_request.ensure = ensure;
+    }
+    browser_request.display = adapter.display.clone();
+    browser_request.profile_path = adapter.profile_path.clone();
     match ctx
         .sandbox
-        .execute(
-            &ctx.computer_ref(),
-            CommandRequest {
-                argv,
-                cwd: None,
-                timeout_ms: Some(timeout_ms),
-                stdin: None,
-            },
-            &ctx.adapter(),
-        )
+        .browser(&ctx.computer_ref(), browser_request, &adapter)
         .await
     {
-        Ok(result) => {
-            let raw = if result.stdout.trim().is_empty() {
-                result.stderr
-            } else {
-                result.stdout
-            };
-            parse_cdp_page(&raw)
-        }
+        Ok(page) => page,
         Err(error) => CdpPage {
             ok: false,
             error: Some(error.to_string()),
@@ -652,33 +643,55 @@ async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
 
 fn is_connection_check(page: &CdpPage) -> bool {
     let text = format!("{} {}", page.title, page.text).to_lowercase();
-    page.ok && (text.contains("需要確認您的連線是安全") || (text.contains("cloudflare") && [
-        "verify you are human", "verifying you are human", "checking your browser",
-        "checking if the site connection is secure", "needs to review the security",
-        "驗證您是人類", "验证您是人类", "確認您的連線是安全", "確認您的人類身分",
-    ].iter().any(|marker| text.contains(marker))))
+    page.ok
+        && (text.contains("需要確認您的連線是安全")
+            || (text.contains("cloudflare")
+                && [
+                    "verify you are human",
+                    "verifying you are human",
+                    "checking your browser",
+                    "checking if the site connection is secure",
+                    "needs to review the security",
+                    "驗證您是人類",
+                    "验证您是人类",
+                    "確認您的連線是安全",
+                    "確認您的人類身分",
+                ]
+                .iter()
+                .any(|marker| text.contains(marker))))
 }
 
 fn connection_takeover(ctx: &ToolCtx, reason: &str) -> ToolOutcome {
     *ctx.takeover_requested.lock().unwrap() = true;
     ToolOutcome {
-        text: reason.into(), image: None, pause: true,
+        text: reason.into(),
+        image: None,
+        pause: true,
         blocks: login_blocks(&json!({"reason":reason,"site":"網站連線驗證",
             "why":"完成驗證後，繼續原本的瀏覽任務。"})),
     }
 }
 
 async fn connection_check(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
-    if let Some(blocked) = vision_guard(ctx) { return blocked; }
-    let (Some(x), Some(y)) = (args.get("x").and_then(Value::as_u64), args.get("y").and_then(Value::as_u64)) else {
-        return text_outcome("Take a fresh computer_observe and provide the visible checkbox's non-negative screen x/y.");
+    if let Some(blocked) = vision_guard(ctx) {
+        return blocked;
+    }
+    let (Some(x), Some(y)) = (
+        args.get("x").and_then(Value::as_u64),
+        args.get("y").and_then(Value::as_u64),
+    ) else {
+        return text_outcome(
+            "Take a fresh computer_observe and provide the visible checkbox's non-negative screen x/y.",
+        );
     };
     if x > i32::MAX as u64 || y > i32::MAX as u64 {
         return text_outcome("Checkbox coordinates are out of range.");
     }
     let page = cdp_call(ctx, json!({"action":"snapshot","ensure":false})).await;
     if !is_connection_check(&page) {
-        return text_outcome("No supported Cloudflare connection-check page was confirmed. Re-observe; use request_takeover for other CAPTCHA, login or 2FA. No click was sent.");
+        return text_outcome(
+            "No supported Cloudflare connection-check page was confirmed. Re-observe; use request_takeover for other CAPTCHA, login or 2FA. No click was sent.",
+        );
     }
     let already_attempted = {
         let mut attempted = ctx.connection_check_attempted.lock().unwrap();
@@ -694,10 +707,20 @@ async fn connection_check(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         Err(error) => return text_outcome(error.to_string()),
     };
     let adapter = ctx.adapter();
-    let result = ctx.sandbox.act(&ctx.computer_ref(), ActionRequest {
-        actions, observe:false, settle_ms:350,
-        display:adapter.display.clone(), profile_path:adapter.profile_path.clone(),
-    }, &adapter).await;
+    let result = ctx
+        .sandbox
+        .act(
+            &ctx.computer_ref(),
+            ActionRequest {
+                actions,
+                observe: false,
+                settle_ms: 350,
+                display: adapter.display.clone(),
+                profile_path: adapter.profile_path.clone(),
+            },
+            &adapter,
+        )
+        .await;
     if result.is_err() {
         return connection_takeover(ctx, "無法確認驗證點擊是否完成，請接管檢查。");
     }
@@ -708,12 +731,18 @@ async fn connection_check(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         // can also remove the checkbox. Return evidence for the task check.
         if after.ok && !is_connection_check(&after) && !after.text.trim().is_empty() {
             let mut outcome = observe(ctx).await;
-            outcome.text = format!("Connection-check markers disappeared. This is NOT proof of success. Confirm the requested content is actually visible before continuing; if a challenge/error remains, request_takeover.\n{}\n{}",
-                browser_result_text("snapshot", &after), outcome.text);
+            outcome.text = format!(
+                "Connection-check markers disappeared. This is NOT proof of success. Confirm the requested content is actually visible before continuing; if a challenge/error remains, request_takeover.\n{}\n{}",
+                browser_result_text("snapshot", &after),
+                outcome.text
+            );
             return outcome;
         }
     }
-    connection_takeover(ctx, "已嘗試一次驗證並等待，仍無法確認通過。請接管完成驗證，之後繼續原任務。")
+    connection_takeover(
+        ctx,
+        "已嘗試一次驗證並等待，仍無法確認通過。請接管完成驗證，之後繼續原任務。",
+    )
 }
 
 async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
@@ -802,7 +831,11 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             blocks: Vec::new(),
         };
     }
-    match ctx.sandbox.observe(&ctx.computer_ref(), &ctx.adapter()).await {
+    match ctx
+        .sandbox
+        .observe(&ctx.computer_ref(), &ctx.adapter())
+        .await
+    {
         Ok(observation) => {
             let (observation, note) = attach_ui_elements(ctx, observation, &text).await;
             pack_observation(ctx, &note, observation)
@@ -819,7 +852,10 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
 fn browser_result_text(action: &str, page: &CdpPage) -> String {
     format!(
         "browser {action}\nPage: {} {}\nClickable page elements: {}\nVisible text:\n{}",
-        page.title, page.url, format_ui_elements(&page.elements), page.text
+        page.title,
+        page.url,
+        format_ui_elements(&page.elements),
+        page.text
     )
 }
 
@@ -1201,13 +1237,11 @@ async fn shell(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         Ok(result) => result,
         Err(error) => return text_outcome(error.to_string()),
     };
-    text_outcome(format!(
-        "{}\n{}",
-        result.stdout.trim_end(),
-        result.stderr.trim_end()
+    text_outcome(
+        format!("{}\n{}", result.stdout.trim_end(), result.stderr.trim_end())
+            .trim_end()
+            .to_string(),
     )
-    .trim_end()
-    .to_string())
 }
 
 async fn list_files(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
@@ -1295,7 +1329,12 @@ async fn write_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     };
     match ctx
         .sandbox
-        .write_file(&ctx.computer_ref(), &stored, content.as_bytes(), &ctx.adapter())
+        .write_file(
+            &ctx.computer_ref(),
+            &stored,
+            content.as_bytes(),
+            &ctx.adapter(),
+        )
         .await
     {
         Ok(()) => ToolOutcome {
@@ -1438,7 +1477,9 @@ async fn list_saved_accounts(ctx: &ToolCtx) -> ToolOutcome {
                 })
                 .collect();
             if slim.is_empty() {
-                text_outcome("No saved logins. Ask the human to add one under 帳號, or call request_takeover so they can sign in on the screen.")
+                text_outcome(
+                    "No saved logins. Ask the human to add one under 帳號, or call request_takeover so they can sign in on the screen.",
+                )
             } else {
                 text_outcome(json!({"accounts": slim}).to_string())
             }
@@ -1640,13 +1681,33 @@ mod connection_check_tests {
     use super::*;
     #[test]
     fn recognizes_connection_wall_but_not_cloudflare_footer() {
-        for text in ["Cloudflare 驗證您是人類", "Cloudflare Verify you are human", "Dcard 需要確認您的連線是安全的"] {
-            assert!(is_connection_check(&CdpPage { ok:true, text:text.into(), ..Default::default() }));
+        for text in [
+            "Cloudflare 驗證您是人類",
+            "Cloudflare Verify you are human",
+            "Dcard 需要確認您的連線是安全的",
+        ] {
+            assert!(is_connection_check(&CdpPage {
+                ok: true,
+                text: text.into(),
+                ..Default::default()
+            }));
         }
-        for text in ["Article text. Protected by Cloudflare", "Sign in with your password", ""] {
-            assert!(!is_connection_check(&CdpPage { ok:true, text:text.into(), ..Default::default() }));
+        for text in [
+            "Article text. Protected by Cloudflare",
+            "Sign in with your password",
+            "",
+        ] {
+            assert!(!is_connection_check(&CdpPage {
+                ok: true,
+                text: text.into(),
+                ..Default::default()
+            }));
         }
-        assert!(!is_connection_check(&CdpPage { ok:false, text:"Cloudflare Verify you are human".into(), ..Default::default() }));
+        assert!(!is_connection_check(&CdpPage {
+            ok: false,
+            text: "Cloudflare Verify you are human".into(),
+            ..Default::default()
+        }));
     }
 }
 
@@ -1686,29 +1747,41 @@ mod shell_session_tests {
             argv(json!({"session":"build","keys":"C-c"})),
             ["lazyboy-shell", "keys", "build", "C-c"]
         );
-        assert_eq!(argv(json!({"reset":true})), ["lazyboy-shell", "reset", "main"]);
+        assert_eq!(
+            argv(json!({"reset":true})),
+            ["lazyboy-shell", "reset", "main"]
+        );
         assert!(shell_argv(&json!({"keys":"   "}), "main", None).is_err());
     }
 
     #[test]
     fn cwd_moves_this_command_into_a_directory_and_survives_quotes() {
-        let argv = shell_argv(&json!({"command":"make\ntest"}), "main", Some("/tmp/a b'c"))
-            .expect("argv");
+        let argv =
+            shell_argv(&json!({"command":"make\ntest"}), "main", Some("/tmp/a b'c")).expect("argv");
         assert_eq!(argv[4], "cd -- '/tmp/a b'\\''c' && {\nmake\ntest\n}");
     }
 
     #[test]
     fn waits_stay_inside_the_range_the_desktop_can_honour() {
         assert_eq!(shell_wait_ms(&json!({"wait_ms":900})), 1_000);
-        assert_eq!(shell_wait_ms(&json!({"wait_ms":900_000})), SHELL_WAIT_MS_MAX);
+        assert_eq!(
+            shell_wait_ms(&json!({"wait_ms":900_000})),
+            SHELL_WAIT_MS_MAX
+        );
         assert_eq!(shell_wait_ms(&json!({})), SHELL_WAIT_MS_DEFAULT);
         assert_eq!(shell_log_lines(&json!({"log_lines":0})), 1);
     }
 
     #[test]
     fn only_a_missing_script_falls_back_to_one_shot() {
-        assert!(shell_script_missing(127, "bash: lazyboy-shell: command not found"));
-        assert!(!shell_script_missing(127, "bash: whatever: command not found"));
+        assert!(shell_script_missing(
+            127,
+            "bash: lazyboy-shell: command not found"
+        ));
+        assert!(!shell_script_missing(
+            127,
+            "bash: whatever: command not found"
+        ));
         assert!(!shell_script_missing(1, "lazyboy-shell: nope"));
     }
 }

@@ -331,8 +331,14 @@ fn vault_key() -> Result<[u8; 32], String> {
     let material = std::env::var("LAZYBOY_VAULT_KEY")
         .ok()
         .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var("LAZYBOY_APP_TOKEN").ok().filter(|v| !v.is_empty()))
-        .ok_or_else(|| "set LAZYBOY_VAULT_KEY or LAZYBOY_APP_TOKEN to encrypt saved passwords".to_string())?;
+        .or_else(|| {
+            std::env::var("LAZYBOY_APP_TOKEN")
+                .ok()
+                .filter(|v| !v.is_empty())
+        })
+        .ok_or_else(|| {
+            "set LAZYBOY_VAULT_KEY or LAZYBOY_APP_TOKEN to encrypt saved passwords".to_string()
+        })?;
     let digest = Sha256::digest(material.as_bytes());
     let mut key = [0u8; 32];
     key.copy_from_slice(&digest);
@@ -383,7 +389,10 @@ mod tests {
 
     #[test]
     fn host_strips_urls() {
-        assert_eq!(normalize_host("https://mail.google.com/inbox", "Gmail"), "mail.google.com");
+        assert_eq!(
+            normalize_host("https://mail.google.com/inbox", "Gmail"),
+            "mail.google.com"
+        );
         assert_eq!(normalize_host("", "Gmail"), "gmail");
     }
 }

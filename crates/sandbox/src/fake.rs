@@ -4,9 +4,9 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use lazyboy_contracts::{ComputerObservation, SandboxKind};
 use lazyboy_control::{
-    ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult, ComputerRef,
-    FileEntry, ProvisionRequest, SandboxError, SandboxProvider, ScreenSession,
-    observation_from_png,
+    ActionRequest, ActionResult, AdapterContext, BrowserRequest, CdpPage, CommandRequest,
+    CommandResult, ComputerRef, FileEntry, ProvisionRequest, RecordingRequest, RecordingResult,
+    RecordingSession, SandboxError, SandboxProvider, ScreenSession, observation_from_png,
 };
 
 const EMPTY_PNG: &[u8] = &[
@@ -101,6 +101,50 @@ impl SandboxProvider for FakeSandbox {
                 None
             },
         })
+    }
+
+    async fn browser(
+        &self,
+        _computer: &ComputerRef,
+        _request: BrowserRequest,
+        _context: &AdapterContext,
+    ) -> Result<CdpPage, SandboxError> {
+        Ok(CdpPage {
+            ok: true,
+            url: "about:blank".into(),
+            title: "fake".into(),
+            ..CdpPage::default()
+        })
+    }
+
+    async fn start_recording(
+        &self,
+        _computer: &ComputerRef,
+        request: RecordingRequest,
+        _context: &AdapterContext,
+    ) -> Result<RecordingSession, SandboxError> {
+        Ok(RecordingSession {
+            skill_id: request.skill_id,
+            output_dir: "/tmp/lazyboy/teach-fake".into(),
+        })
+    }
+
+    async fn stop_recording(
+        &self,
+        _computer: &ComputerRef,
+        _request: RecordingRequest,
+        _context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
+        Ok(())
+    }
+
+    async fn collect_recording(
+        &self,
+        _computer: &ComputerRef,
+        _request: RecordingRequest,
+        _context: &AdapterContext,
+    ) -> Result<RecordingResult, SandboxError> {
+        Ok(RecordingResult { events: Vec::new() })
     }
 
     async fn connect_screen(

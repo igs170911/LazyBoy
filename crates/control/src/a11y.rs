@@ -139,7 +139,10 @@ mod tests {
         assert!(argv.contains(&"DISPLAY=:2".into()));
         assert!(argv.iter().any(|item| item.contains("python3")));
         assert!(argv.last().unwrap().contains("\"display\":\":2\""));
-        assert!(argv.iter().any(|item| item.contains("Atspi") || item.contains("atspi")));
+        assert!(
+            argv.iter()
+                .any(|item| item.contains("Atspi") || item.contains("atspi"))
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use lazyboy_contracts::UiElement;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::x11::parse_ui_elements;
@@ -52,11 +53,7 @@ pub fn cdp_stdin_command_on(display: &str, profile: Option<&str>) -> Vec<String>
     if let Some(profile) = profile.filter(|value| !value.is_empty()) {
         env.push(format!("LAZYBOY_BROWSER_PROFILE={profile}"));
     }
-    env.extend([
-        "python3".into(),
-        "-c".into(),
-        CDP_PY.into(),
-    ]);
+    env.extend(["python3".into(), "-c".into(), CDP_PY.into()]);
     env
 }
 
@@ -68,6 +65,23 @@ pub fn teach_recorder_tag(skill_id: &str) -> String {
 
 pub fn teach_recorder_output(skill_id: &str) -> String {
     format!("/tmp/{}.jsonl", teach_recorder_tag(skill_id))
+}
+
+pub fn sanitize_skill_id(skill_id: &str) -> String {
+    let cleaned: String = skill_id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+        .take(80)
+        .collect();
+    if cleaned.is_empty() {
+        "unknown".into()
+    } else {
+        cleaned
+    }
+}
+
+pub fn teach_trajectory_dir(skill_id: &str) -> String {
+    format!("/tmp/lazyboy/teach-{}", sanitize_skill_id(skill_id))
 }
 
 /// Detached, long-running CDP recorder for a human demonstration. The script
@@ -87,7 +101,8 @@ pub fn cdp_record_command_on(display: &str, profile: Option<&str>, skill_id: &st
     vec![
         "sh".into(),
         "-c".into(),
-        "setsid nohup env DISPLAY=\"$0\" python3 -c \"$1\" \"$2\" >/dev/null 2>&1 </dev/null &".into(),
+        "setsid nohup env DISPLAY=\"$0\" python3 -c \"$1\" \"$2\" >/dev/null 2>&1 </dev/null &"
+            .into(),
         normalize_display(display).to_string(),
         CDP_PY.into(),
         request.to_string(),
@@ -98,16 +113,24 @@ pub fn cdp_record_stop_command(skill_id: &str) -> Vec<String> {
     vec!["pkill".into(), "-f".into(), teach_recorder_tag(skill_id)]
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CdpPage {
     pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default)]
     pub url: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub text: String,
+    #[serde(default)]
     pub restarted: bool,
     /// Seconds the click waited for a disabled control to become enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waited_seconds: Option<f64>,
+    #[serde(default)]
     pub elements: Vec<UiElement>,
 }
 
@@ -162,6 +185,12 @@ mod tests {
         assert_eq!(devtools_port(":1"), 9222);
         assert_eq!(devtools_port(":2"), 9223);
         assert_eq!(devtools_port("3"), 9224);
+    }
+
+    #[test]
+    fn trajectory_dir_strips_path_chars() {
+        assert_eq!(teach_trajectory_dir("abc/../x"), "/tmp/lazyboy/teach-abcx");
+        assert_eq!(sanitize_skill_id(""), "unknown");
     }
 
     #[test]

@@ -33,9 +33,12 @@ pub enum ActionError {
 /// instead of failing the click.
 pub fn element_id(value: Option<&Value>) -> Option<u64> {
     match value? {
-        Value::Number(number) => number
-            .as_u64()
-            .or_else(|| number.as_f64().filter(|f| *f >= 0.0).map(|f| f.round() as u64)),
+        Value::Number(number) => number.as_u64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|f| *f >= 0.0)
+                .map(|f| f.round() as u64)
+        }),
         Value::String(text) => text
             .trim()
             .trim_start_matches(['#', '['])
@@ -611,9 +614,7 @@ mod tests {
         assert!(actions[0].get("x").is_none());
         let parsed = parse_computer_actions(&actions).unwrap();
         match &parsed[0] {
-            ComputerAction::Ref {
-                ref_kind, verb, ..
-            } => {
+            ComputerAction::Ref { ref_kind, verb, .. } => {
                 assert_eq!(ref_kind, "dom");
                 assert_eq!(*verb, RefVerb::Click);
             }
@@ -636,9 +637,7 @@ mod tests {
         }];
         let blocked = browser_gui_block(&json!([{"kind":"click","x":40,"y":80}]), &elements);
         assert!(blocked.unwrap().contains("browser"));
-        assert!(
-            browser_gui_block(&json!([{"kind":"click","element":1}]), &elements).is_none()
-        );
+        assert!(browser_gui_block(&json!([{"kind":"click","element":1}]), &elements).is_none());
     }
 
     #[test]

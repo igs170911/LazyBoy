@@ -115,7 +115,10 @@ mod tests {
 
     #[test]
     fn a_prose_answer_is_not_a_stop() {
-        assert_eq!(stop_reason(ExecutionMode::Bounded(40), 3, "done", false, false), None);
+        assert_eq!(
+            stop_reason(ExecutionMode::Bounded(40), 3, "done", false, false),
+            None
+        );
     }
 
     #[test]
@@ -132,7 +135,10 @@ mod tests {
             stop_reason(mode, 3, "需要密码\n[NEEDS_INPUT]", true, false),
             Some(StopReason::MidTaskText)
         );
-        assert_eq!(stop_reason(mode, 3, "我先跳到下一步", true, true), Some(StopReason::MidTaskText));
+        assert_eq!(
+            stop_reason(mode, 3, "我先跳到下一步", true, true),
+            Some(StopReason::MidTaskText)
+        );
         assert_eq!(stop_reason(mode, 3, "看起来好了", true, false), None);
     }
 
@@ -143,12 +149,21 @@ mod tests {
             Some(StopReason::BudgetExhausted)
         );
         assert_eq!(
-            stop_reason(ExecutionMode::Bounded(40), 40, "需要密码\n[NEEDS_INPUT]", true, false),
+            stop_reason(
+                ExecutionMode::Bounded(40),
+                40,
+                "需要密码\n[NEEDS_INPUT]",
+                true,
+                false
+            ),
             Some(StopReason::BudgetExhausted)
         );
         // A goal run that left the loop on its own terms reported its outcome;
         // the after-loop guard must not invent a second stop for it.
-        assert_eq!(stop_reason(ExecutionMode::Goal, 4000, "", true, false), None);
+        assert_eq!(
+            stop_reason(ExecutionMode::Goal, 4000, "", true, false),
+            None
+        );
         assert_eq!(
             stop_reason(ExecutionMode::Goal, 4000, "我先跳过这一步", true, true),
             Some(StopReason::MidTaskText)
@@ -178,8 +193,17 @@ mod tests {
     fn progress_and_quoted_markers_do_not_complete_a_goal() {
         assert_eq!(goal_outcome("[GOAL_COMPLETE]"), GoalOutcome::Continue);
         assert_eq!(goal_outcome("\n[GOAL_BLOCKED]"), GoalOutcome::Continue);
-        assert_eq!(goal_outcome("Next I will use [GOAL_COMPLETE]."), GoalOutcome::Continue);
-        assert_eq!(goal_outcome("Verified output.\n[GOAL_COMPLETE]"), GoalOutcome::Complete);
-        assert_eq!(goal_outcome("Please supply the date.\n[GOAL_BLOCKED]"), GoalOutcome::NeedsInput);
+        assert_eq!(
+            goal_outcome("Next I will use [GOAL_COMPLETE]."),
+            GoalOutcome::Continue
+        );
+        assert_eq!(
+            goal_outcome("Verified output.\n[GOAL_COMPLETE]"),
+            GoalOutcome::Complete
+        );
+        assert_eq!(
+            goal_outcome("Please supply the date.\n[GOAL_BLOCKED]"),
+            GoalOutcome::NeedsInput
+        );
     }
 }

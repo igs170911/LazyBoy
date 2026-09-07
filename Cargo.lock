@@ -1936,6 +1936,7 @@ name = "lazyboy-control"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "hex",
  "image",
@@ -1944,6 +1945,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1951,8 +1954,6 @@ name = "lazyboy-controld"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
- "lazyboy-contracts",
  "lazyboy-control",
  "serde_json",
  "tokio",

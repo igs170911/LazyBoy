@@ -19,8 +19,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use chrono::{DateTime, TimeDelta, Utc};
 use lazyboy_control::{
-    AdapterContext, CommandRequest, ComputerRef, cdp_record_command_on, cdp_record_stop_command,
-    frame_signature, signatures_similar, teach_recorder_output,
+    AdapterContext, ComputerRef, RecordingRequest, frame_signature, signatures_similar,
 };
 use rig_core::completion::message::{
     AssistantContent, ImageDetail, ImageMediaType, Message, UserContent,
@@ -282,17 +281,14 @@ async fn start_skill(
     })?;
 
     let ctx = computer::adapter_context_for(&actor, &bot_id, "teach", screen.as_ref(), None);
-    let display = ctx.display.clone().unwrap_or_else(|| ":1".into());
-    let argv = cdp_record_command_on(&display, ctx.profile_path.as_deref(), &skill_id);
     if let Err(error) = state
         .sandbox
-        .execute(
+        .start_recording(
             &computer_ref,
-            CommandRequest {
-                argv,
-                cwd: None,
-                timeout_ms: Some(10_000),
-                stdin: None,
+            RecordingRequest {
+                skill_id: skill_id.clone(),
+                display: ctx.display.clone(),
+                profile_path: ctx.profile_path.clone(),
             },
             &ctx,
         )
@@ -889,6 +885,14 @@ async fn record_loop(
     }
 }
 
+fn recording_request(skill_id: &str, ctx: &AdapterContext) -> RecordingRequest {
+    RecordingRequest {
+        skill_id: skill_id.to_string(),
+        display: ctx.display.clone(),
+        profile_path: ctx.profile_path.clone(),
+    }
+}
+
 async fn stop_recorder(
     state: &AppState,
     computer_ref: &ComputerRef,
@@ -897,16 +901,7 @@ async fn stop_recorder(
 ) {
     let _ = state
         .sandbox
-        .execute(
-            computer_ref,
-            CommandRequest {
-                argv: cdp_record_stop_command(skill_id),
-                cwd: None,
-                timeout_ms: Some(5_000),
-                stdin: None,
-            },
-            ctx,
-        )
+        .stop_recording(computer_ref, recording_request(skill_id, ctx), ctx)
         .await;
 }
 
@@ -916,34 +911,17 @@ async fn collect_browser_events(
     ctx: &AdapterContext,
     skill_id: &str,
 ) -> Vec<Value> {
-    let out = teach_recorder_output(skill_id);
-    let result = state
+    match state
         .sandbox
-        .execute(
-            computer_ref,
-            CommandRequest {
-                argv: vec![
-                    "sh".into(),
-                    "-c".into(),
-                    "cat \"$0\" 2>/dev/null; rm -f \"$0\"".into(),
-                    out,
-                ],
-                cwd: None,
-                timeout_ms: Some(10_000),
-                stdin: None,
-            },
-            ctx,
-        )
-        .await;
-    let Ok(result) = result else {
-        return Vec::new();
-    };
-    result
-        .stdout
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|event| event.get("t").and_then(Value::as_str) != Some("recorder"))
-        .collect()
+        .collect_recording(computer_ref, recording_request(skill_id, ctx), ctx)
+        .await
+    {
+        Ok(result) => result.events,
+        Err(error) => {
+            tracing::warn!("teach {skill_id}: collect recording failed: {error}");
+            Vec::new()
+        }
+    }
 }
 
 /// Stop recording, gather the trace, hand the desktop back and distil the

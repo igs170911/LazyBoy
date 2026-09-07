@@ -57,6 +57,7 @@
 | `LAZYBOY_COMPUTER_MEMORY_MB` | 每台電腦記憶體 | `2048` |
 | `LAZYBOY_COMPUTER_PIDS` | 每台電腦 PID 上限 | `2048` |
 | `LAZYBOY_COMPUTER_SUDO` | 容器內免密碼 sudo；重建桌面容器後生效 | `false` |
+| `LAZYBOY_COMPUTER_DRIVER` | 桌面控制後端：`cua`（預設）或 `legacy`（observe / act / browser / 示範錄製）；重建桌面容器後生效 | `cua` |
 | `LAZYBOY_MEMORY_ENABLED` | 長期記憶 | `true` |
 
 完整清單與保留政策請見 [`.env.example`](../.env.example)。

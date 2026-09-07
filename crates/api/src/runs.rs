@@ -1,7 +1,7 @@
 use lazyboy_harness::execution::{
-    ExecutionMode, GoalOutcome, MAX_NUDGES_GOAL, MAX_NUDGES_PLAIN, NEEDS_INPUT_MARKER, StopReason,
-    VERIFY_BEFORE_DONE, asks_for_input, goal_outcome, goal_request, stop_reason, GOAL_CONTINUE,
-    GOAL_INSTRUCTIONS,
+    ExecutionMode, GOAL_CONTINUE, GOAL_INSTRUCTIONS, GoalOutcome, MAX_NUDGES_GOAL,
+    MAX_NUDGES_PLAIN, NEEDS_INPUT_MARKER, StopReason, VERIFY_BEFORE_DONE, asks_for_input,
+    goal_outcome, goal_request, stop_reason,
 };
 use lazyboy_harness::policy::{ActionObserved, LoopGuard, RunPolicy, Verdict};
 use std::sync::Arc;
@@ -25,6 +25,8 @@ use crate::state::AppState;
 use crate::tools::{ToolCtx, ToolOutcome, dispatch, tool_definitions};
 
 const SCREENSHOT_CAPTION: &str = "Desktop screenshot (1280x800) with yellow numbered marks. Click by those element ids. The live VNC view has no marks.";
+
+const TAKEOVER_RESUME_PROMPT: &str = "The user finished collaborating and released control. Continue the original task from the CURRENT screen. Do not restart from scratch. Element ids and page refs from before the handoff are invalid; use only the fresh observation below.";
 
 const SYSTEM_CHAT: &str = "You are this bot's assistant. This message is conversation — a greeting, small talk, a question you can answer from knowledge, planning, or explaining.
 
@@ -179,7 +181,10 @@ pub async fn send(
                     checkpoint=checkpoint-'awaitResume', updated_at=now()
              WHERE id=$1 AND status IN ('waiting_input','waiting_takeover')",
         )
-            .bind(&run_id).execute(&mut *tx).await.map_err(|error| error.to_string())?;
+        .bind(&run_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
     }
     let message_id = Uuid::new_v4().to_string();
     let seq: i32 = sqlx::query_scalar(
@@ -472,7 +477,7 @@ async fn execute_run(
         "run",
         json!({"event": "started", "task": crate::monitor::snippet(prompt, 160)}),
     )
-        .await;
+    .await;
 
     let bot = state
         .db
@@ -625,16 +630,20 @@ async fn execute_run(
         None
     };
     let initial_prompt = if goal_mode {
-        format!("Execute this goal until it is verified complete:\n{}", goal_text)
+        format!(
+            "Execute this goal until it is verified complete:\n{}",
+            goal_text
+        )
     } else if let Some((skill, args)) = &file_skill {
-        format!("Run the /{} skill with these arguments: {}", skill.name, args)
+        format!(
+            "Run the /{} skill with these arguments: {}",
+            skill.name, args
+        )
     } else {
         prompt.to_string()
     };
     let mut first = if resume_after_takeover {
-        vec![UserContent::text(
-            "The user finished collaborating and released control. Continue the original task from the CURRENT screen. Do not restart from scratch.",
-        )]
+        vec![UserContent::text(TAKEOVER_RESUME_PROMPT)]
     } else {
         vec![UserContent::text(initial_prompt)]
     };
@@ -660,7 +669,11 @@ async fn execute_run(
     if !resume_after_takeover {
         // The user named a taught skill: hand the model the full playbook up
         // front so it does not have to guess or call use_skill first.
-        if let Some(skill) = if goal_mode || file_skill.is_some() { None } else { crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await } {
+        if let Some(skill) = if goal_mode || file_skill.is_some() {
+            None
+        } else {
+            crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await
+        } {
             first.push(UserContent::text(crate::skills::format_playbook_for_run(
                 &skill,
             )));
@@ -689,8 +702,12 @@ async fn execute_run(
         .any(|block| block.get("kind").and_then(Value::as_str) == Some("file"));
     // Greetings and small talk must not even *see* desktop tools: models
     // otherwise "check the screen" or `ls` the home on "hi" and boot Docker.
-    let chat_only =
-        !resume_after_takeover && !goal_mode && file_skill.is_none() && skill_check.is_none() && !workspace_file && is_plain_chat(prompt);
+    let chat_only = !resume_after_takeover
+        && !goal_mode
+        && file_skill.is_none()
+        && skill_check.is_none()
+        && !workspace_file
+        && is_plain_chat(prompt);
     if chat_only {
         // Memory is recalled separately and injected into the preamble below.
         // Do not expose even memory tools here: a plain greeting must be one
@@ -761,7 +778,11 @@ async fn execute_run(
     // steering input. Keep the run alive and deliver each new message once
     // before the next model turn instead of waiting for a second run to win
     // the bot lease.
-    let mut steering_seq = checkpoint.get("steeringSeq").and_then(Value::as_i64).map(|seq| seq as i32).unwrap_or(current_seq);
+    let mut steering_seq = checkpoint
+        .get("steeringSeq")
+        .and_then(Value::as_i64)
+        .map(|seq| seq as i32)
+        .unwrap_or(current_seq);
     let mut used_gui = false;
     let mut did_work = false;
     // One verification demand per run: enough to catch "I'm done" that isn't,
@@ -1057,7 +1078,11 @@ async fn execute_run(
                     goal_outcome(&final_text),
                     GoalOutcome::Complete | GoalOutcome::NeedsInput
                 );
-            let nudge_limit = if goal_mode { MAX_NUDGES_GOAL } else { MAX_NUDGES_PLAIN };
+            let nudge_limit = if goal_mode {
+                MAX_NUDGES_GOAL
+            } else {
+                MAX_NUDGES_PLAIN
+            };
             let mut verify_chosen = false;
             let nudge = if goal_mode {
                 match goal_outcome(&final_text) {
@@ -1114,9 +1139,7 @@ async fn execute_run(
                 if used_gui || skill_check.is_some() {
                     prepare_run_computer(state, actor, bot_id, run_id, &ctx, true).await?;
                 }
-                if (used_gui || skill_check.is_some())
-                    && ctx.gui_block.lock().unwrap().is_none()
-                {
+                if (used_gui || skill_check.is_some()) && ctx.gui_block.lock().unwrap().is_none() {
                     set_run_step(state, run_id, "computer_observe: 重新確認畫面").await;
                     let outcome = dispatch(&ctx, "computer_observe", &json!({})).await;
                     content.push(UserContent::text(outcome.text));
@@ -1511,7 +1534,11 @@ async fn execute_run(
         state,
         thread_id,
         run_id,
-        if needs_input { "run.paused" } else { "run.completed" },
+        if needs_input {
+            "run.paused"
+        } else {
+            "run.completed"
+        },
         turns,
         screenshots,
         screenshot_bytes,
@@ -1618,10 +1645,16 @@ async fn complete_with_retry(
     for attempt in 0..3 {
         if attempt > 0 {
             let failure = crate::monitor::classify_run_error(&last);
-            set_run_step(trace.state, trace.run_id, &format!(
-                "{} 正在自動重試模型（第 {}/3 次）；保留已完成的操作。",
-                failure.headline, attempt + 1
-            )).await;
+            set_run_step(
+                trace.state,
+                trace.run_id,
+                &format!(
+                    "{} 正在自動重試模型（第 {}/3 次）；保留已完成的操作。",
+                    failure.headline,
+                    attempt + 1
+                ),
+            )
+            .await;
         }
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
@@ -1779,7 +1812,10 @@ fn shrink_checkpoint(history: &mut Vec<Message>, pending: &mut Message) {
     cap_parts(pending);
     history.iter_mut().for_each(cap_parts);
     let fits = |turns: &[Message]| {
-        json!({"harnessHistory": turns, "harnessPending": pending}).to_string().len() <= LIMIT
+        json!({"harnessHistory": turns, "harnessPending": pending})
+            .to_string()
+            .len()
+            <= LIMIT
     };
     while !fits(history) && history.len() > 1 {
         history.remove(0);
@@ -1810,7 +1846,10 @@ async fn save_harness_checkpoint(
     // Only a checkpoint that still cannot fit after shrinking fails closed, and
     // loudly: the run keeps its uncertain-effects flag instead of freezing.
     if value.to_string().len() > 1024 * 1024 {
-        tracing::error!(run_id, "harness checkpoint still exceeds 1 MB after shrinking");
+        tracing::error!(
+            run_id,
+            "harness checkpoint still exceeds 1 MB after shrinking"
+        );
         return Ok(());
     }
     let result=sqlx::query("UPDATE runs SET checkpoint=COALESCE(checkpoint,'{}'::jsonb)||$3,updated_at=now() WHERE id=$1 AND lease_owner=$2 AND status='running'")
@@ -2090,7 +2129,9 @@ async fn pause_for_answer(
         }
     } else if !asks_for_input(req.draft) {
         // A model's optimistic draft must not hide a harness-detected stall.
-        format!("{draft}\n\n任務尚未確認完成。停止原因：{stall}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。")
+        format!(
+            "{draft}\n\n任務尚未確認完成。停止原因：{stall}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。"
+        )
     } else {
         draft
     };
@@ -2959,15 +3000,17 @@ fn describe_step(name: &str, args: &Value) -> String {
         }
         "shell" => {
             // The terminal does four different things; the feed says which.
-            let session = get("session")
-                .filter(|name| !name.trim().is_empty() && *name != "main");
+            let session = get("session").filter(|name| !name.trim().is_empty() && *name != "main");
             let suffix = session.map(|name| format!(" ·{name}")).unwrap_or_default();
             if args.get("reset").and_then(Value::as_bool).unwrap_or(false) {
                 format!("重開終端機{suffix}")
             } else if let Some(keys) = get("keys") {
                 format!("輸入 {}{suffix}", short(Some(keys), 20))
             } else {
-                match get("command").or(get("cmd")).filter(|line| !line.trim().is_empty()) {
+                match get("command")
+                    .or(get("cmd"))
+                    .filter(|line| !line.trim().is_empty())
+                {
                     Some(command) => format!("{}{suffix}", short(Some(command), 60)),
                     None => format!("讀終端機{suffix}"),
                 }
@@ -3114,8 +3157,8 @@ fn tool_status(timed_out: bool, pause: bool, text: &str) -> &'static str {
 fn action_changes_state(name: &str, args: &Value) -> bool {
     match name {
         "computer_act" | "shell" | "write_file" | "launch_app" | "open_path"
-        | "create_schedule" | "cancel_schedule" | "remember" | "forget_memory" | "use_saved_login"
-        | "request_takeover" => true,
+        | "create_schedule" | "cancel_schedule" | "remember" | "forget_memory"
+        | "use_saved_login" | "request_takeover" => true,
         "browser" => matches!(
             args.get("action").and_then(Value::as_str),
             Some("click") | Some("type") | Some("navigate") | Some("press")
@@ -3179,12 +3222,23 @@ async fn record_run_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        RunHalt, SCREENSHOT_CAPTION, describe_step, drop_history_screenshots, halt_from_status,
-        history_window_start, is_plain_chat, retryable_run_error, screenshot_parts, tool_needs_gui,
-        tool_needs_sandbox, tool_status,
+        RunHalt, SCREENSHOT_CAPTION, TAKEOVER_RESUME_PROMPT, describe_step,
+        drop_history_screenshots, halt_from_status, history_window_start, is_plain_chat,
+        retryable_run_error, screenshot_parts, tool_needs_gui, tool_needs_sandbox, tool_status,
     };
     use rig_core::completion::message::{Message, UserContent};
     use serde_json::json;
+
+    #[test]
+    fn takeover_resume_invalidates_pre_handoff_refs() {
+        assert!(
+            TAKEOVER_RESUME_PROMPT
+                .contains("Element ids and page refs from before the handoff are invalid")
+        );
+        assert!(TAKEOVER_RESUME_PROMPT.contains("fresh observation"));
+        assert!(tool_needs_gui("browser"));
+        assert!(tool_needs_gui("computer_observe"));
+    }
 
     #[test]
     fn the_trail_reads_a_tool_result_as_ok_error_timeout_or_pause() {

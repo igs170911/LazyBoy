@@ -116,21 +116,36 @@ pub enum VoiceEvent {
     AudioPcm(Vec<u8>),
     SpeechStarted,
     SpeechStopped,
-    InputTranscript { text: String, final_: bool },
-    OutputTranscript { text: String, final_: bool },
+    InputTranscript {
+        text: String,
+        final_: bool,
+    },
+    OutputTranscript {
+        text: String,
+        final_: bool,
+    },
     FunctionCall {
         call_id: String,
         name: String,
         arguments: String,
     },
-    FunctionCallOutput { call_id: String, output: String },
-    SpeakNow { text: String },
-    InjectContext { text: String },
+    FunctionCallOutput {
+        call_id: String,
+        output: String,
+    },
+    SpeakNow {
+        text: String,
+    },
+    InjectContext {
+        text: String,
+    },
     ResponseCreate,
     ResponseStarted,
     ResponseFinished,
     CancelResponse,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -190,7 +205,9 @@ fn native_roots() -> Result<rustls::RootCertStore, VoiceError> {
     let certs = rustls_native_certs::load_native_certs();
     roots.add_parsable_certificates(certs.certs);
     if roots.is_empty() {
-        return Err(VoiceError::Message("No trusted TLS certificates available".into()));
+        return Err(VoiceError::Message(
+            "No trusted TLS certificates available".into(),
+        ));
     }
     Ok(roots)
 }
@@ -222,18 +239,21 @@ impl VoiceRealtime for HostedVoice {
         );
         // Choose explicitly: the dependency graph enables both ring and aws-lc-rs.
         // Rustls's automatic provider selection panics in that configuration.
-        let tls = rustls::ClientConfig::builder_with_provider(
-            Arc::new(rustls::crypto::ring::default_provider()),
-        )
+        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
         .with_safe_default_protocol_versions()
         .map_err(|error| VoiceError::Message(error.to_string()))?
         .with_root_certificates(native_roots()?)
         .with_no_client_auth();
         let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
-            http_request, None, false, Some(tokio_tungstenite::Connector::Rustls(Arc::new(tls))),
+            http_request,
+            None,
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(Arc::new(tls))),
         )
-            .await
-            .map_err(|error| VoiceError::Message(error.to_string()))?;
+        .await
+        .map_err(|error| VoiceError::Message(error.to_string()))?;
         let (write, read) = stream.split();
         let socket = HostedSocket {
             provider: self.provider,
@@ -241,7 +261,9 @@ impl VoiceRealtime for HostedVoice {
             read,
         };
         socket
-            .send_raw(Message::Text(session_update_json(self.provider, &request).into()))
+            .send_raw(Message::Text(
+                session_update_json(self.provider, &request).into(),
+            ))
             .await?;
         for (role, text) in &request.history {
             if text.trim().is_empty() {
@@ -266,10 +288,13 @@ impl VoiceRealtime for HostedVoice {
     }
 }
 
-type HostedWrite =
-    futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>;
-type HostedRead =
-    futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>;
+type HostedWrite = futures_util::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Message,
+>;
+type HostedRead = futures_util::stream::SplitStream<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+>;
 
 struct HostedSocket {
     provider: VoiceProvider,
@@ -447,10 +472,7 @@ pub fn parse_provider_event(text: &str) -> Option<VoiceEvent> {
                 .and_then(Value::as_str)
                 .or_else(|| event.get("text").and_then(Value::as_str))?
                 .to_string();
-            Some(VoiceEvent::InputTranscript {
-                text,
-                final_: true,
-            })
+            Some(VoiceEvent::InputTranscript { text, final_: true })
         }
         "response.output_audio.delta" | "response.audio.delta" => {
             let encoded = event.get("delta").and_then(Value::as_str)?;
@@ -473,10 +495,7 @@ pub fn parse_provider_event(text: &str) -> Option<VoiceEvent> {
                 .or_else(|| event.get("text").and_then(Value::as_str))
                 .unwrap_or("")
                 .to_string();
-            Some(VoiceEvent::OutputTranscript {
-                text,
-                final_: true,
-            })
+            Some(VoiceEvent::OutputTranscript { text, final_: true })
         }
         "response.function_call_arguments.done" => {
             let call_id = event.get("call_id")?.as_str()?.to_string();
@@ -574,10 +593,7 @@ impl VoiceSocket for ScriptedSocket {
             }
             VoiceEvent::SpeakNow { text } | VoiceEvent::InjectContext { text } => {
                 let tx = self.incoming.lock().await;
-                let _ = tx.send(VoiceEvent::OutputTranscript {
-                    text,
-                    final_: true,
-                });
+                let _ = tx.send(VoiceEvent::OutputTranscript { text, final_: true });
                 let _ = tx.send(VoiceEvent::AudioPcm(Self::beep()));
             }
             VoiceEvent::ResponseCreate => {}
@@ -597,31 +613,49 @@ mod tests {
 
     #[test]
     fn voice_tls_config_uses_an_explicit_provider() {
-        let config = rustls::ClientConfig::builder_with_provider(
-            Arc::new(rustls::crypto::ring::default_provider()),
-        ).with_safe_default_protocol_versions().unwrap()
-         .with_root_certificates(native_roots().unwrap()).with_no_client_auth();
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(native_roots().unwrap())
+        .with_no_client_auth();
         assert!(!config.crypto_provider().cipher_suites.is_empty());
     }
 
     #[test]
     fn openai_audio_uses_json_and_nested_session_settings() {
         let request = VoiceConnectRequest {
-            api_key: String::new(), model_id: "gpt-realtime".into(),
-            voice_id: "marin".into(), instructions: "test".into(),
-            tools: vec![], history: vec![],
+            api_key: String::new(),
+            model_id: "gpt-realtime".into(),
+            voice_id: "marin".into(),
+            instructions: "test".into(),
+            tools: vec![],
+            history: vec![],
         };
-        let session: Value = serde_json::from_str(&session_update_json(VoiceProvider::Openai, &request)).unwrap();
+        let session: Value =
+            serde_json::from_str(&session_update_json(VoiceProvider::Openai, &request)).unwrap();
         assert!(session["session"].get("voice").is_none());
         assert!(session["session"].get("turn_detection").is_none());
-        assert_eq!(session.pointer("/session/audio/input/format/rate"), Some(&json!(24000)));
-        assert_eq!(session.pointer("/session/audio/input/turn_detection/type"), Some(&json!("server_vad")));
+        assert_eq!(
+            session.pointer("/session/audio/input/format/rate"),
+            Some(&json!(24000))
+        );
+        assert_eq!(
+            session.pointer("/session/audio/input/turn_detection/type"),
+            Some(&json!("server_vad"))
+        );
         let event = VoiceEvent::AudioPcm(vec![0, 1, 2, 3]);
-        let Some(Message::Text(text)) = encode_provider_event(VoiceProvider::Openai, &event) else { panic!("expected JSON audio") };
+        let Some(Message::Text(text)) = encode_provider_event(VoiceProvider::Openai, &event) else {
+            panic!("expected JSON audio")
+        };
         let encoded: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(encoded["type"], "input_audio_buffer.append");
         assert_eq!(encoded["audio"], "AAECAw==");
-        assert!(matches!(encode_provider_event(VoiceProvider::Xai, &event), Some(Message::Binary(_))));
+        assert!(matches!(
+            encode_provider_event(VoiceProvider::Xai, &event),
+            Some(Message::Binary(_))
+        ));
     }
 
     #[test]
@@ -656,9 +690,7 @@ mod tests {
 
     #[test]
     fn parses_xai_and_openai_event_aliases() {
-        let started = parse_provider_event(
-            r#"{"type":"input_audio_buffer.speech_started"}"#,
-        );
+        let started = parse_provider_event(r#"{"type":"input_audio_buffer.speech_started"}"#);
         assert!(matches!(started, Some(VoiceEvent::SpeechStarted)));
 
         let transcript = parse_provider_event(
@@ -672,9 +704,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
 
-        let old_audio = parse_provider_event(
-            r#"{"type":"response.audio.delta","delta":"AQID"}"#,
-        );
+        let old_audio = parse_provider_event(r#"{"type":"response.audio.delta","delta":"AQID"}"#);
         assert!(matches!(old_audio, Some(VoiceEvent::AudioPcm(_))));
 
         let tool = parse_provider_event(

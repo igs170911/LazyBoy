@@ -211,6 +211,48 @@ start_vnc() {
   wait_port "$view_port"
 }
 
+start_cua_driver() {
+  local display="$1"
+  local log="$2"
+  local number="${display#:}"
+  if ! command -v cua-driver >/dev/null 2>&1; then
+    return 0
+  fi
+  if alive_pidfile "${log}-cua.pid"; then
+    return 0
+  fi
+  export CUA_DRIVER_RS_HOME="${CUA_DRIVER_RS_HOME:-$ROOT/cua-home}"
+  mkdir -p "$CUA_DRIVER_RS_HOME"
+  cua-driver telemetry disable >>"${log}-cua.log" 2>&1 || true
+  local sock="$ROOT/cua-${number}.sock"
+  if [[ "$number" == "1" ]]; then
+    sock="$ROOT/cua.sock"
+  fi
+  rm -f "$sock"
+  DISPLAY="$display" cua-driver serve \
+    --grant existing-profile \
+    --socket "$sock" \
+    --pid-file "${log}-cua.pid" \
+    --no-overlay \
+    >>"${log}-cua.log" 2>&1 &
+  local bg=$!
+  local n
+  for n in $(seq 1 50); do
+    if [[ -S "$sock" ]]; then
+      return 0
+    fi
+    if ! kill -0 "$bg" 2>/dev/null; then
+      echo "cua-driver serve exited" >&2
+      cat "${log}-cua.log" >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "cua-driver socket was not ready" >&2
+  cat "${log}-cua.log" >&2 || true
+  return 1
+}
+
 start_xterm() {
   local display="$1"
   local log="$2"
@@ -286,6 +328,7 @@ ensure_slot() {
       exit 1
     }
     start_desktop "$display" "$xfce_home" "$log"
+    start_cua_driver "$display" "$log" || true
     start_xterm "$display" "$log"
     start_vnc "$display" "$vnc_port" "$view_port" "$log" || exit 1
     if [[ -n "$profile" ]]; then

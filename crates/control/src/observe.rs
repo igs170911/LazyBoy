@@ -1,5 +1,7 @@
+use base64::Engine;
 use chrono::Utc;
 use lazyboy_contracts::{ActiveWindow, ComputerObservation, CursorPosition, UiElement};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 pub fn observation_from_png(
@@ -20,6 +22,24 @@ pub fn observation_from_png(
         active_window,
         elements: Vec::new(),
     }
+}
+
+pub fn observation_to_control_json(observation: &ComputerObservation) -> Value {
+    let mut body = json!({
+        "png_base64": base64::engine::general_purpose::STANDARD.encode(&observation.image),
+    });
+    if let Some(cursor) = &observation.cursor {
+        body["cursor"] = json!({ "x": cursor.x, "y": cursor.y });
+    }
+    if let Some(window) = &observation.active_window {
+        body["activeWindow"] = json!({ "id": window.id, "title": window.title });
+    }
+    if !observation.elements.is_empty()
+        && let Ok(value) = serde_json::to_value(&observation.elements)
+    {
+        body["elements"] = value;
+    }
+    body
 }
 
 pub fn observation_with_elements(
@@ -62,7 +82,11 @@ const SIGNATURE_H: u32 = 18;
 pub fn frame_signature(image: &[u8]) -> Option<Vec<u8>> {
     let dynamic = image::load_from_memory(image).ok()?;
     let thumb = dynamic
-        .resize_exact(SIGNATURE_W, SIGNATURE_H, image::imageops::FilterType::Triangle)
+        .resize_exact(
+            SIGNATURE_W,
+            SIGNATURE_H,
+            image::imageops::FilterType::Triangle,
+        )
         .to_luma8();
     Some(thumb.into_raw())
 }
@@ -108,12 +132,20 @@ mod tests {
         let base = frame_signature(&png(|_, _| Rgb([240, 240, 240]))).unwrap();
         // A panel clock flipping digits touches a couple of pixels only.
         let clock = frame_signature(&png(|x, y| {
-            if x < 6 && y < 6 { Rgb([0, 0, 0]) } else { Rgb([240, 240, 240]) }
+            if x < 6 && y < 6 {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([240, 240, 240])
+            }
         }))
         .unwrap();
         // A dialog covering a quarter of the screen.
         let dialog = frame_signature(&png(|x, y| {
-            if x < 160 && y < 90 { Rgb([20, 20, 20]) } else { Rgb([240, 240, 240]) }
+            if x < 160 && y < 90 {
+                Rgb([20, 20, 20])
+            } else {
+                Rgb([240, 240, 240])
+            }
         }))
         .unwrap();
         assert!(signatures_similar(&base, &clock));

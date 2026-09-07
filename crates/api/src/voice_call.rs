@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Json;
 use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use futures_util::{SinkExt, StreamExt};
 use lazyboy_contracts::SessionAttachment;
 use lazyboy_harness::{VoiceConnectRequest, VoiceEvent, VoiceSocket, create_voice};
@@ -115,7 +115,9 @@ async fn prepare_call(
         .ok_or((StatusCode::NOT_FOUND, "workspace not found".into()))?;
     let (provider, resolved) =
         resolve_space_voice(&space).map_err(|message| (StatusCode::CONFLICT, message))?;
-    let history = recent_text_history(state, session_id).await.unwrap_or_default();
+    let history = recent_text_history(state, session_id)
+        .await
+        .unwrap_or_default();
     let mut connect = VoiceConnectRequest::from_resolved(
         &resolved,
         voice_instructions(&bot_name, &bot_instructions),
@@ -291,7 +293,8 @@ async fn handle_provider_event(
                 };
                 user_partial.clear();
                 if !body.is_empty() {
-                    let _ = persist_transcript(state, session_id, "user", &body, &prep.call_id).await;
+                    let _ =
+                        persist_transcript(state, session_id, "user", &body, &prep.call_id).await;
                     send_json(
                         client_write,
                         json!({"type":"transcript","role":"user","text":body,"final":true}),
@@ -340,8 +343,16 @@ async fn handle_provider_event(
             name,
             arguments,
         } => {
-            let output = dispatch_voice_tool(state, actor, &prep.bot_id, session_id, &prep.call_id, &name, &arguments)
-                .await;
+            let output = dispatch_voice_tool(
+                state,
+                actor,
+                &prep.bot_id,
+                session_id,
+                &prep.call_id,
+                &name,
+                &arguments,
+            )
+            .await;
             let _ = provider
                 .send(VoiceEvent::FunctionCallOutput {
                     call_id,
@@ -543,8 +554,7 @@ async fn watch_computer(
     )
     .await?;
     if let Some(line) = speakable_progress(&previous, &snapshot) {
-        let urgent = snapshot.get("status").and_then(Value::as_str)
-            == Some("takeover")
+        let urgent = snapshot.get("status").and_then(Value::as_str) == Some("takeover")
             || snapshot.get("status").and_then(Value::as_str) == Some("failed");
         if urgent || last_spoken_at.elapsed() > Duration::from_secs(6) {
             let _ = provider.send(VoiceEvent::SpeakNow { text: line }).await;
@@ -652,6 +662,10 @@ mod tests {
         );
         assert!(speakable_progress(&takeover.to_string(), &takeover).is_none());
         let idle = json!({"status":"idle"});
-        assert!(speakable_progress("{\"status\":\"running\"}", &idle).unwrap().contains("做完"));
+        assert!(
+            speakable_progress("{\"status\":\"running\"}", &idle)
+                .unwrap()
+                .contains("做完")
+        );
     }
 }

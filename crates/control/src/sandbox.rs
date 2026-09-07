@@ -77,6 +77,53 @@ impl ActionRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRequest {
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_ms: Option<u64>,
+    #[serde(default)]
+    pub ensure: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingRequest {
+    pub skill_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingSession {
+    pub skill_id: String,
+    pub output_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingResult {
+    pub events: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnsureScreenRequest {
     pub slot: u32,
@@ -208,6 +255,46 @@ pub trait SandboxProvider: Send + Sync {
         context: &AdapterContext,
     ) -> Result<ActionResult, SandboxError>;
 
+    async fn browser(
+        &self,
+        computer: &ComputerRef,
+        request: BrowserRequest,
+        context: &AdapterContext,
+    ) -> Result<crate::CdpPage, SandboxError> {
+        let _ = (computer, request, context);
+        Err(SandboxError::message("browser is unavailable"))
+    }
+
+    async fn start_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<RecordingSession, SandboxError> {
+        let _ = (computer, request, context);
+        Err(SandboxError::message("recording is unavailable"))
+    }
+
+    async fn stop_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
+        let _ = (computer, request, context);
+        Err(SandboxError::message("recording is unavailable"))
+    }
+
+    async fn collect_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<RecordingResult, SandboxError> {
+        let _ = (computer, request, context);
+        Err(SandboxError::message("recording is unavailable"))
+    }
+
     async fn connect_screen(
         &self,
         computer: &ComputerRef,
@@ -248,4 +335,36 @@ pub trait SandboxProvider: Send + Sync {
         computer: &ComputerRef,
         context: &AdapterContext,
     ) -> Result<(), SandboxError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn browser_request_reads_camel_case_wait_ms() {
+        let request: BrowserRequest = serde_json::from_value(json!({
+            "action": "click",
+            "waitMs": 12000,
+            "ensure": true,
+            "selector": "p1:1"
+        }))
+        .unwrap();
+        assert_eq!(request.action, "click");
+        assert_eq!(request.wait_ms, Some(12_000));
+        assert!(request.ensure);
+        assert_eq!(request.selector.as_deref(), Some("p1:1"));
+    }
+
+    #[test]
+    fn recording_request_reads_camel_case_skill_id() {
+        let request: RecordingRequest = serde_json::from_value(json!({
+            "skillId": "abc-1",
+            "display": ":2"
+        }))
+        .unwrap();
+        assert_eq!(request.skill_id, "abc-1");
+        assert_eq!(request.display.as_deref(), Some(":2"));
+    }
 }

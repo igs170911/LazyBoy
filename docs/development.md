@@ -38,6 +38,13 @@ python3 tests/control.test.py
 python3 tests/log-rotation.test.py
 python3 tests/shell-session.test.py   # 持久終端機腳本，只需要 tmux
 
+# Cua Driver 能否控制現有 XFCE + Xvfb 桌面（會建 computer image）
+make cua-smoke
+# 結果摘要見 docs/cua-compatibility.md
+# 生產路徑預設是 cua。要回退 CDP/xdotool：
+#   LAZYBOY_COMPUTER_DRIVER=legacy
+# 寫進 .env 後重建 supervisor 與桌面容器。Agent 工具 schema 不變。
+
 # Python 整合測試用 docker compose exec 連進 Postgres，自己建一次性資料庫後清掉
 python3 tests/retention.test.py
 python3 tests/run-resume.test.py

@@ -609,7 +609,9 @@ async fn stop(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = actor(&state).await.map_err(|status| (status, Json(json!({"message":"無法取得工作區"}))))?;
+    let actor = actor(&state)
+        .await
+        .map_err(|status| (status, Json(json!({"message":"無法取得工作區"}))))?;
     computer::stop(&state, &actor, &id)
         .await
         .map(|status| Json(serde_json::to_value(status).unwrap()))

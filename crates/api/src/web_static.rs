@@ -62,10 +62,8 @@ mod tests {
     use std::fs;
 
     fn scratch(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "lazyboy-web-static-{}-{name}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("lazyboy-web-static-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path

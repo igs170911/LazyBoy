@@ -54,6 +54,7 @@ exec /usr/bin/chromium \
   --disable-session-crashed-bubble \
   --hide-crash-restore-bubble \
   --disable-infobars \
+  --force-renderer-accessibility \
   --password-store=basic \
   --lang=zh-TW \
   --accept-lang=zh-TW,zh,en-US,en \

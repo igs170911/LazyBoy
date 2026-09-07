@@ -12,6 +12,7 @@ DATA_DIR       ?= ./data
 .PHONY: help env env-force \
         up logs ps health down purge \
         computer postgres postgres-down pg-collation \
+        cua-smoke \
         build build-api build-supervisor build-controld \
         fmt fmt-check clippy lint audit test clean \
         web \
@@ -31,6 +32,7 @@ help: ## Show this help
 	@echo ""
 	@echo "  Individual pieces:"
 	@echo "    make computer       Build the heavy Debian desktop image (lazyboy/computer:local)"
+	@echo "    make cua-smoke      Run Cua Driver smoke test in a disposable desktop container"
 	@echo "    make postgres       Start only postgres (127.0.0.1:5434) and wait for ready"
 	@echo "    make postgres-down  Stop postgres"
 	@echo "    make pg-collation   Repair a Postgres collation version mismatch (see docs)"
@@ -92,6 +94,9 @@ purge: ## Stop containers and delete the postgres data volume
 
 computer: ## Build the Debian desktop image used to spawn bot computers
 	docker build -f image/computer/Dockerfile -t $(COMPUTER_IMAGE) .
+
+cua-smoke: computer ## Run the Cua Driver smoke test inside a disposable desktop container
+	./scripts/cua-smoke-test.sh --docker --image $(COMPUTER_IMAGE)
 
 postgres: ## Start only postgres and wait until it is ready
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d postgres

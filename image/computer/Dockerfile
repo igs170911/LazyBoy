@@ -65,6 +65,9 @@ RUN printf '%s\n' \
     libatk-adaptor \
     python3-gi \
     gir1.2-atspi-2.0 \
+    gir1.2-gtk-3.0 \
+    libxi6 \
+    libxkbcommon0 \
     zsh \
   && echo "zh_TW.UTF-8 UTF-8" >> /etc/locale.gen \
   && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
@@ -136,8 +139,27 @@ COPY --chmod=644 image/computer/xfce/helper-terminal.desktop /usr/share/xfce4/he
 COPY --chmod=644 image/computer/xfce/helper-browser.desktop /usr/share/xfce4/helpers/lazyboy-browser.desktop
 COPY --chmod=755 image/computer/chromium /usr/local/bin/chromium
 RUN sed -i 's|^Exec=/usr/bin/chromium|Exec=/usr/local/bin/lazyboy-browser|' /usr/share/applications/chromium.desktop || true
+
+# Pin Cua Driver outside the persisted /home/lazyboy bind-mount.
+# SHA256 is the linux-x86_64-binary tarball from the matching GitHub release.
+ARG CUA_DRIVER_RS_VERSION=0.23.2
+ARG CUA_DRIVER_RS_SHA256=01bf8339ec129cc00f4b4b2c6056ef1a7c5b52df39ff83ad17c9b16818aec500
+RUN curl -fsSL -o /tmp/cua-driver.tar.gz \
+      "https://github.com/trycua/cua/releases/download/cua-driver-rs-v${CUA_DRIVER_RS_VERSION}/cua-driver-rs-${CUA_DRIVER_RS_VERSION}-linux-x86_64-binary.tar.gz" \
+  && echo "${CUA_DRIVER_RS_SHA256}  /tmp/cua-driver.tar.gz" | sha256sum -c \
+  && mkdir -p /usr/local/lib/cua-driver \
+  && tar -xzf /tmp/cua-driver.tar.gz -C /usr/local/lib/cua-driver \
+  && chmod 755 /usr/local/lib/cua-driver/cua-driver \
+  && ln -sf /usr/local/lib/cua-driver/cua-driver /usr/local/bin/cua-driver \
+  && rm -f /tmp/cua-driver.tar.gz \
+  && cua-driver --version
+
 COPY --chmod=755 image/computer/start.sh /usr/local/bin/lazyboy-computer
 COPY --chmod=755 image/computer/entrypoint.sh /usr/local/bin/lazyboy-entrypoint
+COPY --chmod=644 image/computer/cua-smoke.html /usr/share/lazyboy/cua-smoke.html
+COPY --chmod=755 image/computer/cua-smoke-gtk.py /usr/local/bin/lazyboy-cua-smoke-gtk
+COPY --chmod=755 scripts/cua-smoke-inner.py /usr/local/bin/lazyboy-cua-smoke
+COPY --chmod=755 scripts/cua-smoke-test.sh /usr/local/bin/lazyboy-cua-smoke-host
 
 USER root
 ENV HOME=/home/lazyboy DISPLAY=:1 SHELL=/bin/zsh TERM=xterm-256color \

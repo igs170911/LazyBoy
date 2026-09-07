@@ -13,9 +13,10 @@ use bollard::models::{EndpointSettings, HostConfig, HostConfigLogConfig, PortBin
 use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions};
 use futures_util::StreamExt;
 use lazyboy_control::{
-    ActionRequest, CommandRequest, CommandResult, EnsureScreenRequest, EnsureScreenResult, HOME,
-    ScreenTarget, TEAM_SCREEN_LIMIT, normalize_display, normalize_workspace_path,
-    pointer_state_command_on, screen_layout, screenshot_command_on, window_list_command_on,
+    ActionRequest, BrowserRequest, CommandRequest, CommandResult, EnsureScreenRequest,
+    EnsureScreenResult, HOME, RecordingRequest, ScreenTarget, TEAM_SCREEN_LIMIT, normalize_display,
+    normalize_workspace_path, pointer_state_command_on, screen_layout, screenshot_command_on,
+    window_list_command_on,
 };
 use tokio::time::{Duration, sleep};
 
@@ -187,7 +188,15 @@ impl DockerHost {
                 ),
                 format!(
                     "LAZYBOY_COMPUTER_SUDO={}",
-                    if computer_sudo_enabled() { "true" } else { "false" }
+                    if computer_sudo_enabled() {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                ),
+                format!(
+                    "LAZYBOY_COMPUTER_DRIVER={}",
+                    lazyboy_control::ComputerDriver::from_env().as_str()
                 ),
             ]),
             labels: Some(labels),
@@ -384,6 +393,25 @@ impl DockerHost {
         self.control_act(id, &request, &target).await
     }
 
+    pub async fn browser(
+        &self,
+        id: &str,
+        request: BrowserRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        self.control_browser(id, &request, target).await
+    }
+
+    pub async fn recording(
+        &self,
+        id: &str,
+        action: &str,
+        request: RecordingRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        self.control_recording(id, action, &request, target).await
+    }
+
     pub async fn screen_url(&self, id: &str, interactive: bool) -> Result<String, String> {
         self.screen_url_for(id, 0, interactive).await
     }
@@ -421,11 +449,7 @@ impl DockerHost {
                 .await
                 .map_err(|error| error.to_string())?;
             if info.state.as_ref().and_then(|state| state.running) == Some(true) {
-                let name = info
-                    .name
-                    .unwrap_or_default()
-                    .trim_matches('/')
-                    .to_string();
+                let name = info.name.unwrap_or_default().trim_matches('/').to_string();
                 if name.is_empty() {
                     return Err("computer container has no name".into());
                 }
@@ -994,6 +1018,87 @@ PY"#,
         }
         serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
     }
+
+    async fn control_browser(
+        &self,
+        id: &str,
+        request: &BrowserRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        let payload = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        let token = self.container_control_token(id).await?;
+        let timeout = if request.action == "click" {
+            "140"
+        } else {
+            "30"
+        };
+        let mut argv = vec![
+            "curl".into(),
+            "-fsS".into(),
+            "--max-time".into(),
+            timeout.into(),
+            "-H".into(),
+            format!("Authorization: Bearer {token}"),
+            "-H".into(),
+            format!("x-lazyboy-display: {}", target.display),
+            "-H".into(),
+            "content-type: application/json".into(),
+        ];
+        if let Some(profile) = &target.profile_path {
+            argv.extend(["-H".into(), format!("x-lazyboy-profile: {profile}")]);
+        }
+        argv.extend([
+            "--data-binary".into(),
+            "@-".into(),
+            "http://127.0.0.1:7070/browser".into(),
+        ]);
+        let result = self
+            .exec_raw_cmd(id, &argv, None, target, Some(payload))
+            .await?;
+        if result.code != 0 {
+            return Err(result.stderr);
+        }
+        serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
+    }
+
+    async fn control_recording(
+        &self,
+        id: &str,
+        action: &str,
+        request: &RecordingRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        let payload = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        let token = self.container_control_token(id).await?;
+        let timeout = if action == "collect" { "30" } else { "20" };
+        let mut argv = vec![
+            "curl".into(),
+            "-fsS".into(),
+            "--max-time".into(),
+            timeout.into(),
+            "-H".into(),
+            format!("Authorization: Bearer {token}"),
+            "-H".into(),
+            format!("x-lazyboy-display: {}", target.display),
+            "-H".into(),
+            "content-type: application/json".into(),
+        ];
+        if let Some(profile) = &target.profile_path {
+            argv.extend(["-H".into(), format!("x-lazyboy-profile: {profile}")]);
+        }
+        argv.extend([
+            "--data-binary".into(),
+            "@-".into(),
+            format!("http://127.0.0.1:7070/recording/{action}"),
+        ]);
+        let result = self
+            .exec_raw_cmd(id, &argv, None, target, Some(payload))
+            .await?;
+        if result.code != 0 {
+            return Err(result.stderr);
+        }
+        serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
+    }
 }
 
 fn image_ids_match(wanted: &str, have: &str) -> bool {
@@ -1041,7 +1146,10 @@ fn computer_pids_limit() -> i64 {
 }
 
 fn computer_sudo_enabled() -> bool {
-    matches!(std::env::var("LAZYBOY_COMPUTER_SUDO").as_deref(), Ok("1" | "true" | "yes"))
+    matches!(
+        std::env::var("LAZYBOY_COMPUTER_SUDO").as_deref(),
+        Ok("1" | "true" | "yes")
+    )
 }
 
 /// LXCFS supplies cgroup-aware /proc views so tools such as htop and free
