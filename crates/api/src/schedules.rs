@@ -617,7 +617,7 @@ pub fn describe_cron(expr: &str) -> String {
     if let Ok(Some(seconds)) = interval_seconds(expr) {
         return format!("每隔 {} 分鐘（固定間隔）", seconds / 60);
     }
-    let parts: Vec<&str> = expr.trim().split_whitespace().collect();
+    let parts: Vec<&str> = expr.split_whitespace().collect();
     if parts.len() != 5 {
         return expr.to_string();
     }
@@ -625,36 +625,40 @@ pub fn describe_cron(expr: &str) -> String {
     if expr.trim() == "* * * * *" {
         return "每分鐘".into();
     }
-    if let Some(rest) = min.strip_prefix("*/") {
-        if hour == "*" && dom == "*" && month == "*" && dow == "*" {
-            return if rest
-                .parse::<u32>()
-                .ok()
-                .is_some_and(|n| n > 0 && 60 % n == 0)
-            {
-                format!("每 {rest} 分鐘")
-            } else {
-                format!("日曆排程：{expr}")
-            };
-        }
+    if let Some(rest) = min.strip_prefix("*/")
+        && hour == "*"
+        && dom == "*"
+        && month == "*"
+        && dow == "*"
+    {
+        return if rest
+            .parse::<u32>()
+            .ok()
+            .is_some_and(|n| n > 0 && 60 % n == 0)
+        {
+            format!("每 {rest} 分鐘")
+        } else {
+            format!("日曆排程：{expr}")
+        };
     }
     if min == "0" && hour == "*" && dom == "*" && month == "*" && dow == "*" {
         return "每小時".into();
     }
-    if min == "0" {
-        if let Some(rest) = hour.strip_prefix("*/") {
-            if dom == "*" && month == "*" && dow == "*" {
-                return if rest
-                    .parse::<u32>()
-                    .ok()
-                    .is_some_and(|n| n > 0 && 24 % n == 0)
-                {
-                    format!("每 {rest} 小時")
-                } else {
-                    format!("日曆排程：{expr}")
-                };
-            }
-        }
+    if min == "0"
+        && let Some(rest) = hour.strip_prefix("*/")
+        && dom == "*"
+        && month == "*"
+        && dow == "*"
+    {
+        return if rest
+            .parse::<u32>()
+            .ok()
+            .is_some_and(|n| n > 0 && 24 % n == 0)
+        {
+            format!("每 {rest} 小時")
+        } else {
+            format!("日曆排程：{expr}")
+        };
     }
     if min.parse::<u32>().is_ok() && hour.parse::<u32>().is_ok() && month == "*" {
         let at = format!("{hour:0>2}:{min:0>2}");

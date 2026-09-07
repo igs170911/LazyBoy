@@ -34,20 +34,20 @@ pub struct Provisioned {
 }
 
 pub struct ObservePayload {
-    pub png: Vec<u8>,
     pub json: serde_json::Value,
 }
 
 impl ObservePayload {
     fn from_json(value: serde_json::Value) -> Result<Self, String> {
-        let encoded = value
+        // The screenshot travels inside `json` as base64; only its presence is
+        // checked here so a broken capture fails fast instead of returning an
+        // empty observation.
+        value
             .get("png_base64")
             .and_then(serde_json::Value::as_str)
+            .filter(|encoded| !encoded.is_empty())
             .ok_or_else(|| "missing png".to_string())?;
-        let png = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|error| error.to_string())?;
-        Ok(Self { png, json: value })
+        Ok(Self { json: value })
     }
 }
 
@@ -76,7 +76,7 @@ impl DockerHost {
             return Err("invalid home key".into());
         }
         let expected = PathBuf::from(&data_dir).join("homes").join(home_key);
-        if PathBuf::from(home_path) != expected {
+        if *home_path != expected {
             return Err("home path is outside managed homes".into());
         }
         // Work on the container-local path, not the host daemon's bind path.
@@ -251,42 +251,6 @@ impl DockerHost {
         })
     }
 
-    pub async fn exec(&self, id: &str, request: CommandRequest) -> Result<CommandResult, String> {
-        let cwd = match request.cwd {
-            Some(cwd) if PathBuf::from(&cwd).is_absolute() => cwd,
-            Some(cwd) => {
-                let relative = normalize_workspace_path(&cwd).map_err(|error| error.to_string())?;
-                if relative.is_empty() {
-                    HOME.to_string()
-                } else {
-                    format!("{HOME}/{relative}")
-                }
-            }
-            None => HOME.to_string(),
-        };
-        let timeout_ms = request.timeout_ms.unwrap_or(30_000).clamp(100, 120_000);
-        let argv = if request.argv.is_empty() {
-            vec!["/bin/echo".into(), "ready".into()]
-        } else {
-            request.argv
-        };
-        let mut bounded = vec![
-            "timeout".into(),
-            "--signal=TERM".into(),
-            "--kill-after=2s".into(),
-            format!("{}s", timeout_ms as f64 / 1000.0),
-        ];
-        bounded.extend(argv);
-        self.exec_raw_cmd(
-            id,
-            &bounded,
-            Some(&cwd),
-            &ScreenTarget::default(),
-            request.stdin,
-        )
-        .await
-    }
-
     pub async fn exec_on(
         &self,
         id: &str,
@@ -322,13 +286,6 @@ impl DockerHost {
             .await
     }
 
-    pub async fn observe(&self, id: &str) -> Result<Vec<u8>, String> {
-        Ok(self
-            .observe_payload(id, &ScreenTarget::default())
-            .await?
-            .png)
-    }
-
     pub async fn observe_payload(
         &self,
         id: &str,
@@ -352,23 +309,22 @@ impl DockerHost {
             let mut body = serde_json::json!({
                 "png_base64": base64::engine::general_purpose::STANDARD.encode(&stdout)
             });
-            if let Ok(meta) = self.pointer_state(id, target).await {
-                if let serde_json::Value::Object(map) = meta {
-                    if let Some(obj) = body.as_object_mut() {
-                        if let (Some(x), Some(y)) = (map.get("x"), map.get("y")) {
-                            obj.insert("cursor".into(), serde_json::json!({ "x": x, "y": y }));
-                        }
-                        if map
-                            .get("id")
-                            .and_then(serde_json::Value::as_str)
-                            .is_some_and(|id| !id.is_empty())
-                        {
-                            obj.insert(
-                                "activeWindow".into(),
-                                serde_json::json!({ "id": map.get("id"), "title": map.get("title") }),
-                            );
-                        }
-                    }
+            if let Ok(meta) = self.pointer_state(id, target).await
+                && let serde_json::Value::Object(map) = meta
+                && let Some(obj) = body.as_object_mut()
+            {
+                if let (Some(x), Some(y)) = (map.get("x"), map.get("y")) {
+                    obj.insert("cursor".into(), serde_json::json!({ "x": x, "y": y }));
+                }
+                if map
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                {
+                    obj.insert(
+                        "activeWindow".into(),
+                        serde_json::json!({ "id": map.get("id"), "title": map.get("title") }),
+                    );
                 }
             }
             body

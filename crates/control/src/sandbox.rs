@@ -2,7 +2,7 @@ use lazyboy_contracts::{ComputerAction, ComputerCapabilities, ComputerObservatio
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AdapterContext {
     pub operation_id: String,
     pub space_id: String,
@@ -18,23 +18,6 @@ pub struct AdapterContext {
     pub display: Option<String>,
     #[serde(default)]
     pub profile_path: Option<String>,
-}
-
-impl Default for AdapterContext {
-    fn default() -> Self {
-        Self {
-            operation_id: String::new(),
-            space_id: String::new(),
-            user_id: String::new(),
-            bot_id: None,
-            run_id: None,
-            screen_lease_id: None,
-            screen_id: None,
-            screen_slot: None,
-            display: None,
-            profile_path: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +36,7 @@ pub struct ProvisionRequest {
     pub provider_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CommandRequest {
     pub argv: Vec<String>,
     pub cwd: Option<String>,
@@ -62,17 +45,6 @@ pub struct CommandRequest {
     /// Used so fill-login never puts a password on the argv of `ps`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdin: Option<String>,
-}
-
-impl Default for CommandRequest {
-    fn default() -> Self {
-        Self {
-            argv: Vec::new(),
-            cwd: None,
-            timeout_ms: None,
-            stdin: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

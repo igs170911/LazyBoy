@@ -1076,15 +1076,14 @@ async fn pause_idle_computers(state: &AppState) {
         if computer_has_active_work(state, &computer.id).await {
             continue;
         }
-        if let Some(computer_ref) = computer_ref(&computer) {
-            if state
+        if let Some(computer_ref) = computer_ref(&computer)
+            && state
                 .sandbox
                 .suspend(&computer_ref, &idle_adapter(&computer, "idle"))
                 .await
                 .is_err()
-            {
-                continue;
-            }
+        {
+            continue;
         }
         let _ = sqlx::query(
             "UPDATE computers SET state = 'suspended', updated_at = now()

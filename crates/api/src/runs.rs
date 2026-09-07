@@ -236,7 +236,7 @@ pub async fn send(
         .bind(&member_run)
         .bind(&actor.space_id)
         .bind(member_id)
-        .bind(&thread_id)
+        .bind(thread_id)
         .bind(&actor.user_id)
         .bind(&stored_body)
         .bind(json!({"messageSeq":seq}))
@@ -296,19 +296,43 @@ pub async fn send(
     }))
 }
 
+/// `worker_loop` claim projection: run id, bot id, thread id, prompt, user id, space id.
+type RetryCandidateRow = (String, String, String, String, String, String);
+
 pub async fn worker_loop(state: AppState) {
     let inflight = Arc::new(tokio::sync::Semaphore::new(16));
     let lease_owner = format!("api-{}", Uuid::new_v4());
     loop {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let _ = sqlx::query("UPDATE runs SET status='failed',error='Worker interrupted after tool execution; inspect current state before continuing.',completed_at=now(),lease_owner=NULL,lease_expires_at=NULL WHERE status IN ('leased','running') AND lease_expires_at<now() AND COALESCE((checkpoint->>'toolsStarted')::boolean,false)")
-            .execute(state.pool()).await;
+        let interrupted: Vec<(String, String, String)> = sqlx::query_as(
+            "WITH doomed AS (
+                 UPDATE runs SET status='failed',error=$1,completed_at=now(),
+                     lease_owner=NULL, lease_expires_at=NULL
+                 WHERE status IN ('leased','running') AND lease_expires_at<now()
+                   AND COALESCE((checkpoint->>'toolsStarted')::boolean,false)
+                 RETURNING id, thread_id, bot_id
+             )
+             SELECT id, thread_id, bot_id FROM doomed LIMIT 50",
+        )
+        .bind(INTERRUPTED_ERROR)
+        .fetch_all(state.pool())
+        .await
+        .unwrap_or_default();
+        for (orphan_run, orphan_thread, orphan_bot) in interrupted {
+            report_run_failure(
+                &state,
+                &orphan_run,
+                &orphan_thread,
+                &orphan_bot,
+                INTERRUPTED_ERROR,
+            )
+            .await;
+        }
         let Ok(permit) = inflight.clone().try_acquire_owned() else {
             continue;
         };
-        let queued: Result<Option<(String, String, String, String, String, String)>, _> =
-            sqlx::query_as(
-                "WITH candidate AS (
+        let queued: Result<Option<RetryCandidateRow>, _> = sqlx::query_as(
+            "WITH candidate AS (
                SELECT r.id
                FROM runs r
                WHERE r.retry_count < r.max_retries
@@ -335,10 +359,10 @@ pub async fn worker_loop(state: AppState) {
                  lease_fence=lease_fence+1, retry_count=retry_count+1, updated_at=now()
              FROM candidate c WHERE r.id=c.id
              RETURNING r.id,r.bot_id,r.thread_id,r.prompt,r.user_id,r.space_id",
-            )
-            .bind(&lease_owner)
-            .fetch_optional(state.pool())
-            .await;
+        )
+        .bind(&lease_owner)
+        .fetch_optional(state.pool())
+        .await;
         let Ok(Some((run_id, bot_id, thread_id, prompt, user_id, space_id))) = queued else {
             drop(permit);
             continue;
@@ -371,14 +395,7 @@ pub async fn worker_loop(state: AppState) {
                     .ok()
                     .flatten();
                 if next_status.as_deref() == Some("failed") {
-                    let _ = append_bot_message(
-                        &state,
-                        &thread_id,
-                        &run_id,
-                        &bot_id,
-                        &format!("Run failed after retries: {error}"),
-                    )
-                    .await;
+                    report_run_failure(&state, &run_id, &thread_id, &bot_id, &error).await;
                     let _ = crate::sessions::append_event(
                         &state,
                         &thread_id,
@@ -431,6 +448,13 @@ async fn execute_run(
         return Err("run lease was lost before execution".into());
     }
     let _ = crate::sessions::append_event(state, thread_id, "run.started", json!({"runId":run_id}))
+        .await;
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({"event": "started", "task": crate::monitor::snippet(prompt, 160)}),
+    )
         .await;
 
     let bot = state
@@ -656,6 +680,13 @@ async fn execute_run(
         // model call with no chance of accidentally invoking any capability.
         defs.clear();
         tracing::info!(run_id, "chat-only turn: all tools withheld");
+        crate::monitor::record(
+            state,
+            run_id,
+            "notice",
+            json!({"text": "這一輪是對白，工具先收起來（不會動到電腦）。"}),
+        )
+        .await;
     }
     // Taught skills run long (a 24-page course is 24 clicks); plain chats stay
     // bounded tighter so a confused model cannot burn budget for as long.
@@ -667,6 +698,10 @@ async fn execute_run(
         ExecutionMode::Bounded(4)
     } else {
         ExecutionMode::Bounded(40)
+    };
+    let turn_limit = match execution_mode {
+        ExecutionMode::Goal => None,
+        ExecutionMode::Bounded(limit) => Some(limit as i64),
     };
     let mut nudges: u32 = 0;
     let mut screenshots: u32 = 0;
@@ -685,22 +720,21 @@ async fn execute_run(
         }
     }
     let mut pending = Message::User { content: first };
-    if !resume_after_takeover {
-        if let (Some(saved_history), Some(saved_pending)) = (
+    if !resume_after_takeover
+        && let (Some(saved_history), Some(saved_pending)) = (
             checkpoint.get("harnessHistory"),
             checkpoint.get("harnessPending"),
-        ) {
-            if let (Ok(restored), Ok(mut next)) = (
-                serde_json::from_value::<Vec<Message>>(saved_history.clone()),
-                serde_json::from_value::<Message>(saved_pending.clone()),
-            ) {
-                history = restored;
-                if let Message::User { content } = &mut next {
-                    content.push(UserContent::text("Resumed after a completed tool batch. Do not repeat completed actions. Observe current browser/desktop before any new mutation; prior element references may be stale."));
-                }
-                pending = next;
-            }
+        )
+        && let (Ok(restored), Ok(mut next)) = (
+            serde_json::from_value::<Vec<Message>>(saved_history.clone()),
+            serde_json::from_value::<Message>(saved_pending.clone()),
+        )
+    {
+        history = restored;
+        if let Message::User { content } = &mut next {
+            content.push(UserContent::text("Resumed after a completed tool batch. Do not repeat completed actions. Observe current browser/desktop before any new mutation; prior element references may be stale."));
         }
+        pending = next;
     }
 
     let mut final_text = String::new();
@@ -727,6 +761,13 @@ async fn execute_run(
         {
             Ok(items) => state.memory.durable_block(&items),
             Err(error) => {
+                crate::monitor::record(
+                    state,
+                    run_id,
+                    "notice",
+                    json!({"text": format!("記憶讀取失敗，這輪不用記憶：{error}")}),
+                )
+                .await;
                 tracing::warn!("memory retrieval failed for run {run_id}: {error}");
                 String::new()
             }
@@ -791,17 +832,17 @@ async fn execute_run(
             preamble.push_str("\n\n");
             preamble.push_str(&file_skill_index);
         }
-        if let Ok(accounts) = crate::vault::list_on(state.pool(), actor, bot_id).await {
-            if !accounts.is_empty() {
-                let names = accounts
-                    .iter()
-                    .map(|item| format!("{} ({})", item.site, item.username))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                preamble.push_str(&format!(
+        if let Ok(accounts) = crate::vault::list_on(state.pool(), actor, bot_id).await
+            && !accounts.is_empty()
+        {
+            let names = accounts
+                .iter()
+                .map(|item| format!("{} ({})", item.site, item.username))
+                .collect::<Vec<_>>()
+                .join(", ");
+            preamble.push_str(&format!(
                     "\n\nSaved logins (passwords are not shown): {names}. At a login wall call use_saved_login with the matching accountId from list_accounts."
                 ));
-            }
         }
     }
 
@@ -837,6 +878,16 @@ async fn execute_run(
                             guidance.join("\n")
                         )
                     };
+                    crate::monitor::record(
+                        state,
+                        run_id,
+                        "notice",
+                        json!({
+                            "turn": turns,
+                            "text": format!("收到新指示：{}", crate::monitor::snippet(&guidance.join(" / "), 160)),
+                        }),
+                    )
+                    .await;
                     if let Message::User { content } = &mut pending {
                         content.push(UserContent::text(text));
                     }
@@ -858,7 +909,7 @@ async fn execute_run(
             .await;
         }
         drop_history_screenshots(&mut history, &pending);
-        set_run_step(state, run_id, MODEL_STEP).await;
+        set_run_progress(state, run_id, MODEL_STEP, turns, turn_limit).await;
         let model_started = std::time::Instant::now();
         let content = tokio::select! {
             halt = wait_for_halt(state, run_id) => {
@@ -875,7 +926,14 @@ async fn execute_run(
                 )
                 .await;
             }
-            result = complete_with_retry(&model, pending.clone(), &preamble, &history, &defs) => result
+            result = complete_with_retry(
+                &model,
+                pending.clone(),
+                &preamble,
+                &history,
+                &defs,
+                Trace { state, run_id, turn: turns },
+            ) => result
         }?;
         let assistant = Message::Assistant {
             id: None,
@@ -885,20 +943,37 @@ async fn execute_run(
         history.push(assistant);
 
         let mut calls = Vec::new();
+        let mut turn_text = String::new();
         for item in &content {
             match item {
-                AssistantContent::Text(text) => final_text.push_str(&text.text),
+                AssistantContent::Text(text) => {
+                    final_text.push_str(&text.text);
+                    turn_text.push_str(&text.text);
+                }
                 AssistantContent::ToolCall(call) => calls.push(call.clone()),
                 _ => {}
             }
         }
+        let model_elapsed = model_started.elapsed().as_millis() as u64;
         tracing::info!(
             run_id,
             turn = turns,
-            elapsed_ms = model_started.elapsed().as_millis() as u64,
+            elapsed_ms = model_elapsed,
             tool_calls = calls.len(),
             "model turn"
         );
+        crate::monitor::record(
+            state,
+            run_id,
+            "model",
+            json!({
+                "turn": turns,
+                "elapsedMs": model_elapsed,
+                "toolCalls": calls.len(),
+                "text": crate::monitor::snippet(&turn_text, 200),
+            }),
+        )
+        .await;
         if calls.is_empty() {
             // A model that quits a playbook early, or parrots an earlier reply
             // instead of describing the current screen, gets pushed back to
@@ -946,6 +1021,22 @@ async fn execute_run(
                     verify = verify_chosen,
                     "nudging model back to tools"
                 );
+                crate::monitor::record(
+                    state,
+                    run_id,
+                    "notice",
+                    json!({
+                        "turn": turns,
+                        "text": if verify_chosen {
+                            format!("要求模型先證明做完了才准結束（第 {nudges} 次攔下）。")
+                        } else if parroted {
+                            format!("模型重複了舊的回答，叫它看現在畫面繼續做（第 {nudges} 次）。")
+                        } else {
+                            format!("模型想用一句話收尾，叫它用工具繼續（第 {nudges} 次）。")
+                        },
+                    }),
+                )
+                .await;
                 earlier_replies.push(final_text.trim().to_string());
                 final_text.clear();
                 let mut content = vec![UserContent::text(text)];
@@ -1047,13 +1138,14 @@ async fn execute_run(
             );
             did_work = true;
             let step = describe_step(&name, &call.function.arguments);
-            set_run_step(state, run_id, &step).await;
+            set_run_progress(state, run_id, &step, turns, turn_limit).await;
             let fence=sqlx::query("UPDATE runs SET checkpoint=COALESCE(checkpoint,'{}'::jsonb)||jsonb_build_object('toolsStarted',true) WHERE id=$1 AND lease_owner=$2 AND status='running'")
                 .bind(run_id).bind(lease_owner).execute(state.pool()).await.map_err(|e| e.to_string())?;
             if fence.rows_affected() != 1 {
                 return Err("run lease lost before tool dispatch".into());
             }
             let tool_started = std::time::Instant::now();
+            let mut tool_timed_out = false;
             let outcome = tokio::select! {
                 halt = wait_for_halt(state, run_id) => {
                     return finish_halt(
@@ -1076,12 +1168,15 @@ async fn execute_run(
                     Ok(outcome) => outcome,
                     // A slow tool is a normal turn, not a dead run: say the
                     // effects are unknown and let the model re-observe.
-                    Err(_) => ToolOutcome {
+                    Err(_) => {
+                        tool_timed_out = true;
+                        ToolOutcome {
                         text: format!("tool {name} timed out after 150 seconds. Its effects are unknown: observe the current screen or files before anything else, and never repeat a step that already worked."),
                         image: None,
                         pause: false,
                         blocks: Vec::new(),
-                    },
+                        }
+                    }
                 }
             };
             tracing::info!(
@@ -1094,6 +1189,20 @@ async fn execute_run(
                 pause = outcome.pause,
                 "tool call"
             );
+            crate::monitor::record(
+                state,
+                run_id,
+                "tool",
+                json!({
+                    "turn": turns,
+                    "name": name.clone(),
+                    "step": step.clone(),
+                    "status": tool_status(tool_timed_out, outcome.pause, &outcome.text),
+                    "elapsedMs": tool_started.elapsed().as_millis() as u64,
+                    "snippet": crate::monitor::snippet(&outcome.text, 200),
+                }),
+            )
+            .await;
             // xAI rejects images inside tool results. Attach a changed
             // screenshot as a following user image instead.
             if let Some(image) = outcome.image {
@@ -1161,7 +1270,16 @@ async fn execute_run(
             results.extend(screenshot_parts(png));
         }
         pending = Message::User { content: results };
-        save_harness_checkpoint(state, run_id, lease_owner, &history, &pending, turns, steering_seq).await?;
+        save_harness_checkpoint(
+            state,
+            run_id,
+            lease_owner,
+            &history,
+            &pending,
+            turns,
+            steering_seq,
+        )
+        .await?;
     }
 
     let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
@@ -1214,8 +1332,21 @@ async fn execute_run(
     }
     let needs_input = goal_mode && goal_outcome(&final_text) == GoalOutcome::NeedsInput;
     if needs_input {
-        let next = Message::User { content: vec![UserContent::text("The goal was paused for required user input. Read the user's new information and continue from completed work.")] };
-        save_harness_checkpoint(state, run_id, lease_owner, &history, &next, turns, steering_seq).await?;
+        let next = Message::User {
+            content: vec![UserContent::text(
+                "The goal was paused for required user input. Read the user's new information and continue from completed work.",
+            )],
+        };
+        save_harness_checkpoint(
+            state,
+            run_id,
+            lease_owner,
+            &history,
+            &next,
+            turns,
+            steering_seq,
+        )
+        .await?;
     }
     let final_text = final_text
         .replace("[GOAL_COMPLETE]", "")
@@ -1238,6 +1369,16 @@ async fn execute_run(
     if completed.rows_affected() != 1 {
         return Err("run lease was lost before completion".into());
     }
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({
+            "event": if needs_input { "waiting_input" } else { "completed" },
+            "turns": turns,
+        }),
+    )
+    .await;
     let click_misses = *ctx.click_misses.lock().unwrap();
     let takeover = *ctx.takeover_requested.lock().unwrap();
     record_run_metrics(
@@ -1331,12 +1472,21 @@ fn retryable_run_error(error: &str) -> bool {
     !matches!(code, 400..=499 if !matches!(code, 408 | 409 | 425 | 429))
 }
 
+/// Where a helper that is not the run loop itself writes its diagnostics.
+#[derive(Clone, Copy)]
+struct Trace<'a> {
+    state: &'a AppState,
+    run_id: &'a str,
+    turn: u32,
+}
+
 async fn complete_with_retry(
     model: &DynModel,
     pending: Message,
     preamble: &str,
     history: &[Message],
     defs: &[ToolDefinition],
+    trace: Trace<'_>,
 ) -> Result<Vec<AssistantContent>, String> {
     let mut last = String::new();
     for attempt in 0..3 {
@@ -1349,6 +1499,18 @@ async fn complete_with_retry(
         match result {
             Ok(Ok(content)) => return Ok(content),
             Ok(Err(error)) => {
+                crate::monitor::record(
+                    trace.state,
+                    trace.run_id,
+                    "retry",
+                    json!({
+                        "turn": trace.turn,
+                        "attempt": attempt + 1,
+                        "error": error,
+                        "gaveUp": !retryable_run_error(&error),
+                    }),
+                )
+                .await;
                 if !retryable_run_error(&error) {
                     return Err(error);
                 }
@@ -1360,8 +1522,19 @@ async fn complete_with_retry(
                 last = error;
             }
             Err(_) => {
-                tracing::warn!(attempt = attempt + 1, "model attempt exceeded its 165 second budget");
-                last = "model request timed out after 165 seconds".into();
+                let error = "model request timed out after 165 seconds";
+                crate::monitor::record(
+                    trace.state,
+                    trace.run_id,
+                    "retry",
+                    json!({"turn": trace.turn, "attempt": attempt + 1, "error": error}),
+                )
+                .await;
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    "model attempt exceeded its 165 second budget"
+                );
+                last = error.into();
             }
         }
         if attempt < 2 {
@@ -1702,6 +1875,13 @@ async fn finish_halt(
             .bind(run_id)
             .execute(state.pool())
             .await;
+            crate::monitor::record(
+                state,
+                run_id,
+                "run",
+                json!({"event": "paused", "reason": "takeover", "turns": turns}),
+            )
+            .await;
             let click_misses = *ctx.click_misses.lock().unwrap();
             record_run_metrics(
                 state,
@@ -1792,6 +1972,18 @@ async fn pause_for_answer(
     if paused.rows_affected() != 1 {
         return Err("run lease was lost before pausing".into());
     }
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({
+            "event": "paused",
+            "reason": req.reason.as_str(),
+            "turns": req.turns,
+            "limit": req.limit,
+        }),
+    )
+    .await;
     append_bot_message_with(
         state,
         thread_id,
@@ -2369,7 +2561,7 @@ fn is_greeting(normalized: &str) -> bool {
         "🙂",
         "😀",
     ];
-    if EXACT.iter().any(|item| normalized == *item) {
+    if EXACT.contains(&normalized) {
         return true;
     }
     const PREFIXES: &[&str] = &["hi ", "hey ", "hello ", "嗨", "你好"];
@@ -2641,6 +2833,113 @@ fn describe_step(name: &str, args: &Value) -> String {
     }
 }
 
+/// The error the claim sweep writes when a worker died holding a tool open.
+const INTERRUPTED_ERROR: &str =
+    "Worker interrupted after tool execution; inspect current state before continuing.";
+
+/// Step plus turn counter: what the bubble header reads out of the checkpoint.
+pub(crate) async fn set_run_progress(
+    state: &AppState,
+    run_id: &str,
+    step: &str,
+    turn: u32,
+    limit: Option<i64>,
+) {
+    let result = sqlx::query(
+        "UPDATE runs SET checkpoint = COALESCE(checkpoint, '{}'::jsonb)
+                || jsonb_build_object('step', $2::text, 'stepAt', now(),
+                                      'turn', $3::bigint, 'turnLimit', $4::bigint),
+                updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(step)
+    .bind(turn as i64)
+    .bind(limit)
+    .execute(state.pool())
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(run_id, "failed to record run progress: {error}");
+    }
+}
+
+/// Tell the human a run died, in their language, with the one next action. The
+/// raw error stays available through the run activity endpoint.
+async fn report_run_failure(
+    state: &AppState,
+    run_id: &str,
+    thread_id: &str,
+    bot_id: &str,
+    error: &str,
+) {
+    let progress: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
+        "SELECT checkpoint->>'step', (checkpoint->>'turn')::bigint FROM runs WHERE id=$1",
+    )
+    .bind(run_id)
+    .fetch_optional(state.pool())
+    .await
+    .unwrap_or(None);
+    let (last_step, turn) = progress.unwrap_or((None, None));
+    let failure = crate::monitor::classify_run_error(error);
+    let body = crate::monitor::failure_message(&failure, last_step.as_deref(), turn);
+    let _ = append_bot_message_with(
+        state,
+        thread_id,
+        run_id,
+        bot_id,
+        &body,
+        json!([{
+            "kind": "error",
+            "code": failure.code,
+            "retryable": failure.retryable,
+            "runId": run_id,
+            "turn": turn,
+            "step": last_step,
+        }]),
+    )
+    .await;
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({"event": "failed", "error": error}),
+    )
+    .await;
+}
+
+/// Display-only reading of a tool result. Tools report failure in prose, so the
+/// trail marks the shapes it recognises rather than pretending to know more.
+fn tool_status(timed_out: bool, pause: bool, text: &str) -> &'static str {
+    if timed_out {
+        return "timed_out";
+    }
+    if pause {
+        return "paused";
+    }
+    const FAILURES: [&str; 14] = [
+        "error",
+        "failed",
+        "failure",
+        "unable to",
+        "cannot ",
+        "can't ",
+        "timed out",
+        "denied",
+        "no such",
+        "exception",
+        "not available",
+        "失敗",
+        "錯誤",
+        "無法",
+    ];
+    let head: String = text.to_lowercase().chars().take(160).collect();
+    if FAILURES.iter().any(|needle| head.contains(needle)) {
+        "error"
+    } else {
+        "ok"
+    }
+}
+
 pub(crate) async fn set_run_step(state: &AppState, run_id: &str, step: &str) {
     let result = sqlx::query(
         "UPDATE runs SET checkpoint = COALESCE(checkpoint, '{}'::jsonb)
@@ -2696,10 +2995,22 @@ mod tests {
     use super::{
         RunHalt, SCREENSHOT_CAPTION, describe_step, drop_history_screenshots, halt_from_status,
         history_window_start, is_plain_chat, retryable_run_error, screenshot_parts, tool_needs_gui,
-        tool_needs_sandbox,
+        tool_needs_sandbox, tool_status,
     };
     use rig_core::completion::message::{Message, UserContent};
     use serde_json::json;
+
+    #[test]
+    fn the_trail_reads_a_tool_result_as_ok_error_timeout_or_pause() {
+        assert_eq!(tool_status(false, false, "clicked element #12"), "ok");
+        assert_eq!(
+            tool_status(false, false, "Error: selector not found"),
+            "error"
+        );
+        assert_eq!(tool_status(false, false, "操作失敗：視窗關閉"), "error");
+        assert_eq!(tool_status(true, false, "tool timed out"), "timed_out");
+        assert_eq!(tool_status(false, true, "需要人先登入"), "paused");
+    }
 
     #[test]
     fn chat_tools_do_not_need_the_desktop() {

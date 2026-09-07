@@ -220,9 +220,7 @@ async fn delete_session(
             Json(json!({"message":"session not found"})),
         ));
     }
-    cancel_session_runs(&state, &id)
-        .await
-        .map_err(|error| internal(error))?;
+    cancel_session_runs(&state, &id).await.map_err(internal)?;
     let mut tx = state
         .pool()
         .begin()
@@ -286,9 +284,7 @@ async fn clear_messages(
             Json(json!({"message":"session not found"})),
         ));
     }
-    cancel_session_runs(&state, &id)
-        .await
-        .map_err(|error| internal(error))?;
+    cancel_session_runs(&state, &id).await.map_err(internal)?;
     let mut tx = state
         .pool()
         .begin()
@@ -364,9 +360,7 @@ async fn stop_session(
             Json(json!({"message":"session not found"})),
         ));
     }
-    cancel_session_runs(&state, &id)
-        .await
-        .map_err(|error| internal(error))?;
+    cancel_session_runs(&state, &id).await.map_err(internal)?;
     Ok(Json(json!({"ok":true})))
 }
 
@@ -447,26 +441,29 @@ pub async fn default_session_for_bot(
     .await
 }
 
+/// `messages_for_session` projection: message columns joined with the speaking bot.
+type MessageWithSpeakerRow = (
+    String,
+    String,
+    i32,
+    String,
+    String,
+    Value,
+    Option<String>,
+    Option<String>,
+    chrono::DateTime<chrono::Utc>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 pub async fn messages_for_session(
     state: &AppState,
     actor: &Actor,
     id: &str,
 ) -> Result<Vec<SessionMessage>, ApiError> {
-    let rows: Vec<(
-        String,
-        String,
-        i32,
-        String,
-        String,
-        Value,
-        Option<String>,
-        Option<String>,
-        chrono::DateTime<chrono::Utc>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
+    let rows: Vec<MessageWithSpeakerRow> = sqlx::query_as(
         "SELECT m.id, m.thread_id, m.seq, m.role, m.body, m.blocks, m.run_id,
                 m.client_nonce, m.created_at, m.speaker_bot_id, b.name, b.avatar_color, b.avatar_shape
          FROM messages m

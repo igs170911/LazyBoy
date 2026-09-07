@@ -55,22 +55,22 @@ impl SandboxProvider for FakeSandbox {
         request: CommandRequest,
         _context: &AdapterContext,
     ) -> Result<CommandResult, SandboxError> {
-        if request.argv.get(0).map(String::as_str) == Some("mkdir") {
+        if request.argv.first().map(String::as_str) == Some("mkdir") {
             return Ok(CommandResult {
                 stdout: String::new(),
                 stderr: String::new(),
                 code: 0,
             });
         }
-        if request.argv.get(0).map(String::as_str) == Some("touch") {
-            if let Some(path) = request.argv.get(1) {
-                self.files
-                    .lock()
-                    .unwrap()
-                    .entry(computer.home_key.clone())
-                    .or_default()
-                    .insert(path.clone(), Vec::new());
-            }
+        if request.argv.first().map(String::as_str) == Some("touch")
+            && let Some(path) = request.argv.get(1)
+        {
+            self.files
+                .lock()
+                .unwrap()
+                .entry(computer.home_key.clone())
+                .or_default()
+                .insert(path.clone(), Vec::new());
         }
         Ok(CommandResult {
             stdout: request.argv.join(" "),

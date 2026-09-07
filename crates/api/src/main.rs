@@ -6,6 +6,7 @@ mod file_skills;
 mod mcp;
 mod mcp_catalog;
 mod memory;
+mod monitor;
 mod retention;
 mod rooms;
 mod routes;

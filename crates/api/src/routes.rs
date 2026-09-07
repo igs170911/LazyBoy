@@ -15,6 +15,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(crate::sessions::router())
         .merge(crate::memory::router())
+        .merge(crate::monitor::router())
         .merge(crate::rooms::router())
         .merge(crate::mcp::router())
         .merge(crate::workspace::router())
@@ -347,17 +348,16 @@ async fn delete_bot(
     if let Some(computer) = computer
         .as_ref()
         .filter(|row| parse_mode(&row.scope) == ComputerMode::Dedicated)
+        && let Some(computer_ref) = computer::computer_ref(computer)
     {
-        if let Some(computer_ref) = computer::computer_ref(computer) {
-            state
-                .sandbox
-                .destroy(
-                    &computer_ref,
-                    &computer::adapter_context(&actor, &id, "delete-bot"),
-                )
-                .await
-                .map_err(|error| bad_gateway(error.to_string()))?;
-        }
+        state
+            .sandbox
+            .destroy(
+                &computer_ref,
+                &computer::adapter_context(&actor, &id, "delete-bot"),
+            )
+            .await
+            .map_err(|error| bad_gateway(error.to_string()))?;
     }
 
     let mut tx = state.pool().begin().await.map_err(internal_error)?;

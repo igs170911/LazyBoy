@@ -130,7 +130,6 @@ mod tests {
             kind: Some("a11y".into()),
             selector: Some(format!("0/{id}")),
             role: Some("push button".into()),
-            ..UiElement::default()
         }
     }
 

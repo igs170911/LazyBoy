@@ -28,7 +28,9 @@ pub struct MemoryService {
 
 enum ModelState {
     Uninitialized,
-    Ready(TextEmbedding),
+    // Boxed: the embedding model is far larger than the other two variants and
+    // this enum lives inside an Arc<Mutex<..>> shared by every request.
+    Ready(Box<TextEmbedding>),
     Unavailable,
 }
 
@@ -102,7 +104,7 @@ impl MemoryService {
                     .with_cache_dir(cache_dir)
                     .with_show_download_progress(false);
                 match TextEmbedding::try_new(options) {
-                    Ok(embedding) => *state = ModelState::Ready(embedding),
+                    Ok(embedding) => *state = ModelState::Ready(Box::new(embedding)),
                     Err(error) => {
                         *state = ModelState::Unavailable;
                         return Err(format!("FastEmbed unavailable: {error}"));
@@ -151,7 +153,7 @@ impl MemoryService {
         let content = validate_content(&input.content)?;
         validate_importance(input.importance)?;
         let embedding = self.embed(content.clone()).await;
-        let vector = embedding.as_ref().map(vector_literal);
+        let vector = embedding.as_deref().map(vector_literal);
         let id = Uuid::new_v4();
         let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
         let item: MemoryItem = sqlx::query_as(
@@ -212,7 +214,7 @@ impl MemoryService {
         }
         let limit = limit.unwrap_or(self.top_k).clamp(1, 50);
         let embedding = self.embed(query.to_string()).await;
-        let rows = if let Some(vector) = embedding.as_ref().map(vector_literal) {
+        let rows = if let Some(vector) = embedding.as_deref().map(vector_literal) {
             sqlx::query_as(
                 "SELECT id,session_id,source_run_id,source_message_id,content,importance,revision,
                         created_at,updated_at,deleted_at
@@ -269,7 +271,7 @@ impl MemoryService {
         let vector = self
             .embed(content.clone())
             .await
-            .as_ref()
+            .as_deref()
             .map(vector_literal);
         let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
         let item: Option<MemoryItem> = sqlx::query_as(
@@ -377,7 +379,7 @@ async fn insert_revision(
     Ok(())
 }
 
-fn vector_literal(vector: &Vec<f32>) -> String {
+fn vector_literal(vector: &[f32]) -> String {
     format!(
         "[{}]",
         vector

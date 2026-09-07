@@ -728,20 +728,20 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             request[key] = value.clone();
         }
     }
-    if request.get("selector").and_then(Value::as_str).is_none() {
-        if let Some(id) = element_id(args.get("element").or_else(|| args.get("id"))) {
-            let elements = ctx.elements.lock().unwrap().clone();
-            match elements
-                .iter()
-                .find(|element| u64::from(element.id) == id)
-                .and_then(|element| element.selector.clone())
-            {
-                Some(selector) => request["selector"] = json!(selector),
-                None if matches!(action, "click" | "type") => {
-                    return pause_unknown_element(ctx, id as u32, &elements);
-                }
-                None => {}
+    if request.get("selector").and_then(Value::as_str).is_none()
+        && let Some(id) = element_id(args.get("element").or_else(|| args.get("id")))
+    {
+        let elements = ctx.elements.lock().unwrap().clone();
+        match elements
+            .iter()
+            .find(|element| u64::from(element.id) == id)
+            .and_then(|element| element.selector.clone())
+        {
+            Some(selector) => request["selector"] = json!(selector),
+            None if matches!(action, "click" | "type") => {
+                return pause_unknown_element(ctx, id as u32, &elements);
             }
+            None => {}
         }
     }
     if matches!(action, "click") && request.get("selector").and_then(Value::as_str).is_none() {

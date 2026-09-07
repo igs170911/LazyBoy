@@ -200,22 +200,22 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
             .unwrap_or_default();
         match kind {
             "click" | "move" | "down" | "up" => {
-                if kind == "click" {
-                    if let Some(target) = ref_target(action) {
-                        let pointer = ComputerAction::Ref {
-                            verb: RefVerb::Click,
-                            target,
-                            ref_kind: ref_kind(action),
-                            text: None,
-                        };
-                        let doubled = action.get("double").and_then(Value::as_bool) == Some(true);
-                        actions.push(pointer.clone());
-                        if doubled {
-                            actions.push(ComputerAction::Wait { ms: 70 });
-                            actions.push(pointer);
-                        }
-                        continue;
+                if kind == "click"
+                    && let Some(target) = ref_target(action)
+                {
+                    let pointer = ComputerAction::Ref {
+                        verb: RefVerb::Click,
+                        target,
+                        ref_kind: ref_kind(action),
+                        text: None,
+                    };
+                    let doubled = action.get("double").and_then(Value::as_bool) == Some(true);
+                    actions.push(pointer.clone());
+                    if doubled {
+                        actions.push(ComputerAction::Wait { ms: 70 });
+                        actions.push(pointer);
                     }
+                    continue;
                 }
                 let x = coordinate(action.get("x"), "x")?;
                 let y = coordinate(action.get("y"), "y")?;
@@ -558,7 +558,6 @@ mod tests {
             y: 20,
             w: 80,
             h: 24,
-            ..UiElement::default()
         }
     }
 

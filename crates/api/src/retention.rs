@@ -9,11 +9,13 @@ fn days(name: &str, default: i32) -> i32 {
 }
 
 pub async fn retention_loop(state: AppState) {
+    let recording_days = days("LAZYBOY_RECORDING_RETENTION_DAYS", 30);
     let rules = [
         ("events", include_str!("retention/events.sql"), days("LAZYBOY_EVENT_RETENTION_DAYS", 30)),
         ("checkpoints", include_str!("retention/checkpoints.sql"), days("LAZYBOY_CHECKPOINT_RETENTION_DAYS", 7)),
         ("runs", include_str!("retention/runs.sql"), days("LAZYBOY_RUN_RETENTION_DAYS", 90)),
-        ("recordings", include_str!("retention/recordings.sql"), days("LAZYBOY_RECORDING_RETENTION_DAYS", 30)),
+        ("run_activity", include_str!("retention/run_activity.sql"), days("LAZYBOY_RUN_ACTIVITY_RETENTION_DAYS", 7)),
+        ("recordings", include_str!("retention/recordings.sql"), recording_days),
         ("revisions", include_str!("retention/revisions.sql"), days("LAZYBOY_MEMORY_HISTORY_RETENTION_DAYS", 90)),
         ("deleted_memories", include_str!("retention/deleted_memories.sql"), days("LAZYBOY_MEMORY_HISTORY_RETENTION_DAYS", 90)),
         ("leases", include_str!("retention/leases.sql"), 7),
@@ -32,7 +34,7 @@ pub async fn retention_loop(state: AppState) {
             }
             if removed > 0 { tracing::info!(name, rows=removed, "retention cleaned expired diagnostics"); }
         }
-        if let Err(error) = clean_frames(&state, rules[3].2).await {
+        if let Err(error) = clean_frames(&state, recording_days).await {
             tracing::warn!(%error, "recording file retention failed; retry next hour");
         }
         if let Ok(bytes) = sqlx::query_scalar::<_, i64>("SELECT pg_database_size(current_database())").fetch_one(state.pool()).await {

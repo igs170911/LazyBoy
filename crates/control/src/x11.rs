@@ -386,6 +386,17 @@ pub fn screenshot_command_on(display: &str) -> Vec<String> {
     ]
 }
 
+/// Native clipboard path; text is supplied on stdin, never process arguments.
+pub fn paste_command_on(display: &str) -> Vec<String> {
+    vec![
+        "env".into(),
+        display_env(display),
+        "python3".into(),
+        "-c".into(),
+        include_str!("clipboard.py").into(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,15 +500,4 @@ mod tests {
         assert!(parse_ui_elements("").is_empty());
         assert!(parse_ui_elements("not-json").is_empty());
     }
-}
-
-/// Native clipboard path; text is supplied on stdin, never process arguments.
-pub fn paste_command_on(display: &str) -> Vec<String> {
-    vec![
-        "env".into(),
-        display_env(display),
-        "python3".into(),
-        "-c".into(),
-        include_str!("clipboard.py").into(),
-    ]
 }

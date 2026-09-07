@@ -33,9 +33,7 @@ fn parse_file(path: PathBuf, name: String) -> Option<FileSkill> {
         let (header, body) = rest.split_once("\n---")?;
         (
             header,
-            body.trim_start_matches(|ch| ch == '\n' || ch == '\r')
-                .trim()
-                .to_string(),
+            body.trim_start_matches(['\n', '\r']).trim().to_string(),
         )
     } else {
         ("", text.trim().to_string())

@@ -185,13 +185,13 @@ pub async fn llm_parts(
                 }
             }
         } else if is_text_mime(&stored.mime_type) {
-            if let Some(bytes) = bytes {
-                if let Some(text) = utf8_preview(&bytes) {
-                    parts.push(UserContent::text(format!(
-                        "Contents of {}:\n```\n{text}\n```",
-                        stored.name
-                    )));
-                }
+            if let Some(bytes) = bytes
+                && let Some(text) = utf8_preview(&bytes)
+            {
+                parts.push(UserContent::text(format!(
+                    "Contents of {}:\n```\n{text}\n```",
+                    stored.name
+                )));
             }
         } else {
             notes.push(
@@ -220,12 +220,12 @@ pub async fn sweep_all_inboxes(data_dir: &str) {
                 continue;
             };
             sweep_cap_inbox(&home, "inbox");
-            if let Ok(bots) = home.open_dir("bots") {
-                if let Ok(entries) = bots.entries() {
-                    for bot in entries.flatten() {
-                        if let Ok(dir) = bots.open_dir(bot.file_name()) {
-                            sweep_cap_inbox(&dir, "inbox");
-                        }
+            if let Ok(bots) = home.open_dir("bots")
+                && let Ok(entries) = bots.entries()
+            {
+                for bot in entries.flatten() {
+                    if let Ok(dir) = bots.open_dir(bot.file_name()) {
+                        sweep_cap_inbox(&dir, "inbox");
                     }
                 }
             }
@@ -351,9 +351,7 @@ fn parse_stored(value: &Value) -> Option<StoredAttachment> {
     }
     let path = value.get("path").and_then(Value::as_str).unwrap_or("");
     if !path.is_empty() {
-        let Some(stored) = path.strip_prefix("inbox/") else {
-            return None;
-        };
+        let stored = path.strip_prefix("inbox/")?;
         if stored.is_empty() || stored == "." || stored == ".." || stored.contains(['/', '\\']) {
             return None;
         }

@@ -241,10 +241,10 @@ async fn proxy_socket(mut client: WebSocket, host: String, port: u16, rest: Stri
                         if client.send(AxumMessage::Text(text.to_string().into())).await.is_err() { break; }
                     }
                     Some(Ok(WsMessage::Ping(data))) => {
-                        if client.send(AxumMessage::Ping(data.into())).await.is_err() { break; }
+                        if client.send(AxumMessage::Ping(data)).await.is_err() { break; }
                     }
                     Some(Ok(WsMessage::Pong(data))) => {
-                        if client.send(AxumMessage::Pong(data.into())).await.is_err() { break; }
+                        if client.send(AxumMessage::Pong(data)).await.is_err() { break; }
                     }
                     Some(Ok(WsMessage::Close(_))) | Some(Ok(WsMessage::Frame(_))) | None => break,
                     Some(Err(_)) => break,

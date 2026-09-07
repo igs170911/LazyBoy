@@ -113,8 +113,10 @@ pub fn computer_home_key(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum BrowserProfileMode {
     Shared,
+    #[default]
     PerBot,
     PerTask,
 }
@@ -126,12 +128,6 @@ impl BrowserProfileMode {
             Self::PerBot => "per-bot",
             Self::PerTask => "per-task",
         }
-    }
-}
-
-impl Default for BrowserProfileMode {
-    fn default() -> Self {
-        Self::PerBot
     }
 }
 

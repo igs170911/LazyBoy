@@ -36,20 +36,20 @@ impl DockerSandbox {
         if let Some(bot_id) = &context.bot_id {
             headers.insert("x-lazyboy-bot-id", bot_id.parse().unwrap());
         }
-        if let Some(display) = &context.display {
-            if let Ok(value) = display.parse() {
-                headers.insert("x-lazyboy-display", value);
-            }
+        if let Some(display) = &context.display
+            && let Ok(value) = display.parse()
+        {
+            headers.insert("x-lazyboy-display", value);
         }
-        if let Some(profile) = &context.profile_path {
-            if let Ok(value) = profile.parse() {
-                headers.insert("x-lazyboy-profile", value);
-            }
+        if let Some(profile) = &context.profile_path
+            && let Ok(value) = profile.parse()
+        {
+            headers.insert("x-lazyboy-profile", value);
         }
-        if let Some(slot) = context.screen_slot {
-            if let Ok(value) = slot.to_string().parse() {
-                headers.insert("x-lazyboy-screen-slot", value);
-            }
+        if let Some(slot) = context.screen_slot
+            && let Ok(value) = slot.to_string().parse()
+        {
+            headers.insert("x-lazyboy-screen-slot", value);
         }
         headers
     }

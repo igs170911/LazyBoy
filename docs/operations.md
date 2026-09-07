@@ -77,6 +77,37 @@ docker compose up -d api
 - 暫時性跨網存取建議維持 `127.0.0.1` 綁定改用隧道：`ssh -L 3101:127.0.0.1:3101 <host>`。
 - 桌面 noVNC 走 `LAZYBOY_SCREEN_NETWORK` 這條 internal 網路，不佔主機埠；同機跑多組 LazyBoy 時請為每組取不同名稱，compose 與 supervisor 會共用同一個值。
 
+## 執行記錄與錯誤診斷
+
+任務執行中的每一步會寫進 `run_activity`：模型每一輪在想什麼、哪個動作成功或
+失敗、花了幾秒、現在是第幾輪。這屬於診斷資料，不是對話內容，因此可以被清理。
+
+**看即時記錄。** 在對話框把滑鼠移到「思考中」的頭像上（或點一下釘住、用 `Tab`
+聚焦），會浮出即時記錄面板：
+
+- 標題列顯示「第 {n}/{limit} 輪」、已運行時間與現在在做什麼；goal 模式沒有輪次
+  上限時只顯示目前輪次，不會假裝有上限。
+- 記錄由舊到新排列並自動捲到底，包含模型回合、動作成敗與逾時、重試第幾次，以及
+  停下來等你的原因，最後停在哪裡一目了然。
+- 「複製記錄」可把整份純文字記錄貼給別人除錯；錯誤原文以等寬字型原樣顯示。
+- 面板只在開啟時每 1.5 秒增量抓取 `GET /api/runs/{id}/activity`，run 結束
+  （完成／失敗／取消）後停止輪詢，不開就完全不打 API。
+
+**出錯時說什麼。** 任務失敗會在對話框出現錯誤卡，而不是一行紅字：
+
+- 一句人話講清楚原因與下一步，例如「模型不認得這個 API 金鑰。到「設定 →
+  模型」重新貼一次金鑰，再按重試。」
+- 按鈕依錯誤類型給：`重試`（從中斷的地方接著做，保留 checkpoint，不重複已成功的
+  步驟）、`開模型設定`、`打開它的畫面`。金鑰錯誤不會只給重試，電腦消失也不會叫
+  你去看設定。
+- `ⓘ` 直接展開同一個即時記錄面板看詳細 log；錯誤代碼與原文都在裡面。
+- 重試走 `POST /api/runs/{id}/retry`，只對失敗或已取消的 run 生效；同一台電腦還有
+  別的工作在跑時會被擋下，並明確告訴你是因為還有別的工作。
+
+**保留多久。** `LAZYBOY_RUN_ACTIVITY_RETENTION_DAYS` 控制記錄保留天數，預設 7 天，
+每小時清理一次。想留更久的除錯軌跡就調大，在意資料庫體積就調小；run 本身被
+`LAZYBOY_RUN_RETENTION_DAYS` 清掉時，它的記錄一併消失。
+
 ## 網站連線驗證
 
 AI 遇到可辨識的 Cloudflare 連線驗證頁時，會先取得最新桌面截圖，再使用
@@ -95,3 +126,31 @@ AI 遇到可辨識的 Cloudflare 連線驗證頁時，會先取得最新桌面�
 這會重建桌面容器，讓 `lazyboy` 使用者能執行免密碼 `sudo`；可用
 `sudo -n id -u` 檢查，預期輸出 `0`。既有容器只暫停／恢復不會套用此設定。
 重新啟動前請儲存工作；家目錄保留，容器系統層自行安裝的套件需重新安裝。
+
+## Postgres collation 版本不符
+
+`pgvector/pgvector:pg16` 是浮動 tag。重新 `docker compose pull` 之後，容器內的 glibc
+版本可能和 `pgdata` 卷建立時不同，Postgres 會在使用每個資料庫時抱怨：
+
+```text
+WARNING:  database "template1" has a collation version mismatch
+DETAIL:   The database was created using collation version 2.41, but the operating system provides version 2.36.
+```
+
+此時 `CREATE DATABASE` 直接被拒（`ERROR: template database "template1" has a collation
+version mismatch`），凡是需要建立資料庫的測試都會失敗：`cargo test` 裡的 `#[sqlx::test]`
+表現在連線逾時（`PoolTimedOut`），`tests/retention.test.py`、`tests/run-resume.test.py`
+則在 `CREATE DATABASE` 就掛掉。
+
+原地修好，資料不遺失（會重建索引，資料量大時安排在離峰）：
+
+```bash
+docker compose stop api
+make pg-collation
+docker compose up -d api
+```
+
+它對 `template1`、`postgres`、`lazyboy` 各跑一次 `REINDEX DATABASE` 與
+`ALTER DATABASE ... REFRESH COLLATION VERSION`。collation provider 是 libc，排序規則
+真的可能跟著 glibc 變，所以先重建索引再更新記錄的版號，不要只改版號。想避免重複發生，
+把 Postgres 映像改成固定 digest，讓同一個資料卷不會被不同 glibc 開起來。

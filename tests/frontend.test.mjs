@@ -241,3 +241,90 @@ test('view-only pointer controls never send mouse input and trackpad asks for co
  assert.equal(v.pointerEvents.length,0);
  assert.equal(v.sent.at(-1).type,'lazyboy-request-control');
 });
+
+const monitorJs=ts.transpileModule(fs.readFileSync('apps/web/src/run-monitor.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+const monitorBox={exports:{},require:name=>{
+ if(name==='react')return{useCallback:fn=>fn,useEffect:()=>{},useRef:()=>({current:null}),useState:()=>[null,()=>{}]};
+ if(name==='react/jsx-runtime')return{jsx:()=>null,jsxs:()=>null,Fragment:'Fragment'};
+ if(name==='./api')return{api:async()=>({activity:[]})};
+ if(name==='./i18n')return{t:i18n.t,getLocale:()=>i18n.locale};
+ throw new Error('unexpected import '+name);
+}};
+vm.runInNewContext(monitorJs,monitorBox);
+const {formatElapsed,shortDuration,errorActions,errorTitle,trailText}=monitorBox.exports;
+const FAILURE_CODES=['interrupted','tool_timeout','model_key','model_quota','model_unknown','model_timeout','network','computer_gone','lease_lost','unknown'];
+
+test('run timings stay on one glanceable line',()=>{
+ assert.equal(formatElapsed(0),'0:00');
+ assert.equal(formatElapsed(9_500),'0:09');
+ assert.equal(formatElapsed(65_000),'1:05');
+ assert.equal(formatElapsed(3_725_000),'1:02:05');
+ assert.equal(formatElapsed(-5),'0:00');
+ assert.equal(formatElapsed(NaN),'0:00');
+ assert.equal(shortDuration(340),'340ms');
+ assert.equal(shortDuration(6_400),'6.4s');
+ assert.equal(shortDuration(65_000),'1:05');
+ assert.equal(shortDuration(null),'');
+ assert.equal(shortDuration(-1),'');
+});
+
+test('every failure code offers at least one action, in the right order',()=>{
+ const buttons=code=>errorActions(code).join(',');
+ assert.equal(buttons('model_key'),'settings,retry');
+ assert.equal(buttons('model_unknown'),'settings,retry');
+ assert.equal(buttons('model_quota'),'retry,settings');
+ assert.equal(buttons('model_timeout'),'retry,settings');
+ assert.equal(buttons('network'),'retry,settings');
+ assert.equal(buttons('computer_gone'),'screen,retry');
+ assert.equal(buttons('tool_timeout'),'screen,retry');
+ assert.equal(buttons('interrupted'),'screen,retry');
+ assert.equal(buttons('lease_lost'),'retry');
+ for(const code of [...FAILURE_CODES,'made_up',undefined,null]){
+  const actions=errorActions(code);
+  assert.ok(actions.length>0,String(code));
+  assert.ok(actions.every(action=>['retry','screen','settings'].includes(action)),code);
+  assert.equal(new Set(actions).size,actions.length,'no duplicate buttons for '+code);
+ }
+});
+
+test('failure titles resolve in both catalogs and never repeat themselves',()=>{
+ for(const locale of Object.keys(catalogs)){
+  i18n.locale=locale;
+  const titles=FAILURE_CODES.map(code=>errorTitle(code));
+  for(const [index,title] of titles.entries()){
+   assert.notEqual(title,title.startsWith('errorTitle')?title:`${title}-missing`,FAILURE_CODES[index]);
+   assert.ok(!title.startsWith('errorTitle'),`${locale} ${FAILURE_CODES[index]} has no copy`);
+   assert.ok(title.trim().length>0);
+  }
+  assert.equal(new Set(titles).size,titles.length,locale);
+  assert.ok(errorTitle('made_up').length>0);
+ }
+ i18n.locale='en';
+});
+
+test('trail lines read as sentences with the detail a stuck run needs',()=>{
+ assert.equal(trailText({id:1,kind:'model',createdAt:'',turn:3,elapsedMs:6400,text:'先打開網頁'}),'turn 3, thought for 6.4s — 先打開網頁');
+ assert.match(trailText({id:2,kind:'tool',createdAt:'',step:'browser: click #12',status:'ok',elapsedMs:400}),/browser: click #12 · ok · 400ms/);
+ assert.match(trailText({id:3,kind:'tool',createdAt:'',step:'shell: npm test',status:'timed_out',snippet:'killed after 150s'}),/timed out — killed after 150s/);
+ assert.match(trailText({id:4,kind:'run',createdAt:'',event:'started',task:'整理下載資料'}),/整理下載資料/);
+ assert.match(trailText({id:5,kind:'run',createdAt:'',event:'completed',turns:9}),/Done in 9 turns/);
+ assert.match(trailText({id:6,kind:'run',createdAt:'',event:'waiting_input',reason:'登入'}),/Waiting for you: 登入/);
+ assert.match(trailText({id:7,kind:'run',createdAt:'',event:'retry'}),/Re-queued/);
+ assert.match(trailText({id:8,kind:'retry',createdAt:'',attempt:2,gaveUp:true,error:'429 rate limit'}),/attempt 2 failed, retrying · gave up — 429 rate limit/);
+ assert.match(trailText({id:9,kind:'notice',createdAt:'',text:'這輪不需要電腦'}),/這輪不需要電腦/);
+});
+
+test('the bubble reads the run activity endpoint the API actually mounts',()=>{
+ const monitor=fs.readFileSync('crates/api/src/monitor.rs','utf8');
+ assert.match(monitor,/\.route\("\/api\/runs\/\{id\}\/activity", get\(activity\)\)/);
+ assert.match(monitor,/\.route\("\/api\/runs\/\{id\}\/retry", post\(retry\)\)/);
+ const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
+ assert.match(app,/chip\.kind==="error"\?/);
+ assert.match(app,/errorActions\(chip\.code\)/);
+ assert.match(app,/`\/api\/runs\/\$\{runId\}\/retry`,\{method:"POST",body:"\{\}"\}/);
+ assert.match(app,/<RunProbe runId=\{chip\.runId\|\|null\} align="end" label=\{t\("errorDetails"\)\}/);
+ assert.match(app,/<RunProbe runId=\{member\.id===computer\.botId\?computer\.busyRunId:null\}><Avatar/);
+ const probe=fs.readFileSync('apps/web/src/run-monitor.tsx','utf8');
+ assert.match(probe,/`\/api\/runs\/\$\{runId\}\/activity\$\{after\}`/);
+ assert.match(fs.readFileSync('apps/web/src/main.tsx','utf8'),/import "\.\/monitor\.css";/);
+});

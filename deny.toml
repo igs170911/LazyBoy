@@ -1,0 +1,58 @@
+# Supply-chain policy for the LazyBoy workspace, checked by `make audit`.
+# cargo-deny is not part of the Rust toolchain:
+#   cargo install --locked cargo-deny    (or grab a release binary)
+#
+# Three things are enforced: known vulnerabilities (RustSec), the license set we
+# are willing to ship, and where dependencies may come from.
+
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+]
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # `paste` is an eager-macro helper pulled in by fastembed -> tokenizers. It is
+    # archived upstream (no safe upgrade), only used while compiling macros, and we
+    # keep embeddings optional. Re-check on the next fastembed/tokenizers bump.
+    { id = "RUSTSEC-2024-0436", reason = "transitive proc-macro helper behind fastembed; unmaintained, no upgrade available" },
+]
+
+[licenses]
+# Permissive set only; copyleft candidates (MPL-2.0) stay file-level.
+confidence-threshold = 0.93
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+# Duplicate major/minor versions are normal in an application graph (they are
+# compiled once each); we only want to know when a dependency disappears.
+multiple-versions = "allow"
+wildcards = "deny"
+# Workspace members are path dependencies and carry no version requirement.
+allow-workspace = true
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

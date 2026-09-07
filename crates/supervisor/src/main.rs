@@ -387,10 +387,9 @@ async fn managed_boundary(
             .path()
             .strip_prefix("/computers/")
             .and_then(|p| p.split('/').next())
+            && app.docker.container_control_token(id).await.is_err()
         {
-            if app.docker.container_control_token(id).await.is_err() {
-                return StatusCode::NOT_FOUND.into_response();
-            }
+            return StatusCode::NOT_FOUND.into_response();
         }
     }
     next.run(req).await

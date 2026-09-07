@@ -1394,7 +1394,11 @@ pub fn fallback_playbook(goal: &str, events: &[Value]) -> Value {
         })
         .filter_map(|event| describe_event(event, t0))
         .map(|line| {
-            let text = line.splitn(2, ' ').nth(1).unwrap_or(&line).to_string();
+            let text = line
+                .split_once(' ')
+                .map(|x| x.1)
+                .unwrap_or(&line)
+                .to_string();
             json!({ "do": text, "expect": "", "note": "" })
         })
         .take(40)
