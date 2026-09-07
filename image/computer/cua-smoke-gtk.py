@@ -2,20 +2,22 @@
 """Tiny GTK window used by the Cua smoke test to verify native click/type."""
 
 from pathlib import Path
+import json
+import os
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import Gtk, Gdk, GLib
 
-ROOT = Path("/tmp/lazyboy")
+ROOT = Path(os.environ.get("LAZYBOY_SMOKE_ROOT", "/tmp/lazyboy"))
 CLICKED = ROOT / "cua-smoke-clicked"
 TYPED = ROOT / "cua-smoke-typed"
 
 
 class SmokeWindow(Gtk.Window):
     def __init__(self) -> None:
-        super().__init__(title="LazyBoy Cua Smoke")
+        super().__init__(title=os.environ.get("LAZYBOY_SMOKE_TITLE", "LazyBoy Cua Smoke"))
         self.set_default_size(480, 240)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.set_margin_top(16)
@@ -36,11 +38,36 @@ class SmokeWindow(Gtk.Window):
         box.pack_start(self.entry, False, False, 0)
         box.pack_start(save, False, False, 0)
 
+        self.drag_events = []
+        self.drag = Gtk.DrawingArea()
+        self.drag.set_size_request(400, 80)
+        self.drag.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.SCROLL_MASK)
+        for signal in ("button-press-event", "button-release-event", "motion-notify-event", "scroll-event"):
+            self.drag.connect(signal, self.on_drag_event, signal)
+        box.pack_start(self.drag, False, False, 0)
+        GLib.idle_add(self.save_drag_geometry)
+
         click.get_accessible().set_name("Smoke Click")
         self.entry.get_accessible().set_name("Smoke Entry")
         save.get_accessible().set_name("Smoke Save")
         self.status.get_accessible().set_name("Smoke Status")
         self.connect("destroy", Gtk.main_quit)
+
+    def save_drag_geometry(self):
+        # Root coords of the drawing area, not widget-local origin.
+        top = self.get_window().get_origin()
+        alloc = self.drag.get_allocation()
+        ROOT.mkdir(parents=True, exist_ok=True)
+        (ROOT / "cua-smoke-drag-geometry.json").write_text(json.dumps({
+            "x": int(top[-2]) + int(alloc.x),
+            "y": int(top[-1]) + int(alloc.y),
+        }))
+        return False
+
+    def on_drag_event(self, _widget, event, signal):
+        self.drag_events.append(signal)
+        (ROOT / "cua-smoke-drag.json").write_text(json.dumps(self.drag_events))
+        return False
 
     def on_click(self, _button: Gtk.Button) -> None:
         ROOT.mkdir(parents=True, exist_ok=True)

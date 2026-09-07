@@ -8,7 +8,7 @@ use crate::{launch_argv_on, open_argv_on};
 pub enum TranslatedAction {
     Cua { tool: &'static str, payload: Value },
     Sleep { ms: u64 },
-    LegacyArgv { argv: Vec<String>, detached: bool },
+    LegacyArgv { argv: Vec<String> },
     FocusTitle { title: String },
 }
 
@@ -21,15 +21,11 @@ pub fn translate_action(
         ComputerAction::Wait { ms } => Ok(TranslatedAction::Sleep { ms: u64::from(*ms) }),
         ComputerAction::Open { path } => Ok(TranslatedAction::LegacyArgv {
             argv: open_argv_on(display, profile, path),
-            detached: true,
         }),
         ComputerAction::Launch { application, uri } => {
             let argv = launch_argv_on(display, profile, application, uri.as_deref())
                 .ok_or(ControlError::Unsupported)?;
-            Ok(TranslatedAction::LegacyArgv {
-                argv,
-                detached: true,
-            })
+            Ok(TranslatedAction::LegacyArgv { argv })
         }
         ComputerAction::Ref { .. } => Err(ControlError::Unsupported),
         ComputerAction::Focus { title } => Ok(TranslatedAction::FocusTitle {

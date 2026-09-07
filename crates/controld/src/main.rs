@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use lazyboy_control::{
@@ -26,6 +27,7 @@ async fn main() {
     tracing::info!(backend = driver.as_str(), "computer controller");
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/controller/health", get(controller_health))
         .route("/observe", post(observe))
         .route("/act", post(act))
         .route("/browser", post(browser))
@@ -76,21 +78,64 @@ fn profile_of(headers: &HeaderMap, fallback: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn status_for(error: &ControlError) -> StatusCode {
-    if error.is_client_error() {
+struct ControlFailure(StatusCode, String);
+
+impl IntoResponse for ControlFailure {
+    fn into_response(self) -> Response {
+        (
+            self.0,
+            Json(serde_json::json!({ "ok": false, "error": self.1 })),
+        )
+            .into_response()
+    }
+}
+
+impl From<StatusCode> for ControlFailure {
+    fn from(status: StatusCode) -> Self {
+        Self(status, status.to_string())
+    }
+}
+
+fn status_for(error: &ControlError) -> ControlFailure {
+    let status = if error.is_client_error() {
         StatusCode::BAD_REQUEST
+    } else if matches!(error, ControlError::Timeout) {
+        StatusCode::GATEWAY_TIMEOUT
     } else {
         tracing::error!(error = %error, "control failed");
         StatusCode::INTERNAL_SERVER_ERROR
+    };
+    ControlFailure(status, error.to_string())
+}
+
+async fn controller_health(
+    State(app): State<App>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ControlFailure> {
+    if !authorized(&headers, &app.token) {
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
+    let ctx = ControlContext::new(display_of(&headers, None), None);
+    let health = app
+        .controller
+        .health(&ctx)
+        .await
+        .map_err(|error| status_for(&error))?;
+    Ok(Json(serde_json::json!({
+        "backend": health.backend,
+        "version": health.version,
+        "healthy": health.healthy,
+        "degraded": health.degraded,
+        "details": health.details,
+    })))
 }
 
 async fn observe(
     State(app): State<App>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ControlFailure> {
     if !authorized(&headers, &app.token) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
     let ctx = ControlContext::new(display_of(&headers, None), None);
     match app.controller.observe(&ctx).await {
@@ -103,9 +148,9 @@ async fn act(
     State(app): State<App>,
     headers: HeaderMap,
     Json(request): Json<ActionRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ControlFailure> {
     if !authorized(&headers, &app.token) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
     let ctx = ControlContext::new(
         display_of(&headers, request.display.as_deref()),
@@ -129,9 +174,9 @@ async fn browser(
     State(app): State<App>,
     headers: HeaderMap,
     Json(request): Json<BrowserRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ControlFailure> {
     if !authorized(&headers, &app.token) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
     let ctx = ControlContext::new(
         display_of(&headers, request.display.as_deref()),
@@ -156,9 +201,9 @@ async fn recording_start(
     State(app): State<App>,
     headers: HeaderMap,
     Json(request): Json<RecordingRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ControlFailure> {
     if !authorized(&headers, &app.token) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
     match app
         .controller
@@ -176,9 +221,9 @@ async fn recording_stop(
     State(app): State<App>,
     headers: HeaderMap,
     Json(request): Json<RecordingRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ControlFailure> {
     if !authorized(&headers, &app.token) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
     match app
         .controller
@@ -194,9 +239,9 @@ async fn recording_collect(
     State(app): State<App>,
     headers: HeaderMap,
     Json(request): Json<RecordingRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ControlFailure> {
     if !authorized(&headers, &app.token) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
     match app
         .controller

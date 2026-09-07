@@ -1,7 +1,9 @@
-use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::controller::ControlError;
@@ -42,11 +44,9 @@ impl CuaClient {
     }
 
     pub async fn version(&self) -> Result<String, ControlError> {
-        let output = Command::new(&self.bin)
-            .arg("--version")
-            .output()
-            .await
-            .map_err(|_| ControlError::DriverUnavailable)?;
+        let mut command = Command::new(&self.bin);
+        command.arg("--version");
+        let output = bounded_output(&mut command, Duration::from_secs(10)).await?;
         if !output.status.success() {
             return Err(ControlError::DriverUnavailable);
         }
@@ -58,11 +58,9 @@ impl CuaClient {
         if !socket.exists() {
             return Err(ControlError::DriverUnavailable);
         }
-        let output = Command::new(&self.bin)
-            .args(["status", "--socket", &socket.to_string_lossy()])
-            .output()
-            .await
-            .map_err(|_| ControlError::DriverUnavailable)?;
+        let mut command = Command::new(&self.bin);
+        command.args(["status", "--socket", &socket.to_string_lossy()]);
+        let output = bounded_output(&mut command, Duration::from_secs(10)).await?;
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
@@ -90,34 +88,104 @@ impl CuaClient {
             .env("DISPLAY", normalize_display(screen))
             .env(
                 "CUA_DRIVER_RS_HOME",
-                std::env::var("CUA_DRIVER_RS_HOME")
-                    .unwrap_or_else(|_| "/tmp/lazyboy/cua-home".into()),
+                format!(
+                    "/tmp/lazyboy/cua-home-{}",
+                    normalize_display(screen).trim_start_matches(':')
+                ),
             )
             .args(["call", "--socket", &socket.to_string_lossy()]);
         command.args(extra);
         command.arg(tool);
-        command.arg(payload.to_string());
+
         apply_desktop_bus(&mut command, screen);
         let started = Instant::now();
-        let output = command
-            .output()
-            .await
-            .map_err(|error| ControlError::internal(error.to_string()))?;
+        let output = bounded_input_output(&mut command, payload).await?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{stdout}\n{stderr}");
+        let value =
+            parse_jsonish(&stdout).unwrap_or_else(|| Value::String(stdout.trim().to_string()));
+        let error = if !output.status.success() || stdout.trim_start().starts_with('❌') {
+            Some(classify_cua_failure(&combined))
+        } else {
+            response_error(&value)
+        };
         tracing::info!(
             backend = "cua",
             tool,
             screen,
             duration_ms = started.elapsed().as_millis() as u64,
-            success = output.status.success() && !combined.contains('❌')
+            success = error.is_none()
         );
-        if !output.status.success() || combined.contains('❌') {
-            return Err(classify_cua_failure(&combined));
+        if let Some(error) = error {
+            return Err(error);
         }
-        Ok(parse_jsonish(&stdout).unwrap_or(Value::String(stdout.trim().to_string())))
+
+        Ok(value)
     }
+}
+
+fn response_error(value: &Value) -> Option<ControlError> {
+    if value
+        .get("code")
+        .and_then(Value::as_str)
+        .is_some_and(|code| code != "ok")
+        || value.get("ok").and_then(Value::as_bool) == Some(false)
+        || value.get("isError").and_then(Value::as_bool) == Some(true)
+        || matches!(
+            value.get("status").and_then(Value::as_str),
+            Some("refused" | "error")
+        )
+    {
+        Some(classify_cua_failure(&value.to_string()))
+    } else {
+        None
+    }
+}
+
+async fn bounded_input_output(
+    command: &mut Command,
+    payload: &Value,
+) -> Result<std::process::Output, ControlError> {
+    command
+        .kill_on_drop(true)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let mut child = command
+            .spawn()
+            .map_err(|_| ControlError::DriverUnavailable)?;
+        let mut input = child.stdin.take().ok_or(ControlError::DriverUnhealthy)?;
+        let bytes = payload.to_string();
+        // Drain stdout/stderr while writing so large inputs cannot deadlock.
+        let write = async {
+            input.write_all(bytes.as_bytes()).await?;
+            input.shutdown().await?;
+            drop(input);
+            Ok::<(), std::io::Error>(())
+        };
+        let (written, output) = tokio::join!(write, child.wait_with_output());
+        written.map_err(|_| ControlError::DriverUnhealthy)?;
+        output.map_err(|_| ControlError::DriverUnhealthy)
+    })
+    .await
+    .map_err(|_| ControlError::Timeout)?
+}
+
+async fn bounded_output(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<std::process::Output, ControlError> {
+    command.kill_on_drop(true);
+    tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| ControlError::Timeout)?
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => ControlError::DriverUnavailable,
+            std::io::ErrorKind::PermissionDenied => ControlError::PermissionDenied,
+            _ => ControlError::DriverUnhealthy,
+        })
 }
 
 fn apply_desktop_bus(command: &mut Command, display: &str) {
@@ -194,7 +262,7 @@ pub fn first_array_of_objects<'a>(value: &'a Value, required: &str) -> Vec<&'a V
 
 fn classify_cua_failure(text: &str) -> ControlError {
     let lower = text.to_ascii_lowercase();
-    if lower.contains("stale") {
+    if lower.contains("stale") || (lower.contains("session") && lower.contains("ended")) {
         ControlError::StaleReference
     } else if lower.contains("not_found") || lower.contains("not found") {
         ControlError::TargetNotFound
@@ -202,21 +270,60 @@ fn classify_cua_failure(text: &str) -> ControlError {
         ControlError::Timeout
     } else if lower.contains("permission") || lower.contains("consent") {
         ControlError::PermissionDenied
+    } else if lower.contains("invalid_action_target") {
+        ControlError::InvalidAction("Cua rejected the action target".into())
     } else if lower.contains("unsupported") {
         ControlError::Unsupported
-    } else if Path::new(PRIMARY_SOCKET)
-        .parent()
-        .is_some_and(|dir| !dir.exists())
-    {
-        ControlError::DriverUnavailable
     } else {
-        ControlError::internal(text)
+        // Driver diagnostics can echo typed text or credentials. Keep raw
+        // output out of Agent-visible errors and downstream logs.
+        ControlError::DriverUnhealthy
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_refusals_are_errors_but_page_text_is_not() {
+        assert!(response_error(&serde_json::json!({"code": "invalid_action_target"})).is_some());
+        assert!(response_error(&serde_json::json!({"outline": "❌ payment declined"})).is_none());
+    }
+
+    #[tokio::test]
+    async fn piped_json_reaches_eof_without_argv_exposure() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "cat"]);
+        let payload = serde_json::json!({"text": "秘密🙂"});
+        let output = tokio::time::timeout(
+            Duration::from_secs(2),
+            bounded_input_output(&mut command, &payload),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+            payload
+        );
+    }
+
+    #[tokio::test]
+    async fn hung_driver_is_bounded() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 30"]);
+        assert!(matches!(
+            bounded_output(&mut command, Duration::from_millis(20)).await,
+            Err(ControlError::Timeout)
+        ));
+    }
+
+    #[test]
+    fn unknown_driver_failure_does_not_echo_secret() {
+        let error = classify_cua_failure("failed typing secret-password");
+        assert_eq!(error, ControlError::DriverUnhealthy);
+    }
 
     #[test]
     fn primary_display_uses_well_known_socket() {

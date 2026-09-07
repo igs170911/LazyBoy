@@ -57,7 +57,7 @@
 | `LAZYBOY_COMPUTER_MEMORY_MB` | 每台電腦記憶體 | `2048` |
 | `LAZYBOY_COMPUTER_PIDS` | 每台電腦 PID 上限 | `2048` |
 | `LAZYBOY_COMPUTER_SUDO` | 容器內免密碼 sudo；重建桌面容器後生效 | `false` |
-| `LAZYBOY_COMPUTER_DRIVER` | 桌面控制後端：`cua`（預設）或 `legacy`（observe / act / browser / 示範錄製）；重建桌面容器後生效 | `cua` |
+| `LAZYBOY_COMPUTER_DRIVER` | 桌面控制後端：`legacy`（預設，CDP/AT-SPI/xdotool）或 `cua`（opt-in Cua Driver）。改完需重建桌面容器。本機可用 `docker compose -f docker-compose.yml -f docker-compose.cua.yml up -d --build` | `legacy` |
 | `LAZYBOY_MEMORY_ENABLED` | 長期記憶 | `true` |
 
 完整清單與保留政策請見 [`.env.example`](../.env.example)。

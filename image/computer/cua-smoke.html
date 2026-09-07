@@ -11,6 +11,7 @@
 <body>
   <h1>LazyBoy Cua Smoke</h1>
   <p id="result">ready</p>
+  <p id="persistent"></p>
   <p>
     <button id="click" type="button">Smoke Click</button>
   </p>
@@ -19,11 +20,17 @@
     <button id="save" type="button">Smoke Save</button>
   </p>
   <script>
+    var retained = document.cookie.includes("cuaSmoke=retained");
+    document.getElementById("persistent").textContent = retained ? "session-retained" : "fresh-session";
+    if (retained) {
+      document.title = "LazyBoy Cua Smoke (session-retained)";
+    }
     document.getElementById("click").onclick = function () {
       document.getElementById("result").textContent = "clicked-ok";
     };
     document.getElementById("save").onclick = function () {
       var value = document.getElementById("name").value;
+      document.cookie = "cuaSmoke=retained; Max-Age=86400; SameSite=Lax; path=/";
       document.getElementById("result").textContent = "typed:" + value;
     };
   </script>

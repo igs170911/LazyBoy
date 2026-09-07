@@ -90,7 +90,7 @@ fn truncate_error(text: &str) -> String {
     if trimmed.len() <= LIMIT {
         trimmed.to_string()
     } else {
-        format!("{}…", &trimmed[..LIMIT])
+        format!("{}…", &trimmed[..trimmed.floor_char_boundary(LIMIT)])
     }
 }
 
@@ -105,15 +105,15 @@ impl ComputerDriver {
 
     pub fn from_env() -> Self {
         match std::env::var(Self::ENV) {
-            Ok(value) if value.trim().is_empty() => Self::Cua,
+            Ok(value) if value.trim().is_empty() => Self::Legacy,
             Ok(value) => match value.parse() {
                 Ok(driver) => driver,
                 Err(error) => {
-                    tracing::error!("{error}; using cua");
-                    Self::Cua
+                    tracing::error!("{error}; using legacy");
+                    Self::Legacy
                 }
             },
-            Err(_) => Self::Cua,
+            Err(_) => Self::Legacy,
         }
     }
 
@@ -203,6 +203,15 @@ mod tests {
         );
         assert!("xdotool".parse::<ComputerDriver>().is_err());
         assert_eq!(ComputerDriver::Cua.as_str(), "cua");
+    }
+
+    #[test]
+    fn long_unicode_errors_do_not_panic() {
+        let text = "錯".repeat(300);
+        let error = ControlError::internal(&text).to_string();
+        assert!(error.ends_with('…'));
+        assert!(error.len() <= 803);
+        assert!(text.starts_with(error.trim_end_matches('…')));
     }
 
     #[test]

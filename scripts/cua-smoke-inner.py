@@ -522,6 +522,7 @@ def browser_prepare(pid: int, window_id: int) -> dict[str, Any]:
 
 
 def browser_round(iteration: int) -> dict[str, Any]:
+    cua_call("start_session", {"session": "lazyboy-smoke"})
     windows = list_windows()
     window = find_browser_window(windows)
     if not window:

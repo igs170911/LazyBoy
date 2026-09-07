@@ -215,19 +215,27 @@ start_cua_driver() {
   local display="$1"
   local log="$2"
   local number="${display#:}"
+  [[ "${LAZYBOY_COMPUTER_DRIVER:-legacy}" == "cua" ]] || return 0
   if ! command -v cua-driver >/dev/null 2>&1; then
-    return 0
+    echo "Cua backend selected but cua-driver is not installed" >&2
+    return 1
   fi
+  local sock="$ROOT/cua-${number}.sock"
+  if [[ "$number" == "1" ]]; then sock="$ROOT/cua.sock"; fi
   if alive_pidfile "${log}-cua.pid"; then
-    return 0
+    if [[ -S "$sock" ]]; then return 0; fi
+    echo "Cua process exists but its display socket is missing" >&2
+    return 1
   fi
-  export CUA_DRIVER_RS_HOME="${CUA_DRIVER_RS_HOME:-$ROOT/cua-home}"
+  export CUA_DRIVER_RS_HOME="$ROOT/cua-home-${number}"
+  if [[ -s "$ROOT/screen-${number}.dbus" ]]; then
+    export DBUS_SESSION_BUS_ADDRESS="$(cat "$ROOT/screen-${number}.dbus")"
+  fi
+  if [[ -s "$ROOT/screen-${number}.runtime" ]]; then
+    export XDG_RUNTIME_DIR="$(cat "$ROOT/screen-${number}.runtime")"
+  fi
   mkdir -p "$CUA_DRIVER_RS_HOME"
   cua-driver telemetry disable >>"${log}-cua.log" 2>&1 || true
-  local sock="$ROOT/cua-${number}.sock"
-  if [[ "$number" == "1" ]]; then
-    sock="$ROOT/cua.sock"
-  fi
   rm -f "$sock"
   DISPLAY="$display" cua-driver serve \
     --grant existing-profile \
@@ -302,6 +310,7 @@ ensure_slot() {
     printf '%s\n' "$profile" >"$ROOT/screen-${number}.profile"
   fi
   if xdpyinfo -display "$display" >/dev/null 2>&1 && port_open "$vnc_port" && port_open "$view_port"; then
+    start_cua_driver "$display" "$log" || return 1
     if [[ -n "$profile" ]]; then
       start_browser "$display" "$profile" "$log"
     fi
@@ -315,6 +324,7 @@ ensure_slot() {
       exit 1
     }
     if xdpyinfo -display "$display" >/dev/null 2>&1 && port_open "$vnc_port" && port_open "$view_port"; then
+      start_cua_driver "$display" "$log" || exit 1
       if [[ -n "$profile" ]]; then
         start_browser "$display" "$profile" "$log"
       fi
@@ -328,7 +338,7 @@ ensure_slot() {
       exit 1
     }
     start_desktop "$display" "$xfce_home" "$log"
-    start_cua_driver "$display" "$log" || true
+    start_cua_driver "$display" "$log" || exit 1
     start_xterm "$display" "$log"
     start_vnc "$display" "$vnc_port" "$view_port" "$log" || exit 1
     if [[ -n "$profile" ]]; then

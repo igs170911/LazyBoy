@@ -137,6 +137,9 @@ impl UiElement {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComputerObservation {
+    /// The controller already populated native semantics; skip legacy enrichment.
+    #[serde(default)]
+    pub native_observation_complete: bool,
     pub frame_id: String,
     pub captured_at: String,
     pub mime_type: String,

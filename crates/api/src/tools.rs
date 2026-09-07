@@ -539,7 +539,11 @@ async fn attach_ui_elements(
         .as_ref()
         .map(|page| !page.ok || page.elements.is_empty())
         .unwrap_or(true);
-    let a11y = a11y_snapshot(ctx, include_browser).await;
+    let a11y = if observation.native_observation_complete {
+        None
+    } else {
+        a11y_snapshot(ctx, include_browser).await
+    };
     let page_elements = page
         .as_ref()
         .map(|page| page.elements.as_slice())
@@ -549,7 +553,21 @@ async fn attach_ui_elements(
         .filter(|page| page.ok)
         .map(|page| page.elements.as_slice())
         .unwrap_or(&[]);
-    observation.elements = merge_ui_elements(observation.elements, page_elements, a11y_elements);
+    if observation.native_observation_complete {
+        let native: Vec<_> = observation
+            .elements
+            .iter()
+            .filter(|element| element.kind.as_deref() == Some("a11y"))
+            .cloned()
+            .collect();
+        observation
+            .elements
+            .retain(|element| element.kind.as_deref() != Some("a11y"));
+        observation.elements = merge_ui_elements(observation.elements, page_elements, &native);
+    } else {
+        observation.elements =
+            merge_ui_elements(observation.elements, page_elements, a11y_elements);
+    }
     let mut note = note.to_string();
     if let Some(page) = page.as_ref().filter(|page| page.ok) {
         if !page.url.is_empty() || !page.title.is_empty() {
@@ -980,6 +998,11 @@ async fn apply_semantic_actions(ctx: &ToolCtx, items: &mut [Value], elements: &[
         else {
             continue;
         };
+        // Snapshot-scoped Cua targets must reach the controller unchanged.
+        // Legacy AT-SPI cannot resolve them, and pixel fallback would bypass staleness checks.
+        if target.starts_with("cua:") {
+            continue;
+        }
         let ref_kind = item
             .get("refKind")
             .and_then(Value::as_str)

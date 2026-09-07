@@ -1,0 +1,92 @@
+name: move_cursor
+
+description:
+Move the synthetic agent cursor without changing the user's pointer. Only an explicit scope=desktop request moves the real OS pointer in get_desktop_state coordinates.
+
+input_schema:
+{
+  "additionalProperties": false,
+  "properties": {
+    "cursor_id": {
+      "type": "string"
+    },
+    "scope": {
+      "default": "window",
+      "enum": [
+        "window",
+        "desktop"
+      ],
+      "type": "string"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+      "type": "string"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "description": "Exact capture/input target selected independently for each action.\n\n`display_id=\"primary\"` is the portable desktop target in this release.\nPlatforms that cannot address another display reject it explicitly rather\nthan silently changing coordinate spaces.",
+          "oneOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "kind": {
+                  "const": "window",
+                  "type": "string"
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "pid",
+                "window_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": true,
+              "properties": {
+                "display_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "desktop",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "display_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Preferred per-call target. New callers should set this field."
+    },
+    "x": {
+      "type": "number"
+    },
+    "y": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "x",
+    "y"
+  ],
+  "type": "object"
+}

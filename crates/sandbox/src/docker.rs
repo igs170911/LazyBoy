@@ -546,8 +546,13 @@ fn decode_observation(body: &Value) -> Result<ComputerObservation, SandboxError>
         .get("elements")
         .map(|value| parse_ui_elements(&value.to_string()))
         .unwrap_or_default();
-    Ok(observation_with_elements(
+    let mut observation = observation_with_elements(
         observation_from_png(png, 1280, 800, cursor, window),
         elements,
-    ))
+    );
+    observation.native_observation_complete = body
+        .get("native_observation_complete")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(observation)
 }

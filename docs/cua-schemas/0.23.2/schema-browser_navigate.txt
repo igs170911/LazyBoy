@@ -1,0 +1,33 @@
+name: browser_navigate
+
+description:
+Navigate one tab of an exactly-bound browser target to a new URL (http/https/about only). Refused for heuristic bindings. Navigation invalidates all p<snapshot>:<index> refs for the tab.
+
+input_schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session. Browser targets, tabs, and refs belong to the resolved lifecycle session.",
+      "type": "string"
+    },
+    "tab_id": {
+      "description": "Opaque tab id from get_browser_state (session-scoped).",
+      "type": "string"
+    },
+    "target_id": {
+      "description": "Opaque browser target id minted by get_browser_state (session-scoped; never a CDP id).",
+      "type": "string"
+    },
+    "url": {
+      "description": "Destination URL (http:, https:, or about:).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target_id",
+    "tab_id",
+    "url"
+  ],
+  "type": "object"
+}

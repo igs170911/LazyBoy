@@ -1,0 +1,9 @@
+# Opt in without changing the default legacy rollout or overwriting its image.
+# docker compose -f docker-compose.yml -f docker-compose.cua.yml up -d --build
+services:
+  computer:
+    image: lazyboy/computer:cua
+  supervisor:
+    environment:
+      LAZYBOY_COMPUTER_DRIVER: cua
+      LAZYBOY_COMPUTER_IMAGE: lazyboy/computer:cua

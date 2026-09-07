@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
 
 use super::ListedWindow;
-use super::client::{CuaClient, first_array_of_objects};
+use super::client::CuaClient;
 use crate::controller::ControlError;
 use crate::process::spawn_detached;
 use crate::{BrowserRequest, CdpPage, launch_argv_on};
@@ -16,6 +16,7 @@ pub struct BrowserBind {
     pub window_id: u64,
     pub target_id: String,
     pub tab_id: String,
+    pub page: Option<CdpPage>,
 }
 
 pub fn is_cua_ref(selector: &str) -> bool {
@@ -49,7 +50,13 @@ pub fn page_from_semantic(value: &Value) -> CdpPage {
         .to_string();
     let outline = value.get("outline").and_then(Value::as_str).unwrap_or("");
     let mut elements = Vec::new();
-    for (index, item) in first_array_of_objects(value, "ref").into_iter().enumerate() {
+    for (index, item) in value
+        .get("refs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
         let Some(element) = element_from_ref(index as u32 + 1, item) else {
             continue;
         };
@@ -98,7 +105,7 @@ fn element_from_ref(id: u32, item: &Value) -> Option<UiElement> {
         .and_then(Value::as_str)
         .unwrap_or("in_viewport");
     let (x, y, w, h) = match item.get("frame") {
-        Some(frame) => (
+        Some(frame) if frame.is_object() => (
             number(frame, "x").unwrap_or(0),
             number(frame, "y").unwrap_or(0),
             number(frame, "w")
@@ -108,8 +115,8 @@ fn element_from_ref(id: u32, item: &Value) -> Option<UiElement> {
                 .or_else(|| number(frame, "height"))
                 .unwrap_or(0),
         ),
-        None if visibility == "in_viewport" => (0, 0, 1, 1),
-        None => (0, 0, 0, 0),
+        _ if visibility == "in_viewport" => (0, 0, 1, 1),
+        _ => (0, 0, 0, 0),
     };
     Some(UiElement {
         id,
@@ -148,8 +155,7 @@ pub fn find_ref<'a>(page: &'a CdpPage, selector: &'a str) -> Option<&'a str> {
             .elements
             .iter()
             .find(|element| element.selector.as_deref() == Some(selector))
-            .and_then(|element| element.selector.as_deref())
-            .or(Some(selector));
+            .and_then(|element| element.selector.as_deref());
     }
     if let Ok(id) = selector.parse::<u32>() {
         return page
@@ -158,23 +164,20 @@ pub fn find_ref<'a>(page: &'a CdpPage, selector: &'a str) -> Option<&'a str> {
             .find(|element| element.id == id)
             .and_then(|element| element.selector.as_deref());
     }
-    let needle = selector
-        .trim_start_matches(['#', '.', '['])
-        .trim_end_matches(']')
-        .to_ascii_lowercase();
-    page.elements.iter().find_map(|element| {
-        let title = element.title.to_ascii_lowercase();
-        let role = element
-            .role
-            .clone()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if title.contains(&needle) || role == needle {
-            element.selector.as_deref()
-        } else {
-            None
-        }
-    })
+    // Labels are accepted only when exact and unique; do not reinterpret CSS
+    // fragments as substring matches that can click a different control.
+    if selector.trim().is_empty() {
+        return None;
+    }
+    let mut matches = page
+        .elements
+        .iter()
+        .filter(|element| element.title == selector);
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    first.selector.as_deref()
 }
 
 pub fn chromium_window(windows: &[ListedWindow]) -> Option<&ListedWindow> {
@@ -249,6 +252,14 @@ async fn attach(
     display: &str,
     window: &ListedWindow,
 ) -> Result<BrowserBind, ControlError> {
+    client
+        .call(
+            display,
+            "start_session",
+            &json!({ "session": SESSION }),
+            &[],
+        )
+        .await?;
     let pid = window.pid;
     let window_id = window.id;
     let prepare = client
@@ -290,6 +301,7 @@ async fn attach(
         window_id,
         target_id,
         tab_id,
+        page: None,
     })
 }
 
@@ -409,57 +421,38 @@ async fn click(
         .selector
         .as_deref()
         .ok_or_else(|| ControlError::InvalidAction("browser click needs a selector".into()))?;
-    let wait_ms = request.wait_ms.unwrap_or(45_000).min(120_000);
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
-    let mut waited = 0.0f64;
-    loop {
-        let page = snapshot(client, display, bind).await?;
-        let Some(r#ref) = find_ref(&page, selector) else {
-            return Ok(CdpPage {
+    let page = bind.page.as_ref().ok_or(ControlError::StaleReference)?;
+    let Some(r#ref) = find_ref(&page, selector) else {
+        return Ok(CdpPage {
                 ok: false,
                 error: Some(
                     "element gone: the page changed and ids were renumbered. Use the fresh element list in this result."
                         .into(),
                 ),
-                url: page.url,
-                title: page.title,
-                text: page.text,
-                elements: page.elements,
+                url: page.url.clone(),
+                title: page.title.clone(),
+                text: page.text.clone(),
+                elements: page.elements.clone(),
                 ..CdpPage::default()
             });
-        };
-        let r#ref = r#ref.to_string();
-        match client
-            .call(
-                display,
-                "browser_click",
-                &json!({
-                    "target_id": bind.target_id,
-                    "tab_id": bind.tab_id,
-                    "session": SESSION,
-                    "ref": r#ref,
-                    "input_route": "dom_event",
-                }),
-                &[],
-            )
-            .await
-        {
-            Ok(_) => {
-                sleep(Duration::from_millis(250)).await;
-                let mut after = snapshot(client, display, bind).await?;
-                if waited >= 1.0 {
-                    after.waited_seconds = Some((waited * 10.0).round() / 10.0);
-                }
-                return Ok(after);
-            }
-            Err(error) if tokio::time::Instant::now() < deadline => {
-                waited += 0.5;
-                tracing::info!(error = %error, "browser click retrying");
-                sleep(Duration::from_millis(500)).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    };
+    let r#ref = r#ref.to_string();
+    client
+        .call(
+            display,
+            "browser_click",
+            &json!({
+                "target_id": bind.target_id,
+                "tab_id": bind.tab_id,
+                "session": SESSION,
+                "ref": r#ref,
+                "input_route": "dom_event",
+            }),
+            &[],
+        )
+        .await?;
+    sleep(Duration::from_millis(250)).await;
+    snapshot(client, display, bind).await
 }
 
 async fn type_into(
@@ -471,15 +464,15 @@ async fn type_into(
     let text = request.text.clone().unwrap_or_default();
     tracing::info!(backend = "cua", tool = "browser_type", length = text.len());
     if let Some(selector) = request.selector.as_deref() {
-        let page = snapshot(client, display, bind).await?;
+        let page = bind.page.as_ref().ok_or(ControlError::StaleReference)?;
         let Some(r#ref) = find_ref(&page, selector) else {
             return Ok(CdpPage {
                 ok: false,
                 error: Some("target field is unavailable; no text inserted".into()),
-                url: page.url,
-                title: page.title,
-                text: page.text,
-                elements: page.elements,
+                url: page.url.clone(),
+                title: page.title.clone(),
+                text: page.text.clone(),
+                elements: page.elements.clone(),
                 ..CdpPage::default()
             });
         };
@@ -545,8 +538,9 @@ mod tests {
             "status": "ok",
             "outline": "- button \"Smoke Click\"\n- textbox \"Smoke Entry\"",
             "page": { "title": "LazyBoy Cua Smoke", "url": "http://127.0.0.1:8765/cua-smoke.html" },
+            "content_refs": [{ "ref": "p1:0", "name": "Page heading", "role": "heading" }],
             "refs": [
-                { "name": "Smoke Click", "ref": "p1:1", "role": "button", "visibility": "in_viewport" },
+                { "name": "Smoke Click", "ref": "p1:1", "role": "button", "frame": "main", "visibility": "in_viewport" },
                 { "name": "Smoke Entry", "ref": "p1:2", "role": "textbox", "visibility": "in_viewport" }
             ]
         });
@@ -557,8 +551,12 @@ mod tests {
         assert_eq!(page.elements[0].id, 1);
         assert_eq!(page.elements[0].selector.as_deref(), Some("p1:1"));
         assert_eq!(page.elements[0].kind.as_deref(), Some("dom"));
+        assert!(!page.elements[0].is_offscreen());
         assert_eq!(find_ref(&page, "1"), Some("p1:1"));
         assert_eq!(find_ref(&page, "p1:1"), Some("p1:1"));
+        assert_eq!(find_ref(&page, "p9:1"), None);
+        assert_eq!(find_ref(&page, ""), None);
+        assert_eq!(find_ref(&page, "#"), None);
         assert_eq!(find_ref(&page, "Smoke Entry"), Some("p1:2"));
     }
 

@@ -1,0 +1,20 @@
+name: get_desktop_state
+
+description:
+Capture the full display in the desktop action coordinate frame. Use the returned PNG directly as the coordinate source for actions whose target is {kind:"desktop",display_id:"primary"}. No AT-SPI walk.
+
+input_schema:
+{
+  "additionalProperties": false,
+  "properties": {
+    "screenshot_out_file": {
+      "description": "Write PNG here instead of base64.",
+      "type": "string"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

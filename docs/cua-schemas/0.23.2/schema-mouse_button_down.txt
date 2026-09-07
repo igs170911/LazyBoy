@@ -1,0 +1,51 @@
+name: mouse_button_down
+
+description:
+Press and hold a mouse button at (x,y) via background X11 delivery. Does not release the button; pair with mouse_drag / mouse_button_up. Returns the current held-button state.
+
+input_schema:
+{
+  "additionalProperties": false,
+  "properties": {
+    "button": {
+      "description": "Mouse button. Default \"left\".",
+      "enum": [
+        "left",
+        "right",
+        "middle"
+      ],
+      "type": "string"
+    },
+    "cursor_id": {
+      "description": "Optional multi-cursor instance id. Default: 'default'.",
+      "type": "string"
+    },
+    "from_zoom": {
+      "description": "Set true after a zoom call to auto-translate zoom-image pixel coordinates back to full-window space.",
+      "type": "boolean"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session. When both are present, session takes precedence over cursor_id.",
+      "type": "string"
+    },
+    "window_id": {
+      "type": "integer"
+    },
+    "x": {
+      "type": "number"
+    },
+    "y": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "pid",
+    "window_id",
+    "x",
+    "y"
+  ],
+  "type": "object"
+}

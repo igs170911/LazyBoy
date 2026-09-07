@@ -1,0 +1,50 @@
+name: browser_type
+
+description:
+Type text into an exactly-bound tab via the Input domain. mode="insert_text" (default) uses Input.insertText; mode="keystrokes" dispatches per-character key events. Both insert at the caret, so typing into a field that already holds text appends to it; pass replace=true to set the field instead, or to clear it by typing an empty string. Pass a ref to an editable element from the latest snapshot. A ref is required; heuristic bindings are refused.
+
+input_schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "mode": {
+      "description": "insert_text (default): bulk Input.insertText. keystrokes: per-character Input.dispatchKeyEvent.",
+      "enum": [
+        "insert_text",
+        "keystrokes"
+      ],
+      "type": "string"
+    },
+    "ref": {
+      "description": "Page element ref in the p<snapshot>:<index> namespace from get_browser_state. Refs are invalidated by navigation and by newer snapshots of the same tab.",
+      "type": "string"
+    },
+    "replace": {
+      "description": "false (default): insert at the caret, appending to whatever the field already holds. true: select the element's whole content first so the text replaces it — with an empty text this clears the field. Replacement goes through the selection, so beforeinput/input still fire and framework state stays consistent.",
+      "type": "boolean"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session. Browser targets, tabs, and refs belong to the resolved lifecycle session.",
+      "type": "string"
+    },
+    "tab_id": {
+      "description": "Opaque tab id from get_browser_state (session-scoped).",
+      "type": "string"
+    },
+    "target_id": {
+      "description": "Opaque browser target id minted by get_browser_state (session-scoped; never a CDP id).",
+      "type": "string"
+    },
+    "text": {
+      "description": "Text to type.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target_id",
+    "tab_id",
+    "ref",
+    "text"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,48 @@
+name: browser_click
+
+description:
+Click a page element (by ref) or viewport coordinates in an exactly-bound tab. Default route is trusted hardware-like input (Input.dispatchMouseEvent), and refuses where that route cannot preserve standalone-browser background posture. input_route="dom_event" (synthetic el.click(), ref required) is used only when explicitly requested; it proves dispatch, not control activation, because trust-gated controls may ignore synthetic events. Refused for heuristic bindings.
+
+input_schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "input_route": {
+      "description": "\"trusted\" (default): Input.dispatchMouseEvent. It refuses rather than foregrounding a standalone browser. \"dom_event\": synthetic full-background DOM click, only when explicitly requested. Dispatch does not prove the control activated; refresh page state and verify the expected postcondition.",
+      "enum": [
+        "trusted",
+        "dom_event"
+      ],
+      "type": "string"
+    },
+    "ref": {
+      "description": "Page element ref in the p<snapshot>:<index> namespace from get_browser_state. Refs are invalidated by navigation and by newer snapshots of the same tab.",
+      "type": "string"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session. Browser targets, tabs, and refs belong to the resolved lifecycle session.",
+      "type": "string"
+    },
+    "tab_id": {
+      "description": "Opaque tab id from get_browser_state (session-scoped).",
+      "type": "string"
+    },
+    "target_id": {
+      "description": "Opaque browser target id minted by get_browser_state (session-scoped; never a CDP id).",
+      "type": "string"
+    },
+    "x": {
+      "description": "Viewport x (CSS px) — alternative to ref.",
+      "type": "number"
+    },
+    "y": {
+      "description": "Viewport y (CSS px) — alternative to ref.",
+      "type": "number"
+    }
+  },
+  "required": [
+    "target_id",
+    "tab_id"
+  ],
+  "type": "object"
+}

@@ -7,7 +7,7 @@ set -euo pipefail
 repeat=10
 ready_timeout=120
 image="${COMPUTER_IMAGE:-lazyboy/computer:local}"
-name="lazyboy-cua-smoke"
+name=""
 docker_mode=0
 
 usage() {
@@ -18,13 +18,16 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --docker) docker_mode=1; shift ;;
-    --repeat) repeat="${2:-}"; shift 2 ;;
-    --image) image="${2:-}"; shift 2 ;;
-    --ready-timeout) ready_timeout="${2:-}"; shift 2 ;;
+    --repeat) [[ $# -ge 2 ]] || usage; repeat="$2"; shift 2 ;;
+    --image) [[ $# -ge 2 ]] || usage; image="$2"; shift 2 ;;
+    --ready-timeout) [[ $# -ge 2 ]] || usage; ready_timeout="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) usage ;;
   esac
 done
+
+[[ "$repeat" =~ ^[1-9][0-9]*$ ]] || usage
+[[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || usage
 
 if [[ "$docker_mode" -eq 0 ]] && [[ -x /usr/local/bin/lazyboy-cua-smoke ]] && [[ -S /tmp/lazyboy/cua.sock || -f /tmp/lazyboy/ready ]]; then
   exec /usr/local/bin/lazyboy-cua-smoke --repeat "$repeat" --ready-timeout "$ready_timeout"
@@ -47,14 +50,14 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
 fi
 
 cleanup() {
-  docker rm -f "$name" >/dev/null 2>&1 || true
+  if [[ -n "$name" ]]; then docker rm -f "$name" >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT
 
-cleanup
-docker run -d --name "$name" --shm-size=512m \
-  -e DISPLAY=:1 \
-  "$image" >/dev/null
+name=$(docker run -d --shm-size=512m \
+  -e DISPLAY=:1 -e LAZYBOY_COMPUTER_DRIVER=cua \
+  -e LAZYBOY_CONTROL_TOKEN=cua-smoke-local-only \
+  "$image")
 
 echo "waiting for desktop + cua-driver in $name"
 for _ in $(seq 1 "$ready_timeout"); do
@@ -80,6 +83,38 @@ echo "running $repeat Cua smoke iterations"
 set +e
 docker exec -u 1000:1000 "$name" /usr/local/bin/lazyboy-cua-smoke --repeat "$repeat" --ready-timeout "$ready_timeout"
 code=$?
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-adapter-test --repeat "$repeat"
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-isolation-test
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  docker pause "$name" >/dev/null && docker unpause "$name" >/dev/null
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-adapter-test --check-persistence
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  docker restart "$name" >/dev/null
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  echo "waiting for desktop after restart"
+  for _ in $(seq 1 "$ready_timeout"); do
+    if docker exec -u 1000:1000 "$name" test -f /tmp/lazyboy/ready \
+      && docker exec -u 1000:1000 "$name" test -S /tmp/lazyboy/cua.sock; then
+      break
+    fi
+    sleep 1
+  done
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-adapter-test --check-persistence
+  code=$?
+fi
 set -e
 
 out="${CUA_SMOKE_OUT:-/tmp/lazyboy-cua-smoke-last}"

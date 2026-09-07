@@ -1,0 +1,57 @@
+name: get_browser_state
+
+description:
+Read-only browser inspection. Mode 1 (bind): pass pid + window_id of a native browser window to classify it, correlate it to a CDP target (exact-or-refuse), and mint a session-scoped target id plus tab ids. Mode 2 (snapshot): pass target_id + tab_id. The dom_refs_v1 compatibility format returns composed DOM refs. semantic_v2 joins accessibility, DOM, layout, and viewport state; ranks visible content before retained/offscreen state; and returns a semantic outline, typed action refs, content refs, scoped reads, and opaque continuation. Never performs setup — a missing endpoint is a structured browser_requires_setup refusal pointing at browser_prepare.
+
+input_schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "continuation": {
+      "description": "Opaque continuation minted by an earlier semantic_v2 response.",
+      "type": "string"
+    },
+    "include_screenshot": {
+      "default": false,
+      "description": "Capture the exact tab viewport as PNG through CDP without selecting the tab or foregrounding its native window. The request refuses if capture cannot be completed.",
+      "type": "boolean"
+    },
+    "pid": {
+      "description": "Native browser process id (bind mode).",
+      "type": "integer"
+    },
+    "query": {
+      "description": "Read-only semantic match over role, accessible name, and visible text.",
+      "type": "string"
+    },
+    "scope_ref": {
+      "description": "Current semantic/content ref whose subtree should be observed.",
+      "type": "string"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session. Browser targets, tabs, and refs belong to the resolved lifecycle session.",
+      "type": "string"
+    },
+    "snapshot_format": {
+      "description": "Versioned snapshot contract. dom_refs_v1 remains the compatibility default.",
+      "enum": [
+        "dom_refs_v1",
+        "semantic_v2"
+      ],
+      "type": "string"
+    },
+    "tab_id": {
+      "description": "Opaque tab id from get_browser_state (session-scoped).",
+      "type": "string"
+    },
+    "target_id": {
+      "description": "Opaque browser target id minted by get_browser_state (session-scoped; never a CDP id).",
+      "type": "string"
+    },
+    "window_id": {
+      "description": "Native window id owned by pid (bind mode).",
+      "type": "integer"
+    }
+  },
+  "type": "object"
+}

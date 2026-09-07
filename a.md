@@ -1,5 +1,7 @@
 # LazyBoy → Cua Driver Migration Plan
 
+> 2026-09-07 檢查：Phase 1 規格尚未全部勾完（生產預設仍是 legacy；takeover／錄製端到端未另開測）。opt-in Cua 已可在現有桌面容器使用，驗收見 [docs/cua-review.md](docs/cua-review.md)。本文件仍是目標規格，不能視為完成證明。
+
 > **Purpose:** This document is an implementation specification for a coding agent.
 >
 > Repository: `https://code.30cm.net/daniel.w/lazyBoy`

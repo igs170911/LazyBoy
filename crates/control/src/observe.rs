@@ -12,6 +12,7 @@ pub fn observation_from_png(
     active_window: Option<ActiveWindow>,
 ) -> ComputerObservation {
     ComputerObservation {
+        native_observation_complete: false,
         frame_id: hex::encode(Sha256::digest(&image)),
         captured_at: Utc::now().to_rfc3339(),
         mime_type: sniff_image_mime(&image).to_string(),
@@ -27,6 +28,7 @@ pub fn observation_from_png(
 pub fn observation_to_control_json(observation: &ComputerObservation) -> Value {
     let mut body = json!({
         "png_base64": base64::engine::general_purpose::STANDARD.encode(&observation.image),
+        "native_observation_complete": observation.native_observation_complete,
     });
     if let Some(cursor) = &observation.cursor {
         body["cursor"] = json!({ "x": cursor.x, "y": cursor.y });
