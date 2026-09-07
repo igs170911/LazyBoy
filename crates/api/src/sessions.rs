@@ -18,6 +18,11 @@ use crate::state::AppState;
 
 type ApiError = (StatusCode, Json<Value>);
 
+/// Safety net for the event stream. A wake normally lands within milliseconds,
+/// so this poll only exists for the cases a wake cannot cover: a reader that
+/// lagged behind the channel, or a row written outside this process.
+const EVENT_FALLBACK_POLL: Duration = Duration::from_secs(5);
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -381,10 +386,14 @@ async fn events(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<i32>().ok())
         .unwrap_or(0);
-    let stream_state = (state, id, actor, after, Vec::<(i32, String, Value)>::new());
+    // Subscribe before the state moves into the stream: taking the subscription
+    // afterwards would open a window in which a commit could knock on a channel
+    // this reader is not listening to yet.
+    let wakes = state.wakes.subscribe();
+    let stream_state = (state, id, actor, after, Vec::<(i32, String, Value)>::new(), wakes);
     let output = stream::unfold(
         stream_state,
-        |(state, id, actor, mut after, mut pending)| async move {
+        |(state, id, actor, mut after, mut pending, mut wakes)| async move {
             loop {
                 if let Some((seq, kind, payload)) = pending.pop() {
                     after = seq;
@@ -393,7 +402,10 @@ async fn events(
                         .event(kind)
                         .json_data(payload)
                         .unwrap_or_else(|_| Event::default().event("error").data("{}"));
-                    return Some((Ok(event), (state, id, actor, after, pending)));
+                    return Some((
+                        Ok(event),
+                        (state, id, actor, after, pending, wakes),
+                    ));
                 }
                 match sqlx::query_as::<_, (i32, String, Value)>(
                     "SELECT e.seq,e.type,e.payload FROM events e
@@ -412,7 +424,15 @@ async fn events(
                         rows.reverse();
                         pending = rows;
                     }
-                    Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(750)).await,
+                    // Idle means "wait to be knocked", not "sleep then guess":
+                    // the reader blocks on the wake channel and re-reads the
+                    // cursor the moment a writer commits.
+                    Ok(_) | Err(_) => {
+                        tokio::select! {
+                            _ = wakes.wait(&id) => {}
+                            _ = tokio::time::sleep(EVENT_FALLBACK_POLL) => {}
+                        }
+                    }
                 }
             }
         },
@@ -552,6 +572,10 @@ pub async fn append_event(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    // Every event writer funnels through here, so one knock after the commit
+    // covers messages, run state, and metrics without each call site having to
+    // remember it.
+    state.wakes.wake(thread_id);
     Ok(seq)
 }
 

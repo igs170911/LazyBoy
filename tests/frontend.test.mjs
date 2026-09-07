@@ -276,13 +276,18 @@ test('mobile shortcut row sends modifiers and hides with the keyboard',()=>{
 });
 test('status and HUD sit outside the remote pixels; screenshots stay opt-in',()=>{
  const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
- assert.match(app,/\{!computerOpen && <RunStatus runId=\{liveRunId\}\/>\}/);
- assert.match(app,/<RunStatus runId=\{liveRunId\}\/>\{hud\}/);
+ assert.doesNotMatch(app,/RunStatus/);
+ assert.match(app,/<RunProbe runId=\{computer\.busyRunId\|\|computer\.waitingRunId\}><Avatar/);
  assert.match(app,/\{!computerOpen&&hud\}<div className="preview">/);
  assert.match(app,/--visible-height/);
+ assert.match(app,/<div className=\{`composer-dock \$\{statusMembers\.length\?"has-status":""\}`\}>\s*\{error&&<div className="error-banner"/);
  const css=fs.readFileSync('apps/web/src/computer.css','utf8');
- assert.match(css,/\.computer-overlay>\.run-status/);
+ assert.doesNotMatch(css,/\.run-status/);
  assert.match(css,/\.computer-hud\{position:static/);
+ const chat=fs.readFileSync('apps/web/src/chat.css','utf8');
+ assert.match(chat,/\.composer-dock\{position:relative/);
+ assert.doesNotMatch(chat,/\.composer-dock\{position:absolute/);
+ assert.match(chat,/\.messages\{min-width:0;padding-bottom:24px/);
  const tools=fs.readFileSync('crates/api/src/tools.rs','utf8');
  assert.match(tools,/screenshots are opt-in with observe:true/);
  assert.match(tools,/if args\.get\("observe"\)\.and_then\(Value::as_bool\) != Some\(true\)/);
@@ -376,7 +381,69 @@ test('the bubble reads the run activity endpoint the API actually mounts',()=>{
  assert.match(app,/<RunProbe runId=\{member\.id===computer\.botId\?computer\.busyRunId:null\}><Avatar/);
  const probe=fs.readFileSync('apps/web/src/run-monitor.tsx','utf8');
  assert.match(probe,/`\/api\/runs\/\$\{runId\}\/activity\$\{after\}`/);
- assert.match(probe,/export function RunStatus/);
- assert.match(probe,/`\/api\/runs\/\$\{runId\}\/activity\?limit=30`/);
+ assert.doesNotMatch(probe,/export function RunStatus/);
  assert.match(fs.readFileSync('apps/web/src/main.tsx','utf8'),/import "\.\/monitor\.css";/);
+});
+
+const liveJs=ts.transpileModule(fs.readFileSync('apps/web/src/live.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+const liveBox={exports:{}};vm.runInNewContext(liveJs,liveBox);
+const {sessionEventsUrl,subscribeToSession,SESSION_EVENT_TYPES,createCoalescer}=liveBox.exports;
+
+test('the browser listens for every event kind the api can append',()=>{
+  const rust=['crates/api/src/runs.rs','crates/api/src/sessions.rs','crates/api/src/schedules.rs','crates/api/src/voice_call.rs'].map(file=>fs.readFileSync(file,'utf8')).join('\n');
+  const emitted=[...rust.matchAll(/["']((?:message|run|session)\.[a-z_]+)["']/g)].map(match=>match[1]);
+  assert.ok(emitted.length>=4,'the api should emit session events');
+  for(const kind of new Set(emitted))assert.ok(SESSION_EVENT_TYPES.includes(kind),`${kind} is emitted but never listened for`);
+});
+
+test('the live feed reads its own session, drops replays, and survives a bad frame',()=>{
+  const listeners={};let closed=0,url='';
+  const source={addEventListener:(type,listener)=>{listeners[type]=listener},close:()=>{closed+=1}};
+  const seen=[],statuses=[];
+  const feed=subscribeToSession('s/1',event=>seen.push(event),{source:candidate=>{url=candidate;return source},onStatus:connected=>statuses.push(connected)});
+  assert.equal(url,'/api/sessions/s%2F1/events');
+  assert.ok(listeners['message.created']&&listeners['run.completed']&&listeners['session.cleared'],'every kind gets a listener');
+  listeners['message.created']({lastEventId:'5',data:'{"seq":5,"role":"assistant"}'});
+  // The event object was built inside a vm realm, so compare fields, not prototypes.
+  assert.equal(seen.length,1);
+  assert.equal(seen[0].kind,'message.created');assert.equal(seen[0].id,5);
+  assert.equal(seen[0].payload.seq,5);assert.equal(seen[0].payload.role,'assistant');
+  listeners['message.created']({lastEventId:'5',data:'{}'});
+  listeners['message.created']({lastEventId:'4',data:'{}'});
+  assert.equal(seen.length,1,'a reconnect replay must not be applied twice');
+  listeners['run.started']({lastEventId:'6',data:'not json'});
+  assert.equal(seen.length,2);assert.equal(seen[1].kind,'run.started');assert.equal(seen[1].id,6);
+  assert.equal(Object.keys(seen[1].payload).length,0,'a malformed frame still reports the event');
+  listeners['open']();listeners['error']();
+  assert.deepEqual(statuses,[true,false]);
+  feed.close();feed.close();
+  assert.equal(closed,1,'close is idempotent');
+  assert.equal(sessionEventsUrl('abc'),'/api/sessions/abc/events');
+});
+
+test('a burst of session events settles into one refresh',()=>{
+  const timers=[];let runs=0;
+  const schedule=(callback,ms)=>{timers.push({callback,ms});return timers.length-1};
+  const dismiss=handle=>{if(timers[handle])timers[handle].cancelled=true};
+  const coalescer=createCoalescer(()=>{runs+=1},120,schedule,dismiss);
+  coalescer.kick();coalescer.kick();coalescer.kick();
+  assert.equal(runs,0);
+  assert.equal(timers.filter(entry=>!entry.cancelled).length,1,'one pending run');
+  assert.equal(timers[0].ms,120);
+  timers[0].callback();
+  assert.equal(runs,1);
+  coalescer.kick();coalescer.cancel();coalescer.cancel();
+  assert.equal(timers[1].cancelled,true);
+  assert.equal(runs,1,'a cancelled run never fires');
+  coalescer.kick();timers[2].callback();
+  assert.equal(runs,2,'the coalescer is reusable after a cancel');
+});
+
+test('chat follows the event stream instead of a fixed two second poll',()=>{
+  const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
+  assert.match(app,/subscribeToSession\(activeSessionId,\(\)=>settle\.kick\(\)/);
+  assert.match(app,/createCoalescer\(\(\)=>\{if\(!document\.hidden\)refresh\(\)\.catch\(\(\)=>\{\}\)\},EVENT_SETTLE_MS\)/);
+  assert.match(app,/document\.addEventListener\("visibilitychange",resume\)/);
+  assert.doesNotMatch(app,/const timer=setInterval\(\(\)=>\{refresh\(\)/,'the 2s transcript poll should be gone');
+  assert.match(app,/const heartbeat=window\.setInterval\(\(\)=>\{const beat=roomsRef\.current[\s\S]*\},HEARTBEAT_MS\)/,'the heartbeat keeps its own minute cadence');
 });

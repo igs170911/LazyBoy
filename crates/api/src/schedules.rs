@@ -457,6 +457,16 @@ async fn enqueue(state: &AppState, row: &ScheduleRow, from_tick: bool) -> Result
         .map_err(|e| e.to_string())?;
     }
     tx.commit().await.map_err(|error| error.to_string())?;
+    // A scheduled run starts with nobody pressing send, so the transcript line
+    // has to announce itself: without this an open chat stays blind to the run
+    // until it happens to poll.
+    let _ = crate::sessions::append_event(
+        state,
+        &thread_id,
+        "message.created",
+        json!({"id":message_id,"seq":seq,"role":"user","body":body,"runId":run_id}),
+    )
+    .await;
     Ok(run_id)
 }
 

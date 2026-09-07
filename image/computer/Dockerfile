@@ -39,6 +39,7 @@ RUN printf '%s\n' \
     python3 \
     python3-websocket \
     sudo \
+    tmux \
     gosu \
     util-linux \
     websockify \
@@ -103,6 +104,7 @@ COPY --chmod=755 image/computer/rotate-logs.py /usr/local/bin/lazyboy-rotate-log
 COPY --chmod=755 image/computer/lazyboy-screen /usr/local/bin/lazyboy-screen
 COPY --chmod=755 image/computer/lazyboy-browser /usr/local/bin/lazyboy-browser
 COPY --chmod=755 image/computer/lazyboy-terminal /usr/local/bin/lazyboy-terminal
+COPY --chmod=755 image/computer/lazyboy-shell /usr/local/bin/lazyboy-shell
 COPY --chmod=644 apps/web/vnc.html /usr/share/novnc/vnc_lite.html
 COPY --chmod=644 apps/web/vnc.html /usr/share/novnc/index.html
 COPY --chmod=644 image/computer/fonts.conf /etc/fonts/conf.d/99-lazyboy-cjk.conf

@@ -36,6 +36,7 @@ cd ../..
 node --test tests/frontend.test.mjs
 python3 tests/control.test.py
 python3 tests/log-rotation.test.py
+python3 tests/shell-session.test.py   # 持久終端機腳本，只需要 tmux
 
 # Python 整合測試用 docker compose exec 連進 Postgres，自己建一次性資料庫後清掉
 python3 tests/retention.test.py

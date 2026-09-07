@@ -1,16 +1,5 @@
 /** Traditional Chinese UI copy. Keep keys stable when adding another locale. */
 export const zhTW = {
-  liveCompleted: "已完成",
-  liveFailed: "任務未完成：發生錯誤",
-  liveCancelled: "已停止：使用者取消或工作被中斷",
-  liveInput: "需要你的回覆才能繼續",
-  liveTakeover: "等待你操作，交回後繼續",
-  liveRunning: "正在執行",
-  liveLoading: "正在取得執行狀態…",
-  liveDisconnected: "暫時無法取得狀態，正在重新連線；這不代表 AI 已停止。",
-  liveSlow: "這一步仍未回報結果。系統會處理逾時並顯示重試或停止原因。",
-  liveHistory: "查看做了什麼、錯誤與耗時",
-
   search: "搜尋", sharedComputer: "共用電腦", privateComputer: "私人電腦",
   stopped: "已關閉", booting: "啟動中", running: "執行中", suspended: "休眠中", error: "發生錯誤",
   openComputer: "開啟電腦", stopTask: "停止任務", takeControl: "取得控制", takeOverNow: "接手操作", releaseControl: "釋放控制", done: "完成", skip: "略過",
@@ -162,6 +151,7 @@ export const zhTW = {
   aiTimeout: "AI 回應逾時（150 秒）",
   resumeMidTask: "做到一半，需要你決定",
   resumeBudget: "輪次用盡，尚未確認完成",
+  resumeLoop: "卡在同一個動作，需要你給方向",
   resumeProgress: "{turns}/{limit} 輪",
   resumeContinue: "繼續",
   resumeStop: "就到這裡",

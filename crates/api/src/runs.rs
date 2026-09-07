@@ -3,6 +3,7 @@ use lazyboy_harness::execution::{
     VERIFY_BEFORE_DONE, asks_for_input, goal_outcome, goal_request, stop_reason, GOAL_CONTINUE,
     GOAL_INSTRUCTIONS,
 };
+use lazyboy_harness::policy::{ActionObserved, LoopGuard, RunPolicy, Verdict};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,6 +42,8 @@ Use tools only when the user wants something done on the computer: open a site, 
 3) Connected services: use an MCP tool when it directly matches the task.
 4) Opening a local file or non-browser app: use open_path or launch_app.
 5) Native GUI with no DOM (dialogs, file manager, XFCE): use computer_act by element id. Those ids are AT-SPI controls, not window boxes.
+
+The shell is one real terminal that stays open between calls: same directory, same exports, same background jobs. cd where the work is and stay there. A long-running job (server, build, download) comes back as status=running and keeps going — read it with log_lines, stop it with keys \"C-c\", and never type a second command into a terminal that is still busy.
 
 When you ARE using the desktop: the human watches the same live screen. Only the latest screenshot you received is current; they may have interacted since. Call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
 
@@ -284,6 +287,11 @@ pub async fn send(
             .map_err(|error| error.to_string())?;
     }
     tx.commit().await.map_err(|error| error.to_string())?;
+    // The user message and its event were written in the transaction above
+    // rather than through `sessions::append_event`, so this is where the open
+    // chat windows get told to read it: every other tab sees the message without
+    // waiting for its next poll.
+    state.wakes.wake(thread_id);
     if let Err(error) =
         crate::attachments::stage_for_bots(state, actor, &member_ids, &decoded).await
     {
@@ -304,8 +312,15 @@ type RetryCandidateRow = (String, String, String, String, String, String);
 pub async fn worker_loop(state: AppState) {
     let inflight = Arc::new(tokio::sync::Semaphore::new(16));
     let lease_owner = format!("api-{}", Uuid::new_v4());
+    // Without a knock the loop sits on its 200 ms timer before it can see a run
+    // that was queued a moment ago; going straight to the claim query is what
+    // makes the thinking indicator follow the message instead of the timer.
+    let mut wakes = state.wakes.subscribe();
     loop {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::select! {
+            _ = wakes.wait_any() => {}
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+        }
         let interrupted: Vec<(String, String, String)> = sqlx::query_as(
             "WITH doomed AS (
                  UPDATE runs SET status='failed',error=$1,completed_at=now(),
@@ -752,6 +767,14 @@ async fn execute_run(
     // One verification demand per run: enough to catch "I'm done" that isn't,
     // without trapping the model in an endless self-audit.
     let mut verified = false;
+    // Round policy. A run gets no quota; it gets a watcher. `LoopGuard` looks
+    // for the shape of going in circles - the same action, the same failure, a
+    // long stretch with nothing new succeeding - and only the last-resort
+    // breakers use turns or wall clock. Wall clock is measured per attempt: a
+    // run that parked for three days waiting for a human starts fresh.
+    let run_policy = RunPolicy::from_env();
+    let mut guard = LoopGuard::with_watch(run_policy, turns);
+    let attempt_clock = std::time::Instant::now();
     let memory = if ctx.memory_enabled {
         match state
             .memory
@@ -906,6 +929,55 @@ async fn execute_run(
                 used_gui,
             )
             .await;
+        }
+        // Watcher first: a checkpoint question belongs to the model turn that
+        // is about to happen, and a derailment or breaker parks the run before
+        // another model call is paid for.
+        match guard.on_turn(turns, attempt_clock.elapsed()) {
+            Verdict::Continue => {}
+            Verdict::Reflect(text) => {
+                tracing::info!(run_id, turn = turns, "round policy: coaching the run");
+                crate::monitor::record(
+                    state,
+                    run_id,
+                    "notice",
+                    json!({
+                        "turn": turns,
+                        "text": format!("系統檢查點：{}", crate::monitor::snippet(&text, 160)),
+                    }),
+                )
+                .await;
+                if let Message::User { content } = &mut pending {
+                    content.push(UserContent::text(text));
+                }
+            }
+            Verdict::Halt { reason, note } => {
+                let limit = match execution_mode {
+                    ExecutionMode::Bounded(limit) => limit,
+                    ExecutionMode::Goal => 0,
+                };
+                return pause_for_answer(
+                    state,
+                    bot_id,
+                    thread_id,
+                    run_id,
+                    lease_owner,
+                    &ctx,
+                    PauseRequest {
+                        reason,
+                        draft: &final_text,
+                        history: &history,
+                        turns,
+                        steering_seq,
+                        limit,
+                        note: Some(note),
+                        screenshots,
+                        screenshot_bytes,
+                        used_gui,
+                    },
+                )
+                .await;
+            }
         }
         drop_history_screenshots(&mut history, &pending);
         set_run_progress(state, run_id, MODEL_STEP, turns, turn_limit).await;
@@ -1080,6 +1152,7 @@ async fn execute_run(
                         turns,
                         steering_seq,
                         limit,
+                        note: None,
                         screenshots,
                         screenshot_bytes,
                         used_gui,
@@ -1188,6 +1261,7 @@ async fn execute_run(
                 pause = outcome.pause,
                 "tool call"
             );
+            let status = tool_status(tool_timed_out, outcome.pause, &outcome.text);
             crate::monitor::record(
                 state,
                 run_id,
@@ -1196,12 +1270,63 @@ async fn execute_run(
                     "turn": turns,
                     "name": name.clone(),
                     "step": step.clone(),
-                    "status": tool_status(tool_timed_out, outcome.pause, &outcome.text),
+                    "status": status,
                     "elapsedMs": tool_started.elapsed().as_millis() as u64,
                     "snippet": crate::monitor::snippet(&outcome.text, 200),
                 }),
             )
             .await;
+            match guard.on_action(&ActionObserved {
+                name: call.function.name.as_str(),
+                args: &call.function.arguments,
+                label: &step,
+                ok: status == "ok",
+                turn: turns,
+                changes_state: action_changes_state(&name, &call.function.arguments),
+            }) {
+                Verdict::Continue => {}
+                Verdict::Reflect(text) => {
+                    tracing::info!(run_id, turn = turns, step = %step, "round policy: coaching mid-turn");
+                    crate::monitor::record(
+                        state,
+                        run_id,
+                        "notice",
+                        json!({
+                            "turn": turns,
+                            "text": format!("系統提示：{}", crate::monitor::snippet(&text, 160)),
+                        }),
+                    )
+                    .await;
+                    results.push(UserContent::text(text));
+                }
+                Verdict::Halt { reason, note } => {
+                    let limit = match execution_mode {
+                        ExecutionMode::Bounded(limit) => limit,
+                        ExecutionMode::Goal => 0,
+                    };
+                    return pause_for_answer(
+                        state,
+                        bot_id,
+                        thread_id,
+                        run_id,
+                        lease_owner,
+                        &ctx,
+                        PauseRequest {
+                            reason,
+                            draft: &final_text,
+                            history: &history,
+                            turns,
+                            steering_seq,
+                            limit,
+                            note: Some(note),
+                            screenshots,
+                            screenshot_bytes,
+                            used_gui,
+                        },
+                    )
+                    .await;
+                }
+            }
             // xAI rejects images inside tool results. Attach a changed
             // screenshot as a following user image instead.
             if let Some(image) = outcome.image {
@@ -1322,6 +1447,7 @@ async fn execute_run(
                 turns,
                 steering_seq,
                 limit,
+                note: None,
                 screenshots,
                 screenshot_bytes,
                 used_gui,
@@ -1918,6 +2044,9 @@ struct PauseRequest<'a> {
     turns: u32,
     steering_seq: i32,
     limit: u32,
+    /// Concrete evidence from the round policy, shown instead of a generic
+    /// category when the run parked on a loop.
+    note: Option<String>,
     screenshots: u32,
     screenshot_bytes: u64,
     used_gui: bool,
@@ -1935,12 +2064,15 @@ async fn pause_for_answer(
     req: PauseRequest<'_>,
 ) -> Result<(), String> {
     let draft = req.draft.replace(NEEDS_INPUT_MARKER, "").trim().to_string();
-    let stall = match req.reason {
-        StopReason::BudgetExhausted => "已達本輪執行上限",
+    // The round policy arrives with concrete evidence ("the same click six
+    // times in a row"), which always beats a category name for the human.
+    let stall = req.note.clone().unwrap_or_else(|| match req.reason {
+        StopReason::BudgetExhausted => "已達本輪執行上限".to_string(),
         StopReason::MidTaskText => {
-            "模型多次未能提供可執行的下一步，系統已要求它重新確認並繼續，但仍無法推進"
+            "模型多次未能提供可執行的下一步，系統已要求它重新確認並繼續，但仍無法推進".to_string()
         }
-    };
+        StopReason::LoopDetected => "重複同一個動作，任務沒有新的進展".to_string(),
+    });
     let draft = if draft.is_empty() {
         match req.reason {
             StopReason::BudgetExhausted => format!(
@@ -1950,6 +2082,10 @@ async fn pause_for_answer(
             StopReason::MidTaskText => format!(
                 "模型多次未提供可執行的下一步，系統無法確認任務已完成。請補充下一步指示或接管確認現況後繼續。\n\n任務尚未確認完成。停止原因：{}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。",
                 stall
+            ),
+            StopReason::LoopDetected => format!(
+                "我在這個任務上用了 {} 輪，一直在同一個動作上打轉，先停在目前的畫面。要我換個做法繼續嗎？\n\n任務尚未確認完成。停止原因：{}。已保存操作進度；告訴我該怎麼做，或直接接管電腦。",
+                req.turns, stall
             ),
         }
     } else if !asks_for_input(req.draft) {
@@ -2821,7 +2957,22 @@ fn describe_step(name: &str, args: &Value) -> String {
             .trim()
             .to_string()
         }
-        "shell" => short(get("command").or(get("cmd")), 60),
+        "shell" => {
+            // The terminal does four different things; the feed says which.
+            let session = get("session")
+                .filter(|name| !name.trim().is_empty() && *name != "main");
+            let suffix = session.map(|name| format!(" ·{name}")).unwrap_or_default();
+            if args.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+                format!("重開終端機{suffix}")
+            } else if let Some(keys) = get("keys") {
+                format!("輸入 {}{suffix}", short(Some(keys), 20))
+            } else {
+                match get("command").or(get("cmd")).filter(|line| !line.trim().is_empty()) {
+                    Some(command) => format!("{}{suffix}", short(Some(command), 60)),
+                    None => format!("讀終端機{suffix}"),
+                }
+            }
+        }
         "wait" => format!(
             "{}s {}",
             args.get("seconds")
@@ -2954,6 +3105,24 @@ fn tool_status(timed_out: bool, pause: bool, text: &str) -> &'static str {
         "error"
     } else {
         "ok"
+    }
+}
+
+/// Does this tool call change the world? The round policy only counts
+/// mutating actions, so polling the screen, waiting, or reading a file can
+/// never look like a derailment on its own.
+fn action_changes_state(name: &str, args: &Value) -> bool {
+    match name {
+        "computer_act" | "shell" | "write_file" | "launch_app" | "open_path"
+        | "create_schedule" | "cancel_schedule" | "remember" | "forget_memory" | "use_saved_login"
+        | "request_takeover" => true,
+        "browser" => matches!(
+            args.get("action").and_then(Value::as_str),
+            Some("click") | Some("type") | Some("navigate") | Some("press")
+        ),
+        // Observations, waits, reads, and connected-service calls (mcp_*) are
+        // allowed to repeat: they are how a run learns what changed.
+        _ => false,
     }
 }
 
@@ -3135,6 +3304,19 @@ mod tests {
         assert_eq!(
             describe_step("shell", &json!({"command":"ls\n-la"})),
             "shell: ls -la"
+        );
+        assert_eq!(describe_step("shell", &json!({})), "shell: 讀終端機");
+        assert_eq!(
+            describe_step("shell", &json!({"keys":"C-c","session":"build"})),
+            "shell: 輸入 C-c ·build"
+        );
+        assert_eq!(
+            describe_step("shell", &json!({"command":"make","session":"main"})),
+            "shell: make"
+        );
+        assert_eq!(
+            describe_step("shell", &json!({"reset":true,"session":"build"})),
+            "shell: 重開終端機 ·build"
         );
         assert_eq!(
             describe_step("mcp_search", &json!({"query":"x"})),

@@ -52,7 +52,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 rig-core = "0.42"
 async-trait = "0.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "fs", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "fs", "signal", "time", "sync"] }
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 tracing = "0.1"

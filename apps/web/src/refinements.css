@@ -40,7 +40,8 @@
 .chat-panel{--chat-gutter:max(34px,7vw);--chat-col:min(760px,100%)}
 
 
-.chat-panel:has(.composer-dock.has-status) .messages{padding-bottom:188px}
+.composer-dock .error-banner,.composer-dock .queue-hint{position:relative;left:auto;bottom:auto;transform:none;z-index:auto}
+.composer-dock .queue-hint{text-align:center}
 
 
 .spinner{width:17px;height:17px;animation:spin .8s linear infinite}

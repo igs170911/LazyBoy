@@ -102,14 +102,18 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "shell".into(),
-            description: "Run a command inside this bot's computer when the user asked you to do work there. Not for greetings, small talk, or questions you can answer in text.".into(),
+            description: "Type a command into a terminal on this bot's computer when the user asked you to do work there. The terminal is a real, persistent one: it keeps its working directory, exported variables, and background jobs between calls, so `cd` once and later calls run there. Use a session name per piece of work (default \"main\"). A command that has not finished after wait_ms comes back as status=running with the output so far and keeps running in the terminal: poll it with log_lines, or stop it with keys \"C-c\". Never type a second command into a terminal that is still busy. Not for greetings, small talk, or questions you can answer in text.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
-                    "command":{"type":"string"},
-                    "cwd":{"type":"string"}
-                },
-                "required":["command"]
+                    "command":{"type":"string","description":"Command to type. Omit it to just read the terminal."},
+                    "session":{"type":"string","description":"Terminal name: the same name is the same terminal. Default main."},
+                    "wait_ms":{"type":"number","description":"How long to wait for the command, default 20000, max 110000. Longer jobs return status=running and keep going."},
+                    "log_lines":{"type":"number","description":"Read the last N lines of the terminal instead of typing anything."},
+                    "keys":{"type":"string","description":"Keys instead of a command, space separated: \"C-c\", \"q\", \"Escape Enter\"."},
+                    "reset":{"type":"boolean","description":"Start this terminal over: drops directory, exports, and jobs."},
+                    "cwd":{"type":"string","description":"Directory for this command; the terminal stays there."}
+                }
             }),
         },
         ToolDefinition {
@@ -1049,39 +1053,161 @@ fn pack_observation(ctx: &ToolCtx, note: &str, observation: ComputerObservation)
     }
 }
 
+/// How long a `shell` call waits for its command before handing back a
+/// terminal that keeps working. Long enough for a build step to finish, short
+/// enough that a server is reported as running rather than as a timeout.
+const SHELL_WAIT_MS_DEFAULT: u64 = 20_000;
+const SHELL_WAIT_MS_MAX: u64 = 110_000;
+/// The exec has to outlive the wait: the script returns as soon as the terminal
+/// prints its markers, so this only covers tmux being slow to answer.
+const SHELL_EXEC_SLACK_MS: u64 = 15_000;
+const SHELL_LOG_LINES_DEFAULT: u64 = 120;
+
+fn shell_session(args: &Value) -> String {
+    args.get("session")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("main")
+        .to_string()
+}
+
+fn shell_log_lines(args: &Value) -> u64 {
+    args.get("log_lines")
+        .and_then(Value::as_u64)
+        .unwrap_or(SHELL_LOG_LINES_DEFAULT)
+        .clamp(1, 4_000)
+}
+
+fn shell_wait_ms(args: &Value) -> u64 {
+    args.get("wait_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(SHELL_WAIT_MS_DEFAULT)
+        .clamp(1_000, SHELL_WAIT_MS_MAX)
+}
+
+/// Quote one argument for the shell inside the terminal.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// One call, one mode: keys and log reads never type a command, and a command
+/// never waits longer than the model asked for.
+fn shell_argv(args: &Value, session: &str, cwd: Option<&str>) -> Result<Vec<String>, String> {
+    let mut argv = vec!["lazyboy-shell".to_string()];
+    if args.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+        argv.extend(["reset".to_string(), session.to_string()]);
+        return Ok(argv);
+    }
+    if let Some(keys) = args.get("keys").and_then(Value::as_str) {
+        let keys: Vec<String> = keys.split_whitespace().map(str::to_string).collect();
+        if keys.is_empty() {
+            return Err("`keys` needs a key to send, for example \"C-c\".".to_string());
+        }
+        argv.extend(["keys".to_string(), session.to_string()]);
+        argv.extend(keys);
+        return Ok(argv);
+    }
+    let command = args
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if command.is_empty() {
+        // Nothing to type: show the terminal rather than guessing at a command.
+        argv.extend([
+            "log".to_string(),
+            session.to_string(),
+            shell_log_lines(args).to_string(),
+        ]);
+        return Ok(argv);
+    }
+    let command = match cwd {
+        Some(dir) => format!("cd -- {} && {{\n{}\n}}", shell_quote(dir), command),
+        None => command,
+    };
+    argv.extend([
+        "run".to_string(),
+        session.to_string(),
+        shell_wait_ms(args).to_string(),
+        command,
+    ]);
+    Ok(argv)
+}
+
+/// Desktop images built before persistent terminals have no lazyboy-shell; the
+/// exit code of the missing command is the only signal worth matching on.
+fn shell_script_missing(code: i32, stderr: &str) -> bool {
+    code == 127 && stderr.contains("lazyboy-shell")
+}
+
 async fn shell(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
-    let command = args.get("command").and_then(Value::as_str).unwrap_or("");
     let cwd = args.get("cwd").and_then(Value::as_str);
     let cwd = resolve_bot_workspace_cwd(ctx.mode, &ctx.bot_id, cwd)
         .ok()
         .flatten();
-    match ctx
+    let session = shell_session(args);
+    let argv = match shell_argv(args, &session, cwd.as_deref()) {
+        Ok(argv) => argv,
+        Err(message) => return text_outcome(message),
+    };
+    let timeout_ms = shell_wait_ms(args) + SHELL_EXEC_SLACK_MS;
+    let result = ctx
         .sandbox
         .execute(
             &ctx.computer_ref(),
             CommandRequest {
-                argv: vec!["bash".into(), "-lc".into(), command.into()],
-                cwd,
-                timeout_ms: Some(60_000),
+                argv,
+                cwd: None,
+                timeout_ms: Some(timeout_ms),
                 stdin: None,
             },
             &ctx.adapter(),
         )
-        .await
-    {
-        Ok(result) => ToolOutcome {
-            text: format!("exit {}\n{}\n{}", result.code, result.stdout, result.stderr),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-        Err(error) => ToolOutcome {
-            text: error.to_string(),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-    }
+        .await;
+    let result = match result {
+        Ok(result) if shell_script_missing(result.code, &result.stderr) => {
+            // Older image: one shell per call, which is worse but not fatal.
+            let Some(command) = args.get("command").and_then(Value::as_str) else {
+                return text_outcome(
+                    "This desktop image has no terminal sessions. Rebuild it with `make computer`.",
+                );
+            };
+            match ctx
+                .sandbox
+                .execute(
+                    &ctx.computer_ref(),
+                    CommandRequest {
+                        argv: vec!["bash".into(), "-lc".into(), command.to_string()],
+                        cwd,
+                        timeout_ms: Some(SHELL_WAIT_MS_MAX + SHELL_EXEC_SLACK_MS),
+                        stdin: None,
+                    },
+                    &ctx.adapter(),
+                )
+                .await
+            {
+                Ok(fallback) => {
+                    let note = "note: this desktop image has no persistent terminal, so the directory, exports, and background jobs of this command end with this call. Rebuild with `make computer` for a terminal that keeps them.";
+                    return text_outcome(format!(
+                        "{note}\nexit {}\n{}\n{}",
+                        fallback.code, fallback.stdout, fallback.stderr
+                    ));
+                }
+                Err(error) => return text_outcome(error.to_string()),
+            }
+        }
+        Ok(result) => result,
+        Err(error) => return text_outcome(error.to_string()),
+    };
+    text_outcome(format!(
+        "{}\n{}",
+        result.stdout.trim_end(),
+        result.stderr.trim_end()
+    )
+    .trim_end()
+    .to_string())
 }
 
 async fn list_files(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
@@ -1505,6 +1631,7 @@ fn schedule_state(ctx: &ToolCtx) -> crate::state::AppState {
         memory: ctx.memory.clone(),
         mcp: ctx.mcp.clone(),
         calls: crate::state::CallRegistry::default(),
+        wakes: crate::state::WakeBus::default(),
     }
 }
 
@@ -1520,5 +1647,68 @@ mod connection_check_tests {
             assert!(!is_connection_check(&CdpPage { ok:true, text:text.into(), ..Default::default() }));
         }
         assert!(!is_connection_check(&CdpPage { ok:false, text:"Cloudflare Verify you are human".into(), ..Default::default() }));
+    }
+}
+
+#[cfg(test)]
+mod shell_session_tests {
+    use super::*;
+
+    /// The same pairing the tool makes: a session name, then a mode.
+    fn argv(args: Value) -> Vec<String> {
+        shell_argv(&args, &shell_session(&args), None).expect("argv")
+    }
+
+    #[test]
+    fn a_command_runs_in_its_named_terminal_and_waits_its_own_time() {
+        assert_eq!(
+            argv(json!({"command":"ls -l","session":"build","wait_ms":45000})),
+            ["lazyboy-shell", "run", "build", "45000", "ls -l"]
+        );
+        let defaults = argv(json!({"command":"pwd"}));
+        assert_eq!(defaults[1], "run");
+        assert_eq!(defaults[2], "main");
+        assert_eq!(defaults[3], SHELL_WAIT_MS_DEFAULT.to_string());
+    }
+
+    #[test]
+    fn a_call_without_a_command_reads_the_terminal_instead_of_typing() {
+        assert_eq!(
+            argv(json!({"session":"build","log_lines":40})),
+            ["lazyboy-shell", "log", "build", "40"]
+        );
+        assert_eq!(argv(json!({})), ["lazyboy-shell", "log", "main", "120"]);
+    }
+
+    #[test]
+    fn keys_and_reset_never_type_a_command() {
+        assert_eq!(
+            argv(json!({"session":"build","keys":"C-c"})),
+            ["lazyboy-shell", "keys", "build", "C-c"]
+        );
+        assert_eq!(argv(json!({"reset":true})), ["lazyboy-shell", "reset", "main"]);
+        assert!(shell_argv(&json!({"keys":"   "}), "main", None).is_err());
+    }
+
+    #[test]
+    fn cwd_moves_this_command_into_a_directory_and_survives_quotes() {
+        let argv = shell_argv(&json!({"command":"make\ntest"}), "main", Some("/tmp/a b'c"))
+            .expect("argv");
+        assert_eq!(argv[4], "cd -- '/tmp/a b'\\''c' && {\nmake\ntest\n}");
+    }
+
+    #[test]
+    fn waits_stay_inside_the_range_the_desktop_can_honour() {
+        assert_eq!(shell_wait_ms(&json!({"wait_ms":900})), 1_000);
+        assert_eq!(shell_wait_ms(&json!({"wait_ms":900_000})), SHELL_WAIT_MS_MAX);
+        assert_eq!(shell_wait_ms(&json!({})), SHELL_WAIT_MS_DEFAULT);
+        assert_eq!(shell_log_lines(&json!({"log_lines":0})), 1);
+    }
+
+    #[test]
+    fn only_a_missing_script_falls_back_to_one_shot() {
+        assert!(shell_script_missing(127, "bash: lazyboy-shell: command not found"));
+        assert!(!shell_script_missing(127, "bash: whatever: command not found"));
+        assert!(!shell_script_missing(1, "lazyboy-shell: nope"));
     }
 }

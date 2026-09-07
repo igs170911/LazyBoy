@@ -64,6 +64,11 @@ pub enum StopReason {
     MidTaskText,
     /// The bounded turn budget is spent with work still outstanding.
     BudgetExhausted,
+    /// The round policy saw the run repeating itself rather than moving. The
+    /// difference from `BudgetExhausted` matters to the human: this is "it got
+    /// stuck", not "it ran out of a quota", and the pause message carries the
+    /// action it kept repeating.
+    LoopDetected,
 }
 
 impl StopReason {
@@ -71,6 +76,7 @@ impl StopReason {
         match self {
             Self::MidTaskText => "mid_task_text",
             Self::BudgetExhausted => "budget_exhausted",
+            Self::LoopDetected => "loop_detected",
         }
     }
 }
