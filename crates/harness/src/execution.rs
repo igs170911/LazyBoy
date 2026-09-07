@@ -28,7 +28,12 @@ impl ExecutionMode {
 
 /// Only a standalone terminal marker is an outcome, not a quoted mention.
 pub fn goal_outcome(reply: &str) -> GoalOutcome {
-    match reply.trim().lines().last().map(str::trim) {
+    let reply = reply.trim();
+    // A bare marker provides neither verification nor a reason to the human.
+    if reply.lines().count() < 2 {
+        return GoalOutcome::Continue;
+    }
+    match reply.lines().last().map(str::trim) {
         Some("[GOAL_COMPLETE]") => GoalOutcome::Complete,
         Some("[GOAL_BLOCKED]") => GoalOutcome::NeedsInput,
         _ => GoalOutcome::Continue,
@@ -165,6 +170,8 @@ mod tests {
 
     #[test]
     fn progress_and_quoted_markers_do_not_complete_a_goal() {
+        assert_eq!(goal_outcome("[GOAL_COMPLETE]"), GoalOutcome::Continue);
+        assert_eq!(goal_outcome("\n[GOAL_BLOCKED]"), GoalOutcome::Continue);
         assert_eq!(goal_outcome("Next I will use [GOAL_COMPLETE]."), GoalOutcome::Continue);
         assert_eq!(goal_outcome("Verified output.\n[GOAL_COMPLETE]"), GoalOutcome::Complete);
         assert_eq!(goal_outcome("Please supply the date.\n[GOAL_BLOCKED]"), GoalOutcome::NeedsInput);

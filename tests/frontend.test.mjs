@@ -159,16 +159,18 @@ function mobileViewer(){
   _handleMouseButton(x,y,mask){pointerEvents.push({type:'button',x,y,mask})}
   _handleWheel(event){pointerEvents.push({type:'wheel',dx:event.deltaX,dy:event.deltaY})}
  }
- const window={location:{pathname:'/vnc.html',protocol:'http:',host:'localhost',origin:'http://localhost',hash:''},parent:{postMessage:x=>sent.push(x)},addEventListener:(n,f,o)=>{handlers[n]=f;options[n]=o}};
- vm.runInNewContext(source,{window,document:{location:{href:'http://localhost/vnc.html?view_only=false'},getElementById:id=>id==='mobile-keyboard'?keyboard:element(id),querySelector:selector=>selector==='#screen canvas'?canvas:null},navigator:{},RFB,setTimeout(){},clearTimeout(){}});
+ const body={className:'',classList:{tokens:new Set(),toggle(name,force){if(force===undefined)force=!this.tokens.has(name);if(force)this.tokens.add(name);else this.tokens.delete(name);body.className=[...this.tokens].join(' ')}}};
+ const window={location:{pathname:'/vnc.html',protocol:'http:',host:'localhost',origin:'http://localhost',hash:''},parent:{postMessage:x=>sent.push(x)},addEventListener:(n,f,o)=>{handlers[n]=f;options[n]=o},matchMedia:()=>({matches:false,addEventListener(){}})};
+ vm.runInNewContext(source,{window,document:{body,location:{href:'http://localhost/vnc.html?view_only=false'},getElementById:id=>id==='mobile-keyboard'?keyboard:element(id),querySelector:selector=>selector==='#screen canvas'?canvas:null},navigator:{},RFB,setTimeout(){},clearTimeout(){}});
+ return {handlers,options,sent,keyboard,canvas,rfb,window,pointerEvents,elements,body};
  return {handlers,options,sent,keyboard,canvas,rfb,window,pointerEvents,elements};
 }
-test('mobile tap focuses editable input before noVNC stops touch propagation; drag and multi-touch do not',()=>{
+test('direct mobile taps position without unexpectedly opening the keyboard',()=>{
  const {handlers:h,options,keyboard,canvas,rfb}=mobileViewer();
  for(const name of ['touchstart','touchmove','touchend'])assert.equal(options[name].capture,true);
  const point={clientX:20,clientY:30};
  h.touchstart({target:canvas,touches:[point]});h.touchend({touches:[]});
- assert.equal(keyboard.focused,true);assert.equal(rfb.focusOnClick,false);
+ assert.equal(keyboard.focused,false);assert.equal(rfb.focusOnClick,false);
  keyboard.blur();h.touchstart({target:canvas,touches:[point]});h.touchmove({touches:[{clientX:50,clientY:30}]});h.touchend({touches:[]});assert.equal(keyboard.focused,false);
  h.touchstart({target:canvas,touches:[point,point]});h.touchend({touches:[]});assert.equal(keyboard.focused,false);
  rfb.viewOnly=true;h.touchstart({target:canvas,touches:[point]});h.touchend({touches:[]});assert.equal(keyboard.focused,false);
@@ -200,7 +202,7 @@ function pointerButton(viewer,action){
 }
 function pointerTouch(viewer,name,points){
  let prevented=false,stopped=false;
- viewer.handlers[name]({target:viewer.canvas,touches:points.map(([clientX,clientY])=>({clientX,clientY})),preventDefault(){prevented=true},stopImmediatePropagation(){stopped=true}});
+ viewer.handlers[name]({target:{closest:selector=>selector==='#trackpad'?{}:null},touches:points.map(([clientX,clientY])=>({clientX,clientY})),preventDefault(){prevented=true},stopImmediatePropagation(){stopped=true}});
  return prevented&&stopped;
 }
 test('trackpad moves relative to cursor, clamps edges and taps without opening keyboard',()=>{
@@ -240,6 +242,53 @@ test('view-only pointer controls never send mouse input and trackpad asks for co
  pointerTouch(v,'touchstart',[[20,20]]);pointerTouch(v,'touchmove',[[50,50]]);pointerTouch(v,'touchend',[]);
  assert.equal(v.pointerEvents.length,0);
  assert.equal(v.sent.at(-1).type,'lazyboy-request-control');
+});
+test('trackpad mode swallows screen taps so fingers on the picture do not click',()=>{
+ const v=mobileViewer();pointerButton(v,'mode');
+ let prevented=false,stopped=false;
+ v.handlers.touchstart({target:v.canvas,touches:[{clientX:20,clientY:30}],preventDefault(){prevented=true},stopImmediatePropagation(){stopped=true}});
+ assert.equal(prevented&&stopped,true);
+ assert.equal(v.pointerEvents.length,0);
+ assert.equal(v.keyboard.focused,false);
+});
+test('coarse pointers start in trackpad mode with a body class for independent controls',()=>{
+ const source=fs.readFileSync('apps/web/vnc.html','utf8').match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/import RFB[^;]+;/,'');
+ const body={className:'',classList:{tokens:new Set(),toggle(name,force){if(force)this.tokens.add(name);else this.tokens.delete(name);body.className=[...this.tokens].join(' ')}}};
+ const window={location:{pathname:'/vnc.html',protocol:'http:',host:'localhost',origin:'http://localhost',hash:''},parent:{postMessage(){}},addEventListener(){},matchMedia:()=>({matches:true,addEventListener(){}})};
+ const elements={}; const element=id=>elements[id]||(elements[id]={style:{},attributes:{},hidden:true,setAttribute(k,v){this.attributes[k]=v},querySelectorAll(){return []}});
+ class RFB{constructor(){} addEventListener(){} focus(){}}
+ vm.runInNewContext(source,{window,document:{body,location:{href:'http://localhost/vnc.html?view_only=false'},getElementById:id=>element(id),querySelector:()=>null},navigator:{},RFB,setTimeout(){},clearTimeout(){}});
+ assert.equal(body.className,'touch-ui');
+ assert.equal(elements.trackpad.hidden,false);
+});
+test('mobile shortcut row sends modifiers and hides with the keyboard',()=>{
+ const v=mobileViewer();
+ pointerButton(v,'keyboard');
+ assert.equal(v.keyboard.focused,true);
+ assert.equal(v.elements['keyboard-shortcuts'].hidden,false);
+ v.handlers.click({target:{closest:()=>({dataset:{action:'modifier',key:'ctrl'}})}});
+ v.handlers.click({target:{closest:()=>({dataset:{action:'key',key:'c'}})}});
+ assert.equal(v.sent.at(-1).type,'lazyboy-mobile-key');
+ assert.equal(v.sent.at(-1).key,'ctrl+c');
+ v.handlers.click({target:{closest:()=>({dataset:{action:'hide-keyboard'}})}});
+ assert.equal(v.keyboard.focused,false);
+ assert.equal(v.elements['keyboard-shortcuts'].hidden,true);
+});
+test('status and HUD sit outside the remote pixels; screenshots stay opt-in',()=>{
+ const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
+ assert.match(app,/\{!computerOpen && <RunStatus runId=\{liveRunId\}\/>\}/);
+ assert.match(app,/<RunStatus runId=\{liveRunId\}\/>\{hud\}/);
+ assert.match(app,/\{!computerOpen&&hud\}<div className="preview">/);
+ assert.match(app,/--visible-height/);
+ const css=fs.readFileSync('apps/web/src/computer.css','utf8');
+ assert.match(css,/\.computer-overlay>\.run-status/);
+ assert.match(css,/\.computer-hud\{position:static/);
+ const tools=fs.readFileSync('crates/api/src/tools.rs','utf8');
+ assert.match(tools,/screenshots are opt-in with observe:true/);
+ assert.match(tools,/if args\.get\("observe"\)\.and_then\(Value::as_bool\) != Some\(true\)/);
+ const runs=fs.readFileSync('crates/api/src/runs.rs','utf8');
+ assert.match(runs,/Never silently stop/);
+ assert.match(runs,/let goal_mode = goal_mode \|\| !chat_only/);
 });
 
 const monitorJs=ts.transpileModule(fs.readFileSync('apps/web/src/run-monitor.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -309,6 +358,7 @@ test('trail lines read as sentences with the detail a stuck run needs',()=>{
  assert.match(trailText({id:4,kind:'run',createdAt:'',event:'started',task:'整理下載資料'}),/整理下載資料/);
  assert.match(trailText({id:5,kind:'run',createdAt:'',event:'completed',turns:9}),/Done in 9 turns/);
  assert.match(trailText({id:6,kind:'run',createdAt:'',event:'waiting_input',reason:'登入'}),/Waiting for you: 登入/);
+ assert.match(trailText({id:10,kind:'run',createdAt:'',event:'paused',reason:'已達本輪執行上限'}),/Paused: 已達本輪執行上限/);
  assert.match(trailText({id:7,kind:'run',createdAt:'',event:'retry'}),/Re-queued/);
  assert.match(trailText({id:8,kind:'retry',createdAt:'',attempt:2,gaveUp:true,error:'429 rate limit'}),/attempt 2 failed, retrying · gave up — 429 rate limit/);
  assert.match(trailText({id:9,kind:'notice',createdAt:'',text:'這輪不需要電腦'}),/這輪不需要電腦/);
@@ -326,5 +376,7 @@ test('the bubble reads the run activity endpoint the API actually mounts',()=>{
  assert.match(app,/<RunProbe runId=\{member\.id===computer\.botId\?computer\.busyRunId:null\}><Avatar/);
  const probe=fs.readFileSync('apps/web/src/run-monitor.tsx','utf8');
  assert.match(probe,/`\/api\/runs\/\$\{runId\}\/activity\$\{after\}`/);
+ assert.match(probe,/export function RunStatus/);
+ assert.match(probe,/`\/api\/runs\/\$\{runId\}\/activity\?limit=30`/);
  assert.match(fs.readFileSync('apps/web/src/main.tsx','utf8'),/import "\.\/monitor\.css";/);
 });

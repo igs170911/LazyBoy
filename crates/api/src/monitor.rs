@@ -277,6 +277,7 @@ struct RunRow {
     turn: Option<i64>,
     turn_limit: Option<i64>,
     error: Option<String>,
+    step_at: Option<DateTime<Utc>>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
 }
@@ -301,7 +302,7 @@ async fn activity(
     let actor = actor(&state).await?;
     let run = sqlx::query_as::<_, RunRow>(
         "SELECT status, checkpoint->>'step' AS step, (checkpoint->>'turn')::bigint AS turn,
-                (checkpoint->>'turnLimit')::bigint AS turn_limit, error, started_at, completed_at
+                (checkpoint->>'turnLimit')::bigint AS turn_limit, error, (checkpoint->>'stepAt')::timestamptz AS step_at, started_at, completed_at
          FROM runs WHERE id=$1 AND space_id=$2 AND user_id=$3",
     )
     .bind(&id)
@@ -336,7 +337,7 @@ async fn activity(
         .filter(|raw| !raw.trim().is_empty())
         .map(|raw| {
             let failure = classify_run_error(raw);
-            json!({"code": failure.code, "headline": failure.headline, "raw": raw})
+            json!({"code": failure.code, "headline": failure.headline, "action": failure.action, "raw": raw})
         });
     let elapsed = run.started_at.map(|started| {
         (run.completed_at.unwrap_or_else(Utc::now) - started)
@@ -350,6 +351,7 @@ async fn activity(
         "turnLimit": run.turn_limit,
         "step": run.step,
         "elapsedMs": elapsed,
+        "stepAt": run.step_at,
         "error": error,
         "activity": rows.into_iter().map(|(row_id, kind, payload, created_at)| {
             let mut entry = payload;

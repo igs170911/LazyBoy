@@ -68,3 +68,22 @@
 .computer-power-menu .computer-power-stop{color:var(--danger-soft)}
 .computer-power-menu small{display:block;padding:8px 10px 6px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.6}
 .computer-overlay .computer-power-menu{top:calc(100% + 8px);bottom:auto}
+
+/* Status belongs outside the remote pixels, including during connection/handoff. */
+.computer-overlay{top:var(--visible-top,0px);bottom:auto;height:var(--visible-height,100dvh)}
+.computer-overlay>header{flex-shrink:0}
+.computer-hud{position:static;inset:auto;display:block;padding:7px 12px;border-radius:0;background:var(--surface);flex:none}
+.computer-hud .computer-signal{display:none}
+.overlay-error{position:static;transform:none;flex:none;margin:0 8px 8px}
+.run-status{flex:none;min-width:0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:12px;max-height:26vh;overflow:auto;margin:6px 0}
+.run-status-heading{display:flex;gap:8px;align-items:center}
+.run-status-heading small{margin-left:auto;color:var(--muted)}
+.run-status p{margin:5px 0;overflow-wrap:anywhere}
+.run-status summary{cursor:pointer;color:var(--muted);padding:4px 0}
+.run-status ol{padding-left:20px;max-height:180px;overflow:auto}
+.run-status li{padding:4px 0;overflow-wrap:anywhere}
+.run-status time{color:var(--muted)}
+.run-status.has-error,.run-status-issue{color:var(--danger-soft)}
+.run-status-wait{color:var(--muted)}
+.computer-overlay>.run-status{margin:6px 8px;max-height:22vh}
+@media(max-width:700px){.computer-overlay>.run-status{max-height:18vh}.overlay-screen{padding:4px}.computer-overlay>header{min-height:44px;gap:4px}.computer-overlay>header>div{gap:5px}.computer-overlay>header strong{font-size:12px}}

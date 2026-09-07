@@ -138,7 +138,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "browser".into(),
-            description: "Control Chromium through the page DOM when the user asked you to use the browser. Prefer this over computer_act for anything in the page. snapshot returns numbered elements and visible text (no screenshot). click/type/navigate by element id or CSS selector. click scrolls off-screen elements into view and, if the control is [disabled], waits up to 45s (waitMs to change) for it to enable before clicking. Ids are renumbered after every page change. The human still sees the live window.".into(),
+            description: "Control Chromium through the page DOM when the user asked you to use the browser. Prefer this over computer_act for anything in the page. Every action returns fresh numbered elements and visible text; screenshots are opt-in with observe:true for visual ambiguity. click/type/navigate by element id or CSS selector. click scrolls off-screen elements into view and, if the control is [disabled], waits up to 45s (waitMs to change) for it to enable before clicking. Ids are renumbered after every page change. The human still sees the live window.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -149,6 +149,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
                     "key":{"type":"string"},
                     "url":{"type":"string"},
                     "ms":{"type":"number"},
+                    "observe":{"type":"boolean","description":"Attach a screenshot only when visual verification is needed; default false"},
                     "waitMs":{"type":"number","description":"click only: how long to wait for a disabled control to enable (default 45000, max 120000)"}
                 },
                 "required":["action"]
@@ -765,7 +766,7 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         ));
     }
     let page = cdp_call(ctx, request).await;
-    if !page.elements.is_empty() {
+    if page.ok || !page.elements.is_empty() {
         *ctx.elements.lock().unwrap() = page.elements.clone();
     }
     if !page.ok {
@@ -789,7 +790,7 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             " (the control was disabled; waited {seconds:.0}s for it to enable before clicking)"
         ));
     }
-    if action == "snapshot" {
+    if args.get("observe").and_then(Value::as_bool) != Some(true) {
         return ToolOutcome {
             text,
             image: None,
@@ -812,17 +813,10 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
 }
 
 fn browser_result_text(action: &str, page: &CdpPage) -> String {
-    if matches!(action, "snapshot" | "navigate") {
-        format!(
-            "browser {action}\nPage: {} {}\nClickable page elements: {}\nVisible text:\n{}",
-            page.title,
-            page.url,
-            format_ui_elements(&page.elements),
-            page.text
-        )
-    } else {
-        format!("browser {action} ok")
-    }
+    format!(
+        "browser {action}\nPage: {} {}\nClickable page elements: {}\nVisible text:\n{}",
+        page.title, page.url, format_ui_elements(&page.elements), page.text
+    )
 }
 
 async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {

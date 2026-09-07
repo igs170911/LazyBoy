@@ -609,7 +609,8 @@ def main():
                 fail(val.get("error") or "click failed")
             pointer(display, val.get("x") or 0, val.get("y") or 0)
             wait_for_visual_update(ws)
-            out = {"ok": True, "action": "click", "selector": sel, "restarted": restarted}
+            out = snapshot(ws)
+            out.update({"action": "click", "selector": sel, "restarted": restarted})
             if waited >= 1.0:
                 out["waitedSeconds"] = round(waited, 1)
             print(json.dumps(out))
@@ -636,23 +637,30 @@ def main():
             text = req.get("text") or ""
             if sel:
                 val = evaluate(ws, CLICK_JS, sel) or {}
-                if val.get("ok"):
-                    pointer(display, val.get("x") or 0, val.get("y") or 0)
+                if not val.get("ok"):
+                    fail(val.get("error") or "target field is unavailable; no text inserted")
+                pointer(display, val.get("x") or 0, val.get("y") or 0)
             if text:
                 ws.call("Input.insertText", {"text": text})
             wait_for_visual_update(ws)
-            print(json.dumps({"ok": True, "action": "type", "restarted": restarted}))
+            out = snapshot(ws)
+            out.update({"action": "type", "restarted": restarted})
+            print(json.dumps(out))
             return
         if action == "press":
             key = req.get("key") or "Return"
             press(ws, key)
             wait_for_visual_update(ws)
-            print(json.dumps({"ok": True, "action": "press", "key": key, "restarted": restarted}))
+            out = snapshot(ws)
+            out.update({"action": "press", "key": key, "restarted": restarted})
+            print(json.dumps(out))
             return
         if action == "wait":
             ms = min(max(int(req.get("ms") or 400), 0), 5000)
             time.sleep(ms / 1000.0)
-            print(json.dumps({"ok": True, "action": "wait", "ms": ms}))
+            out = snapshot(ws)
+            out.update({"action": "wait", "ms": ms})
+            print(json.dumps(out))
             return
         fail("unsupported action")
     finally:

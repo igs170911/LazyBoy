@@ -2,6 +2,17 @@ import type { zhTW } from "./zh-TW";
 
 /** English UI copy. Keys must stay in lockstep with zh-TW. */
 export const en: { [K in keyof typeof zhTW]: string } = {
+  liveCompleted: "Completed",
+  liveFailed: "Task incomplete: an error occurred",
+  liveCancelled: "Stopped: cancelled or interrupted",
+  liveInput: "Your reply is needed to continue",
+  liveTakeover: "Waiting for you; resumes after handoff",
+  liveRunning: "Working",
+  liveLoading: "Loading run status…",
+  liveDisconnected: "Status unavailable; reconnecting. This does not mean the AI has stopped.",
+  liveSlow: "This step has not returned yet. Timeouts, retries and any stop reason will be reported.",
+  liveHistory: "Actions, errors and timings",
+
   search: "Search",
   sharedComputer: "Shared computer",
   privateComputer: "Private computer",

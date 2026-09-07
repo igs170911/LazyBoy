@@ -13,8 +13,8 @@ export interface ComputerStatus { botId:string; mode:ComputerMode; state:Compute
 /** One line of the live trail a run writes while it works. */
 export type RunActivityKind = "run"|"model"|"tool"|"retry"|"notice";
 export interface RunActivityEntry { id:number; kind:RunActivityKind; createdAt:string; turn?:number|null; event?:string|null; task?:string|null; reason?:string|null; turns?:number|null; limit?:number|null; error?:string|null; name?:string|null; step?:string|null; status?:string|null; elapsedMs?:number|null; toolCalls?:number|null; text?:string|null; snippet?:string|null; attempt?:number|null; gaveUp?:boolean|null }
-export interface RunActivityError { code:string; headline:string; raw:string }
-export interface RunActivity { runId:string; status:string; turn:number|null; turnLimit:number|null; step:string|null; elapsedMs:number|null; error:RunActivityError|null; activity:RunActivityEntry[] }
+export interface RunActivityError { code:string; headline:string; action?:string; raw:string }
+export interface RunActivity { runId:string; status:string; turn:number|null; turnLimit:number|null; step:string|null; stepAt?:string|null; elapsedMs:number|null; error:RunActivityError|null; activity:RunActivityEntry[] }
 
 export interface PlaybookStep { do:string; expect?:string; note?:string }
 export interface PlaybookInput { name:string; description?:string; example?:string }

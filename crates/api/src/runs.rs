@@ -55,6 +55,8 @@ When you use the browser tool:
 
 When a click changes nothing: do not repeat it blindly. Take a fresh snapshot, read the [disabled] tags and the page text, then act. Pages that need patience (training videos, quizzes, slow forms) are normal: keep working through them step by step and report progress in one short sentence when done.
 
+Explain your next concrete action briefly before tool calls, in the user's language. When a tool fails, explain what failed and how you will recover in your next update. Recover from temporary errors by observing current state and choosing a different action; never replay an uncertain mutation blindly. Before any necessary stop, state what is completed, what remains, the specific blocker, and the next action needed. Never silently stop or claim a failed tool succeeded.
+
 Waiting is a tool call, never a reply. Ending your turn with \"waiting for X\" stops the whole run; nobody resumes it. If something must finish first, call wait (or click, which waits) and continue.
 
 Multi-step tasks and taught skills: you are done only when the playbook's check passes (for example the course shows completed, the form shows a confirmation). Do not stop with a status sentence in the middle; keep calling tools until the check passes or you are truly blocked, then say exactly why. Never repeat an earlier reply word for word; describe the current screen.
@@ -688,16 +690,13 @@ async fn execute_run(
         )
         .await;
     }
-    // Taught skills run long (a 24-page course is 24 clicks); plain chats stay
-    // bounded tighter so a confused model cannot burn budget for as long.
-    let execution_mode = if goal_mode {
-        ExecutionMode::Goal
-    } else if skill_check.is_some() && file_skill.is_none() {
-        ExecutionMode::Bounded(80)
-    } else if chat_only {
+    // Computer work keeps going until it verifies or explains a blocker.
+    // Plain chat stays short so a confused model cannot burn budget.
+    let goal_mode = goal_mode || !chat_only;
+    let execution_mode = if chat_only {
         ExecutionMode::Bounded(4)
     } else {
-        ExecutionMode::Bounded(40)
+        ExecutionMode::Goal
     };
     let turn_limit = match execution_mode {
         ExecutionMode::Goal => None,
@@ -1375,6 +1374,7 @@ async fn execute_run(
         "run",
         json!({
             "event": if needs_input { "waiting_input" } else { "completed" },
+            "reason": if needs_input { Some(final_text.as_str()) } else { None },
             "turns": turns,
         }),
     )
@@ -1490,6 +1490,13 @@ async fn complete_with_retry(
 ) -> Result<Vec<AssistantContent>, String> {
     let mut last = String::new();
     for attempt in 0..3 {
+        if attempt > 0 {
+            let failure = crate::monitor::classify_run_error(&last);
+            set_run_step(trace.state, trace.run_id, &format!(
+                "{} 正在自動重試模型（第 {}/3 次）；保留已完成的操作。",
+                failure.headline, attempt + 1
+            )).await;
+        }
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
             Duration::from_secs(165),
@@ -1507,7 +1514,7 @@ async fn complete_with_retry(
                         "turn": trace.turn,
                         "attempt": attempt + 1,
                         "error": error,
-                        "gaveUp": !retryable_run_error(&error),
+                        "gaveUp": attempt == 2 || !retryable_run_error(&error),
                     }),
                 )
                 .await;
@@ -1527,7 +1534,7 @@ async fn complete_with_retry(
                     trace.state,
                     trace.run_id,
                     "retry",
-                    json!({"turn": trace.turn, "attempt": attempt + 1, "error": error}),
+                    json!({"turn": trace.turn, "attempt": attempt + 1, "error": error, "gaveUp": attempt == 2}),
                 )
                 .await;
                 tracing::warn!(
@@ -1928,16 +1935,26 @@ async fn pause_for_answer(
     req: PauseRequest<'_>,
 ) -> Result<(), String> {
     let draft = req.draft.replace(NEEDS_INPUT_MARKER, "").trim().to_string();
+    let stall = match req.reason {
+        StopReason::BudgetExhausted => "已達本輪執行上限",
+        StopReason::MidTaskText => {
+            "模型多次未能提供可執行的下一步，系統已要求它重新確認並繼續，但仍無法推進"
+        }
+    };
     let draft = if draft.is_empty() {
         match req.reason {
             StopReason::BudgetExhausted => format!(
-                "我在這個任務上用了 {} 輪，還沒有做到可以幫你確認完成的地步，先停在目前的畫面。要我繼續嗎？",
-                req.turns
+                "我在這個任務上用了 {} 輪，還沒有做到可以幫你確認完成的地步，先停在目前的畫面。要我繼續嗎？\n\n任務尚未確認完成。停止原因：{}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。",
+                req.turns, stall
             ),
-            StopReason::MidTaskText => {
-                "我先到這裡，需要你的決定或資料才能繼續。要我接著做嗎？".to_string()
-            }
+            StopReason::MidTaskText => format!(
+                "模型多次未提供可執行的下一步，系統無法確認任務已完成。請補充下一步指示或接管確認現況後繼續。\n\n任務尚未確認完成。停止原因：{}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。",
+                stall
+            ),
         }
+    } else if !asks_for_input(req.draft) {
+        // A model's optimistic draft must not hide a harness-detected stall.
+        format!("{draft}\n\n任務尚未確認完成。停止原因：{stall}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。")
     } else {
         draft
     };
@@ -1978,7 +1995,7 @@ async fn pause_for_answer(
         "run",
         json!({
             "event": "paused",
-            "reason": req.reason.as_str(),
+            "reason": draft,
             "turns": req.turns,
             "limit": req.limit,
         }),

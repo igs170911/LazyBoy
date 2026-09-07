@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import importlib.util
 import subprocess
 import unittest
@@ -39,5 +42,34 @@ class ClipboardTest(unittest.TestCase):
             def recv(self):return next(self.items)
         ws=cdp.Ws.__new__(cdp.Ws);ws.sock=Socket();ws.n=0
         self.assertEqual(ws.call('Runtime.test'),{'ok':True})
+
+class BrowserActionTest(unittest.TestCase):
+    def run_action(self, request, evaluation=None):
+        calls=[]
+        class Socket:
+            def call(self, method, params=None): calls.append((method, params)); return {}
+            def close(self): pass
+        output=io.StringIO()
+        def evaluate(ws, expression, arg=None):
+            if expression == cdp.SNAP_JS:
+                return {"url":"https://example.test/next", "title":"Next", "text":"Saved", "elements":[{"id":1,"title":"Continue"}]}
+            return evaluation if evaluation is not None else {"ok":True,"x":10,"y":20}
+        with patch.object(cdp.sys,'argv',['cdp',json.dumps(request)]), patch.object(cdp,'probe',return_value=True), patch.object(cdp,'connect',return_value=Socket()), patch.object(cdp,'evaluate',side_effect=evaluate), patch.object(cdp,'pointer'), patch.object(cdp,'wait_for_visual_update'), patch.object(cdp,'wait_until_enabled',return_value=0), patch.object(cdp.time,'sleep'), contextlib.redirect_stdout(output):
+            try: cdp.main()
+            except SystemExit: pass
+        return json.loads(output.getvalue()), calls
+
+    def test_every_browser_action_returns_current_elements_and_text(self):
+        for action in ['click','type','press','wait','navigate']:
+            with self.subTest(action=action):
+                result,_=self.run_action({"action":action,"selector":"#field","text":"hello","url":"https://example.test"})
+                self.assertTrue(result['ok'])
+                self.assertEqual(result['text'],'Saved')
+                self.assertEqual(result['elements'][0]['title'],'Continue')
+
+    def test_missing_field_never_types_into_previous_focus(self):
+        result,calls=self.run_action({"action":"type","selector":"#gone","text":"private"},{"ok":False,"error":"element gone"})
+        self.assertFalse(result['ok'])
+        self.assertFalse(any(method=='Input.insertText' for method,_ in calls))
 
 if __name__=='__main__':unittest.main()

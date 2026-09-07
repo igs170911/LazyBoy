@@ -75,6 +75,8 @@ for fragment in [
     'SELECT id, kind, payload, created_at FROM run_activity WHERE run_id=$1 AND ($2::bigint IS NULL OR id>$2) ORDER BY id DESC LIMIT $3',
     "(checkpoint->>'turn')::bigint AS turn",
     "(checkpoint->>'turnLimit')::bigint AS turn_limit",
+    "(checkpoint->>'stepAt')::timestamptz AS step_at",
+    '"action": failure.action',
     "AND status IN ('failed','cancelled')",
     'a.bot_id=runs.bot_id AND a.id<>runs.id',
     "a.status IN ('leased','running','waiting_input','waiting_takeover')",
@@ -90,6 +92,9 @@ for fragment in [
     "'step', $2::text, 'stepAt', now(), 'turn', $3::bigint, 'turnLimit', $4::bigint",
     '"event": "started"',
     '"event": "failed"',
+    '"event": "paused"',
+    '"reason": draft',
+    'Never silently stop',
     '"status": tool_status(',
     '"elapsedMs": model_elapsed',
 ]:
