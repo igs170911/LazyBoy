@@ -9,8 +9,8 @@ use bollard::container::{
     StartContainerOptions, StopContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::models::{HostConfig, HostConfigLogConfig, PortBinding};
-use bollard::network::CreateNetworkOptions;
+use bollard::models::{EndpointSettings, HostConfig, HostConfigLogConfig, PortBinding};
+use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions};
 use futures_util::StreamExt;
 use lazyboy_control::{
     ActionRequest, CommandRequest, CommandResult, EnsureScreenRequest, EnsureScreenResult, HOME,
@@ -439,11 +439,65 @@ impl DockerHost {
         interactive: bool,
     ) -> Result<String, String> {
         let layout = screen_layout(slot).map_err(|error| error.to_string())?;
+        if let Some(network) = screen_network() {
+            match self.screen_container_name(id, &network).await {
+                Ok(name) => {
+                    let authority = format!("{name}:{}", layout.view_port);
+                    return Ok(view_url(&authority, interactive));
+                }
+                Err(error) => tracing::warn!(
+                    "screen network {network} unusable for {id}: {error}; using host ports"
+                ),
+            }
+        }
         let port = self.published_host_port(id, layout.view_port).await?;
-        let view = if interactive { "false" } else { "true" };
-        Ok(format!(
-            "http://127.0.0.1:{port}/vnc_lite.html?resize=scale&view_only={view}"
-        ))
+        Ok(view_url(&format!("127.0.0.1:{port}"), interactive))
+    }
+
+    /// Resolves the computer's container name and joins it to the shared screen
+    /// network on demand, so computers started before that network existed keep
+    /// working without reprovisioning.
+    async fn screen_container_name(&self, id: &str, network: &str) -> Result<String, String> {
+        for _ in 0..20 {
+            let info = self
+                .docker
+                .inspect_container(id, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            if info.state.as_ref().and_then(|state| state.running) == Some(true) {
+                let name = info
+                    .name
+                    .unwrap_or_default()
+                    .trim_matches('/')
+                    .to_string();
+                if name.is_empty() {
+                    return Err("computer container has no name".into());
+                }
+                self.attach_screen_network(&name, network).await;
+                return Ok(name);
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        Err("computer is not running".into())
+    }
+
+    async fn attach_screen_network(&self, name: &str, network: &str) {
+        let result = self
+            .docker
+            .connect_network(
+                network,
+                ConnectNetworkOptions {
+                    container: name.to_string(),
+                    endpoint_config: EndpointSettings::default(),
+                },
+            )
+            .await;
+        if let Err(error) = result {
+            let text = error.to_string();
+            if !text.to_lowercase().contains("already") {
+                tracing::warn!("attach {name} to screen network {network}: {text}");
+            }
+        }
     }
 
     async fn published_host_port(&self, id: &str, view_port: u16) -> Result<String, String> {
@@ -1071,6 +1125,21 @@ fn network_name(home_key: &str) -> String {
     format!("lbnet-{}", container_name(home_key))
 }
 
+/// `LAZYBOY_SCREEN_NETWORK` places the API and the computer containers on one
+/// shared Docker network. Without it the desktop proxy must reach published host
+/// ports, which bind the host loopback and are unreachable from another container.
+fn screen_network() -> Option<String> {
+    std::env::var("LAZYBOY_SCREEN_NETWORK")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn view_url(authority: &str, interactive: bool) -> String {
+    let view = if interactive { "false" } else { "true" };
+    format!("http://{authority}/vnc_lite.html?resize=scale&view_only={view}")
+}
+
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'"'"'"#))
 }
@@ -1095,5 +1164,22 @@ mod credential_tests {
         assert_ne!(a, master);
         assert_ne!(a, b);
         assert_eq!(a, scoped_control_token(master, "a"));
+    }
+}
+
+#[cfg(test)]
+mod screen_url_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_urls_keep_authority_and_view_mode() {
+        assert_eq!(
+            view_url("lb-team-local-space:6080", false),
+            "http://lb-team-local-space:6080/vnc_lite.html?resize=scale&view_only=true"
+        );
+        assert_eq!(
+            view_url("127.0.0.1:32905", true),
+            "http://127.0.0.1:32905/vnc_lite.html?resize=scale&view_only=false"
+        );
     }
 }

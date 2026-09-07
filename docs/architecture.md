@@ -30,14 +30,17 @@ flowchart LR
 
 </div>
 
-主流程之外還有兩個重要迴圈：
+主流程之外還有三個重要迴圈：
 
 1. **接管迴圈**：使用者接管時，進行中的 run 進入等待；釋放後從目前畫面重新排隊執行。
 2. **技能迴圈**：示範期間記錄控制項與頁面情境，模型整理成 playbook；往後仍在當下畫面重新尋找元素，不重播舊座標。
+3. **暫停迴圈**：動過工具的 run 不準用一句狀態結尾。模型第一次想停，先被要求對著當下畫面自我驗證；真的缺決定、缺資料時改附中斷，run 進入 `waiting_input` 並在對話留下「繼續」按鈕。使用者的下一則訊息直接接回同一個 run（`checkpoint.awaitResume`），不另開新任務；輪次預算用盡也走同一條路回報，不會送出空訊息。
 
 ## 系統架構
 
 LazyBoy 的公開入口只有 API。Supervisor 位於 Compose 內部 control network，不直接對主機開埠；Agent 桌面也不掛載主機 Docker socket。
+
+桌面畫面同樣不發布主機埠：API 透過一條 internal 的 `lazyboy_screen` 網路，直接用容器名稱連到該電腦的 websockify，再由 `/view/<bot>/` 轉給瀏覽器。這樣 API 無論跑在主機或容器內都走同一條路，也不會把沒有密碼的 VNC 暴露到主機網路。
 
 ```text
 Browser

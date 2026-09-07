@@ -148,5 +148,11 @@ export const zhTW = {
   schedHumanElapsed: "每隔 {n} 分鐘（固定間隔）",
   schedCalendar: "日曆排程：{expr}",
   teachInProgress: "示範進行中：先按「完成示範」或「取消」，再送訊息。",
-  aiTimeout: "AI 回應逾時（120 秒）",
+  aiTimeout: "AI 回應逾時（150 秒）",
+  resumeMidTask: "做到一半，需要你決定",
+  resumeBudget: "輪次用盡，尚未確認完成",
+  resumeProgress: "{turns}/{limit} 輪",
+  resumeContinue: "繼續",
+  resumeStop: "就到這裡",
+  resumeSent: "繼續，把它做完。",
 } as const;

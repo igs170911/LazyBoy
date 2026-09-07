@@ -2,6 +2,7 @@
 .login-chip .login-label,.sched-chip .sched-label{color:var(--muted);font-size:12px}
 .login-chip .login-site{font-weight:600}
 .login-chip .login-why{color:var(--muted);font-size:13px}
+.resume-chip .resume-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
 .sched-list{display:grid;gap:8px;min-height:0;overflow:auto}
 .sched-list-head{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:13px}
 .sched-empty{margin:0;color:var(--faint);font-size:13px}

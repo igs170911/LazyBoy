@@ -453,5 +453,11 @@ export const en: { [K in keyof typeof zhTW]: string } = {
   schedHumanElapsed: "Every {n} minutes (elapsed)",
   schedCalendar: "Calendar schedule: {expr}",
   teachInProgress: "A demo is in progress. Finish or cancel it before sending a message.",
-  aiTimeout: "The model timed out (120 seconds).",
+  aiTimeout: "The model timed out (150 seconds).",
+  resumeMidTask: "Stopped halfway — your call",
+  resumeBudget: "Turn budget spent, result unverified",
+  resumeProgress: "{turns}/{limit} turns",
+  resumeContinue: "Keep going",
+  resumeStop: "Stop here",
+  resumeSent: "Keep going and finish it.",
 };

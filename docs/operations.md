@@ -51,6 +51,8 @@
 | `LAZYBOY_VAULT_KEY` | 憑證庫加密 key | 必填且必須保持穩定 |
 | `LAZYBOY_BIND_IP` | 主機監聽位址 | `127.0.0.1` |
 | `LAZYBOY_SECURE_COOKIE` | HTTPS-only cookie | `false` |
+| `LAZYBOY_SCREEN_NETWORK` | API ↔ 電腦 noVNC 的 Docker 內網名稱 | `lazyboy_screen` |
+| `LAZYBOY_SCREEN_UPSTREAM` | 只取代 loopback 位址的 noVNC 除錯用 host，容器名稱不受影響 | `127.0.0.1` |
 | `LAZYBOY_COMPUTER_CPUS` | 每台電腦 CPU | `2` |
 | `LAZYBOY_COMPUTER_MEMORY_MB` | 每台電腦記憶體 | `2048` |
 | `LAZYBOY_COMPUTER_PIDS` | 每台電腦 PID 上限 | `2048` |
@@ -58,6 +60,22 @@
 | `LAZYBOY_MEMORY_ENABLED` | 長期記憶 | `true` |
 
 完整清單與保留政策請見 [`.env.example`](../.env.example)。
+
+### 從其他裝置連線
+
+`LAZYBOY_BIND_IP` 決定主機在哪個位址發布 `:3101`，改完重建 api 容器生效：
+
+```bash
+LAZYBOY_BIND_IP=0.0.0.0      # 區網所有介面可連
+LAZYBOY_BIND_IP=10.0.33.1    # 只開放指定網卡
+docker compose up -d api
+```
+
+- 綁非 loopback 時 `LAZYBOY_APP_TOKEN` 必須至少 32 字元，否則 api 拒絕啟動。
+- Origin 檢查比對 `Origin` 與 `Host`：直接開 `http://<主機IP>:3101` 可正常使用，從其他網域嵌入會被 `403 cross-origin request rejected` 擋下。
+- 純 HTTP 下 session cookie 以明碼走區網；長期或跨網際網路使用請放到 HTTPS reverse proxy 後面，並設定 `LAZYBOY_SECURE_COOKIE=true`。
+- 暫時性跨網存取建議維持 `127.0.0.1` 綁定改用隧道：`ssh -L 3101:127.0.0.1:3101 <host>`。
+- 桌面 noVNC 走 `LAZYBOY_SCREEN_NETWORK` 這條 internal 網路，不佔主機埠；同機跑多組 LazyBoy 時請為每組取不同名稱，compose 與 supervisor 會共用同一個值。
 
 ## 網站連線驗證
 
