@@ -8,6 +8,7 @@
 FROM rust:1-bookworm AS controld
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
 COPY crates crates
 COPY migrations migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
@@ -16,8 +17,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 FROM debian:bookworm-slim
 
-# Keep Chromium, XFCE, CJK, AT-SPI, git. Skip Debian novnc (pulls nodejs),
-# fonts-noto-core (Latin is DejaVu/Liberation/huninn), and unused xterm.
+# Keep Chromium, XFCE, CJK, AT-SPI, git. Skip Debian novnc (pulls nodejs) and
+# fonts-noto-core (Latin is DejaVu/Liberation/huninn).
+#
+# x11-apps + imagemagick look removable and are not: the legacy driver's
+# screenshot path is `xwd -root -silent | convert xwd:- … jpeg:-`
+# (control/src/x11.rs screenshot_command_on), reached by legacy observe_display
+# and by the supervisor's exec fallback. Nothing else in the image provides
+# /usr/bin/xwd or /usr/bin/convert, so removing either breaks the default driver.
 RUN printf '%s\n' \
       'path-include=/usr/share/locale/zh_TW/*' \
       'path-include=/usr/share/locale/zh/*' \
@@ -33,7 +40,6 @@ RUN printf '%s\n' \
     fonts-noto-color-emoji \
     git \
     htop \
-    imagemagick \
     locales \
     procps \
     python3 \
@@ -49,6 +55,7 @@ RUN printf '%s\n' \
     x11vnc \
     xclip \
     xdg-utils \
+    imagemagick \
     xfce4-panel \
     xfce4-settings \
     xfce4-terminal \
@@ -73,7 +80,10 @@ RUN printf '%s\n' \
   && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
   && locale-gen \
   && mkdir -p /usr/share/novnc \
-  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/doc/* /usr/share/man/*
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/doc/* /usr/share/man/* \
+       /usr/share/i18n /usr/share/info /usr/share/gtk-doc /usr/share/backgrounds \
+  && find /usr -name __pycache__ -type d -prune -exec rm -rf '{}' + \
+  && find /usr -name '*.py[co]' -delete
 
 # jf open 粉圓 (system UI) + MesloLGS NF (Powerlevel10k glyphs, CJK via fontconfig).
 RUN mkdir -p /usr/share/fonts/truetype/huninn /usr/share/fonts/truetype/meslo \
@@ -101,6 +111,27 @@ RUN git clone --depth=1 https://github.com/romkatv/powerlevel10k.git /usr/share/
 RUN useradd --create-home --uid 1000 --shell /bin/zsh lazyboy \
     && mkdir -p /home/lazyboy /tmp/lazyboy /usr/share/lazyboy/skel /usr/share/lazyboy/xfce-skel /etc/gtk-3.0 /etc/fonts/conf.d \
     && chown -R 1000:1000 /home/lazyboy /tmp/lazyboy
+
+# Pin Cua Driver outside the persisted /home/lazyboy bind-mount.
+# Checksums are from the matching official release; select the target architecture.
+ARG CUA_DRIVER_RS_VERSION=0.23.2
+ARG TARGETARCH
+ARG CUA_DRIVER_RS_SHA256_AMD64=01bf8339ec129cc00f4b4b2c6056ef1a7c5b52df39ff83ad17c9b16818aec500
+ARG CUA_DRIVER_RS_SHA256_ARM64=be22768a207796a4bc1de50c52f32f9ef680b5e86e58c059e02eec2caba2e7bb
+RUN case "$TARGETARCH" in \
+      amd64) cua_arch=x86_64; cua_sha="$CUA_DRIVER_RS_SHA256_AMD64" ;; \
+      arm64) cua_arch=arm64; cua_sha="$CUA_DRIVER_RS_SHA256_ARM64" ;; \
+      *) echo "Unsupported Cua architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+  && curl -fsSL -o /tmp/cua-driver.tar.gz \
+      "https://github.com/trycua/cua/releases/download/cua-driver-rs-v${CUA_DRIVER_RS_VERSION}/cua-driver-rs-${CUA_DRIVER_RS_VERSION}-linux-${cua_arch}-binary.tar.gz" \
+  && echo "${cua_sha}  /tmp/cua-driver.tar.gz" | sha256sum -c \
+  && mkdir -p /usr/local/lib/cua-driver \
+  && tar -xzf /tmp/cua-driver.tar.gz -C /usr/local/lib/cua-driver \
+  && chmod 755 /usr/local/lib/cua-driver/cua-driver \
+  && ln -sf /usr/local/lib/cua-driver/cua-driver /usr/local/bin/cua-driver \
+  && rm -f /tmp/cua-driver.tar.gz \
+  && cua-driver --version
 
 COPY --from=controld --chmod=755 /lazyboy-controld /usr/local/bin/lazyboy-controld
 COPY --chmod=755 image/computer/rotate-logs.py /usr/local/bin/lazyboy-rotate-logs
@@ -139,27 +170,6 @@ COPY --chmod=644 image/computer/xfce/helper-terminal.desktop /usr/share/xfce4/he
 COPY --chmod=644 image/computer/xfce/helper-browser.desktop /usr/share/xfce4/helpers/lazyboy-browser.desktop
 COPY --chmod=755 image/computer/chromium /usr/local/bin/chromium
 RUN sed -i 's|^Exec=/usr/bin/chromium|Exec=/usr/local/bin/lazyboy-browser|' /usr/share/applications/chromium.desktop || true
-
-# Pin Cua Driver outside the persisted /home/lazyboy bind-mount.
-# Checksums are from the matching official release; select the target architecture.
-ARG CUA_DRIVER_RS_VERSION=0.23.2
-ARG TARGETARCH
-ARG CUA_DRIVER_RS_SHA256_AMD64=01bf8339ec129cc00f4b4b2c6056ef1a7c5b52df39ff83ad17c9b16818aec500
-ARG CUA_DRIVER_RS_SHA256_ARM64=be22768a207796a4bc1de50c52f32f9ef680b5e86e58c059e02eec2caba2e7bb
-RUN case "$TARGETARCH" in \
-      amd64) cua_arch=x86_64; cua_sha="$CUA_DRIVER_RS_SHA256_AMD64" ;; \
-      arm64) cua_arch=arm64; cua_sha="$CUA_DRIVER_RS_SHA256_ARM64" ;; \
-      *) echo "Unsupported Cua architecture: $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-  && curl -fsSL -o /tmp/cua-driver.tar.gz \
-      "https://github.com/trycua/cua/releases/download/cua-driver-rs-v${CUA_DRIVER_RS_VERSION}/cua-driver-rs-${CUA_DRIVER_RS_VERSION}-linux-${cua_arch}-binary.tar.gz" \
-  && echo "${cua_sha}  /tmp/cua-driver.tar.gz" | sha256sum -c \
-  && mkdir -p /usr/local/lib/cua-driver \
-  && tar -xzf /tmp/cua-driver.tar.gz -C /usr/local/lib/cua-driver \
-  && chmod 755 /usr/local/lib/cua-driver/cua-driver \
-  && ln -sf /usr/local/lib/cua-driver/cua-driver /usr/local/bin/cua-driver \
-  && rm -f /tmp/cua-driver.tar.gz \
-  && cua-driver --version
 
 COPY --chmod=755 image/computer/start.sh /usr/local/bin/lazyboy-computer
 COPY --chmod=755 image/computer/entrypoint.sh /usr/local/bin/lazyboy-entrypoint

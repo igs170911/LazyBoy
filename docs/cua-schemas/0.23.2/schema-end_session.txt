@@ -1,0 +1,17 @@
+name: end_session
+
+description:
+End one visible lifecycle session and run its cursor, recording, configuration, and other cleanup hooks exactly once. Omit `session` to end the authenticated transport's implicit session. Idempotent.
+
+input_schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "session": {
+      "description": "Optional public label to end. When omitted, end the caller's attached\nimplicit session.",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}

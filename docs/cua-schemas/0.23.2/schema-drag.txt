@@ -1,0 +1,147 @@
+name: drag
+
+description:
+Press-drag-release gesture from (from_x, from_y) to (to_x, to_y) in window-local screenshot pixels via XSendEvent (ButtonPress + MotionNotify × steps + ButtonRelease). duration_ms (default 500), steps (default 20). No focus steal.
+
+input_schema:
+{
+  "additionalProperties": false,
+  "properties": {
+    "button": {
+      "description": "Mouse button. Default \"left\".",
+      "enum": [
+        "left",
+        "right",
+        "middle"
+      ],
+      "type": "string"
+    },
+    "cursor_id": {
+      "description": "Optional multi-cursor instance id. Default: 'default'.",
+      "type": "string"
+    },
+    "delivery_mode": {
+      "default": "background",
+      "description": "Input delivery mode. 'background' (default) never activates or raises the target window. On X11 it injects via XTEST / the XInput2 master pointer (no focus steal). On Wayland it goes through libei + xdg-desktop-portal, which injects to the compositor's input focus — Wayland's security model has no per-window background targeting, so a specific non-focused window cannot be aimed at; when no libei backend is available the tool returns a structured background_unavailable error. 'foreground' is the explicit escalation: activate the target (X11 _NET_ACTIVE_WINDOW; Wayland compositor activate), inject, then restore the prior active window — a brief focus swap unless the target was already active. Matches the macOS / Windows delivery_mode surface.",
+      "enum": [
+        "background",
+        "foreground"
+      ],
+      "type": "string"
+    },
+    "duration_ms": {
+      "description": "Total drag duration. Default: 500.",
+      "maximum": 10000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "from_x": {
+      "type": "number"
+    },
+    "from_y": {
+      "type": "number"
+    },
+    "from_zoom": {
+      "type": "boolean"
+    },
+    "modifier": {
+      "description": "Modifier keys held during the action: cmd, shift, option/alt, ctrl.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "scope": {
+      "default": "window",
+      "enum": [
+        "window",
+        "desktop"
+      ],
+      "type": "string"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+      "type": "string"
+    },
+    "steps": {
+      "description": "Intermediate MotionNotify events. Default: 20.",
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "description": "Exact capture/input target selected independently for each action.\n\n`display_id=\"primary\"` is the portable desktop target in this release.\nPlatforms that cannot address another display reject it explicitly rather\nthan silently changing coordinate spaces.",
+          "oneOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "kind": {
+                  "const": "window",
+                  "type": "string"
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "pid",
+                "window_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": true,
+              "properties": {
+                "display_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "desktop",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "display_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "to_x": {
+      "type": "number"
+    },
+    "to_y": {
+      "type": "number"
+    },
+    "window_id": {
+      "description": "Target window XID. Required.",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "from_x",
+    "from_y",
+    "to_x",
+    "to_y"
+  ],
+  "type": "object"
+}

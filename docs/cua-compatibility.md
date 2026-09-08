@@ -56,11 +56,59 @@ Element refs are snapshot-scoped (`p1:1`, `p4:1`, … `p28:1`). Reusing an old r
 
 ## Relevant tools (0.23.2 `list-tools`)
 
-Observation / native input: `get_desktop_state`, `list_windows`, `get_accessibility_tree`, `get_window_state`, `click`, `type_text`, `press_key`, `hotkey`, `scroll`, `drag`, `get_cursor_position`, `get_screen_size`.
+Observation / native input used by `controld`: `get_desktop_state`, `list_windows`,
+`get_window_state`, `click`, `type_text`, `press_key`, `hotkey`, `scroll`, `drag`,
+`move_cursor`, `set_value`, `bring_to_front`, `get_cursor_position`, `get_screen_size`.
 
-Browser (attach only): `browser_prepare` (`strategy.kind=existing_profile`, `allow_launch=false`), `get_browser_state` (`semantic_v2`), `browser_navigate` (http/https/about only), `browser_click`, `browser_type`.
+Browser (attach only): `browser_prepare` (`strategy.kind=existing_profile`,
+`allow_launch=false`), `get_browser_state` (`semantic_v2`), `browser_navigate`
+(http/https/about only), `browser_click`, `browser_type`.
 
-Not used here: recording, isolated `launch_app` browsers, Wayland helpers. These names must not be exposed to the LLM.
+Lifecycle / diagnostics: `start_session`, `end_session`, `health_report`. Skill
+teaching also uses `start_recording` / `stop_recording`.
+
+Not used: `mouse_button_down`, `mouse_button_up`, `mouse_drag` (held-button
+background X11 tools). LazyBoy's action DSL has no partial-pointer state, so
+`Pointer{Down}` / `Pointer{Up}` translate to `ControlError::Unsupported` instead
+of a half-pressed button nobody releases. Also unused: isolated `launch_app`
+browsers, Wayland helpers, and the deprecated `get_session_state` /
+`escalate_session` aliases. None of these names may be exposed to the LLM.
+
+## Driver contract rules (enforced in `crates/control/src/cua`)
+
+Each of these was confirmed against a real 0.23.2 daemon, and each one fails
+silently (exit 0) if violated:
+
+1. **Repeat the `session` label on every call.** `CuaClient::call` injects
+   `lazyboy-<display>` unless the caller already set one. Without it each CLI
+   process gets an ephemeral `cli-<uuid>` session, so trajectory turns,
+   snapshots, and browser binds never line up, and every call also emits a bogus
+   `end_session` turn.
+2. **Never send `target: {kind: "desktop", display_id: "primary"}`.** The Linux
+   driver rejects it with `invalid_action_target` (exit 0). Omit `target` to use
+   the global input route.
+3. **Desktop `scroll` needs a point.** With `scope: "desktop"`, `x`/`y` are
+   required (`missing field x`); `dispatch` aims at the pointer and falls back to
+   the screen centre. `amount` is clamped to the schema range `1..=50`.
+4. **Only a JSON object proves the tool ran.** A refusal or prose banner that
+   arrives with exit 0 is a failure (`decode_stdout`), never an empty success.
+5. **One escalation retry.** `background_unavailable` carries
+   `escalation.recommended`; the client retries once with that `delivery_mode`
+   and never loops.
+6. **`get_window_state` can be degraded.** AT-SPI intermittently answers with
+   `degraded: true` and a root-only tree. Such windows are skipped and the
+   observation reports `native_observation_complete: false` rather than failing
+   the whole `observe`.
+7. **Nothing is validated for you.** The Linux schemas declare
+   `additionalProperties: false` and numeric bounds, but 0.23.2 accepts unknown
+   keys and out-of-range values anyway (a bogus key on `list_windows` and
+   `scroll amount: 0` both return exit 0 with `effect: unverifiable`), so the
+   bounds in `docs/cua-schemas/0.23.2/` are enforced here, by the client.
+   `session` is accepted by every tool, including the ones whose own schema
+   omits it (`list_windows`, `bring_to_front`, `health_report`,
+   `start_recording`), which is what lets rule 1 be applied uniformly.
+8. **Socket peer uid.** `/tmp/lazyboy/cua*.sock` rejects uid 0; `controld` runs as
+   the desktop user (uid 1000).
 
 ## Integration notes for the next PR
 
@@ -94,3 +142,16 @@ for the build architecture (`cua-driver 0.23.2` on linux/arm64 in this run).
 `make cua-smoke` is the acceptance entry: raw Driver smoke, adapter E2E,
 isolation, and pause/restart persistence. Production defaults remain `legacy`.
 See [the migration audit](cua-review.md).
+
+One upstream caveat about that persistence claim: Chromium writes its cookie
+database on a ~30 s timer and does not flush on `SIGTERM`. A profile survives
+`docker pause` / `docker restart` once that write has landed; stopping a desktop
+seconds after a login can still lose the cookie, and no LazyBoy code controls
+the timer. `scripts/cua-smoke-test.sh` waits for the fixture cookie to reach the
+profile before it restarts, so the check measures profile persistence instead of
+the flush timer.
+
+Image architectures are capped at `linux/amd64` and `linux/arm64` by upstream
+binaries: the Cua Driver ships only `linux-x86_64` / `linux-arm64` and ONNX
+Runtime only `linux-x64` / `linux-aarch64`. See
+[development.md](development.md#映像與-cpu-架構).

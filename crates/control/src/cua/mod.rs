@@ -7,6 +7,7 @@ mod translate;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -22,12 +23,29 @@ use crate::controller::{
 use crate::process::spawn_detached;
 use crate::{
     ActionRequest, ActionResult, BrowserRequest, CdpPage, RecordingRequest, RecordingResult,
-    RecordingSession, action_pause_ms, normalize_display, observation_from_png,
+    RecordingSession, action_pause_ms, image_dimensions, normalize_display, observation_from_png,
     observation_with_elements, teach_trajectory_dir,
 };
 use client::first_array_of_objects;
 
 pub use client::CuaClient;
+
+/// Last resort when neither the screenshot nor the driver reports a mode.
+const FALLBACK_SCREEN: (u32, u32) = (1280, 800);
+
+/// `image/computer/Dockerfile` pins `CUA_DRIVER_RS_VERSION`; only that tool
+/// surface is guaranteed. Patch releases stay compatible, a new minor does not.
+const PINNED_DRIVER: (u32, u32) = (0, 23);
+
+/// `cua-driver --version` prints `cua-driver 0.23.2`, and some builds append a
+/// target suffix (`cua-driver 0.23.2 (x86_64-linux)`), so only the leading
+/// numeric version is trusted.
+fn driver_release(version: &str) -> Option<(u32, u32)> {
+    let digits = version.find(|character: char| character.is_ascii_digit())?;
+    let mut parts = version[digits..].split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
 pub use translate::{TranslatedAction, translate_action};
 
 #[derive(Debug, Default)]
@@ -36,6 +54,7 @@ pub struct CuaController {
     screens: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     native: tokio::sync::Mutex<HashMap<String, HashMap<String, native::NativeTarget>>>,
     browser: tokio::sync::Mutex<HashMap<String, browser::BrowserBind>>,
+    snapshots: AtomicU64,
 }
 
 #[async_trait]
@@ -52,7 +71,9 @@ impl ComputerController for CuaController {
             .await;
         match report {
             Ok(report) => {
-                let compatible = version.as_deref() == Some("cua-driver 0.23.2");
+                let compatible = version
+                    .as_deref()
+                    .is_some_and(|text| driver_release(text) == Some(PINNED_DRIVER));
                 let healthy =
                     compatible && report.get("overall").and_then(Value::as_str) == Some("ok");
                 let mut details: Vec<String> = report
@@ -64,7 +85,12 @@ impl ComputerController for CuaController {
                     .filter_map(|check| check["message"].as_str().map(str::to_string))
                     .collect();
                 if !compatible {
-                    details.push("expected pinned Cua Driver 0.23.2".into());
+                    details.push(format!(
+                        "Cua Driver {} is not the pinned {}.{} series",
+                        version.as_deref().unwrap_or("unknown"),
+                        PINNED_DRIVER.0,
+                        PINNED_DRIVER.1
+                    ));
                 }
                 Ok(ControllerHealth {
                     backend: "cua".into(),
@@ -292,15 +318,6 @@ impl CuaController {
                 completed += 5;
                 continue;
             }
-            if matches!(
-                action,
-                ComputerAction::Pointer {
-                    pointer_type: PointerType::Down | PointerType::Up,
-                    ..
-                }
-            ) {
-                return Err(ControlError::Unsupported);
-            }
             if let ComputerAction::Ref {
                 verb,
                 target,
@@ -362,7 +379,10 @@ impl CuaController {
         if png.is_empty() {
             return Err(ControlError::Internal("screenshot failed".into()));
         }
-        let (width, height) = png_dimensions(&png);
+        let (width, height) = match image_dimensions(&png) {
+            Some(dimensions) => dimensions,
+            None => self.screen_size(display).await,
+        };
         let cursor = self.cursor(display).await;
         let windows = self.windows(display).await.unwrap_or_default();
         let active = windows
@@ -372,8 +392,15 @@ impl CuaController {
                 id: window.id.to_string(),
                 title: Some(window.title.clone()).filter(|title| !title.is_empty()),
             });
-        let (mut elements, targets) =
-            native::observe(&self.client, display, &windows, &png_path.to_string_lossy()).await?;
+        // Selectors only need to be short and unique: a process-local counter
+        // keeps stale handles from resolving without pasting a temp path into
+        // every identifier the Agent echoes back.
+        let snapshot = self.snapshots.fetch_add(1, Ordering::Relaxed);
+        let native::NativeObservation {
+            mut elements,
+            targets,
+            complete,
+        } = native::observe(&self.client, display, &windows, &format!("s{snapshot}")).await;
         elements.extend(
             windows
                 .into_iter()
@@ -402,8 +429,36 @@ impl CuaController {
             observation_from_png(png, width, height, cursor, active),
             elements,
         );
-        observation.native_observation_complete = true;
+        observation.native_observation_complete = complete;
         Ok(observation)
+    }
+
+    /// `scroll` on the desktop plane is aimed at a point and the action DSL
+    /// does not carry one, so aim at the pointer; the screen centre is the
+    /// next best guess when the pointer cannot be read.
+    async fn scroll_point(&self, display: &str) -> (u32, u32) {
+        if let Some(cursor) = self.cursor(display).await
+            && cursor.x >= 0
+            && cursor.y >= 0
+        {
+            return (cursor.x as u32, cursor.y as u32);
+        }
+        let (width, height) = self.screen_size(display).await;
+        (width / 2, height / 2)
+    }
+
+    async fn screen_size(&self, display: &str) -> (u32, u32) {
+        self.client
+            .call(display, "get_screen_size", &json!({}), &[])
+            .await
+            .ok()
+            .and_then(|value| {
+                Some((
+                    value.get("width").and_then(Value::as_u64)? as u32,
+                    value.get("height").and_then(Value::as_u64)? as u32,
+                ))
+            })
+            .unwrap_or(FALLBACK_SCREEN)
     }
 
     async fn cursor(&self, display: &str) -> Option<CursorPosition> {
@@ -449,6 +504,11 @@ impl CuaController {
             }
             TranslatedAction::FocusTitle { title } => self.focus_title(display, &title).await,
             TranslatedAction::Cua { tool, mut payload } => {
+                if tool == "scroll" && payload.get("x").is_none() {
+                    let (x, y) = self.scroll_point(display).await;
+                    payload["x"] = json!(x);
+                    payload["y"] = json!(y);
+                }
                 if tool == "drag" {
                     let x = payload["from_x"].as_f64().unwrap_or(0.0);
                     let y = payload["from_y"].as_f64().unwrap_or(0.0);
@@ -662,12 +722,6 @@ fn number(value: &Value, key: &str) -> Option<u64> {
     })
 }
 
-fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
-    image::load_from_memory(bytes)
-        .map(|image| (image.width(), image.height()))
-        .unwrap_or((1280, 800))
-}
-
 fn observe_png_path(display: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -682,6 +736,23 @@ fn observe_png_path(display: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_release_reads_the_pinned_minor_series() {
+        assert_eq!(driver_release("cua-driver 0.23.2"), Some((0, 23)));
+        assert_eq!(
+            driver_release("cua-driver 0.23.2 (x86_64-linux)"),
+            Some((0, 23))
+        );
+        assert_eq!(driver_release("cua-driver"), None);
+        assert_eq!(driver_release(""), None);
+    }
+
+    #[test]
+    fn a_new_minor_series_is_not_compatible() {
+        assert_ne!(driver_release("cua-driver 0.24.0"), Some(PINNED_DRIVER));
+        assert_eq!(driver_release("cua-driver 0.23.9"), Some(PINNED_DRIVER));
+    }
 
     #[test]
     fn normalized_drag_uses_one_driver_gesture() {

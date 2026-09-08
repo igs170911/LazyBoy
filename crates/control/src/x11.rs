@@ -7,7 +7,6 @@ pub fn is_browser_title(title: &str) -> bool {
 
 use crate::screen::{PRIMARY_DISPLAY, normalize_display};
 
-pub const DISPLAY: &str = PRIMARY_DISPLAY;
 pub const HOME: &str = "/home/lazyboy";
 
 fn display_env(display: &str) -> String {
@@ -170,10 +169,6 @@ pub fn action_pause_ms(action: &ComputerAction) -> u64 {
     }
 }
 
-pub fn pointer_state_command() -> Vec<String> {
-    pointer_state_command_on(PRIMARY_DISPLAY)
-}
-
 pub fn pointer_state_command_on(display: &str) -> Vec<String> {
     vec![
         "env".into(),
@@ -198,10 +193,6 @@ print(json.dumps({"x": int(vals.get("X") or 0), "y": int(vals.get("Y") or 0), "i
 "#
         .into(),
     ]
-}
-
-pub fn window_list_command() -> Vec<String> {
-    window_list_command_on(PRIMARY_DISPLAY)
 }
 
 pub fn window_list_command_on(display: &str) -> Vec<String> {
@@ -309,10 +300,6 @@ pub fn parse_pointer_state(
     (cursor, window)
 }
 
-pub fn open_argv(path: &str) -> Vec<String> {
-    open_argv_on(PRIMARY_DISPLAY, None, path)
-}
-
 pub fn open_argv_on(display: &str, profile: Option<&str>, path: &str) -> Vec<String> {
     if path.starts_with("http://") || path.starts_with("https://") {
         return browser_argv(display, profile, Some(path));
@@ -323,10 +310,6 @@ pub fn open_argv_on(display: &str, profile: Option<&str>, path: &str) -> Vec<Str
         "xdg-open".into(),
         path.into(),
     ]
-}
-
-pub fn launch_argv(application: &str, uri: Option<&str>) -> Option<Vec<String>> {
-    launch_argv_on(PRIMARY_DISPLAY, None, application, uri)
 }
 
 pub fn launch_argv_on(
@@ -369,10 +352,6 @@ fn browser_argv(display: &str, profile: Option<&str>, uri: Option<&str>) -> Vec<
         argv.push(uri.into());
     }
     argv
-}
-
-pub fn screenshot_command() -> Vec<String> {
-    screenshot_command_on(PRIMARY_DISPLAY)
 }
 
 pub fn screenshot_command_on(display: &str) -> Vec<String> {

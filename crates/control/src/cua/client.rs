@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -34,6 +34,16 @@ impl CuaClient {
         } else {
             PathBuf::from(format!("/tmp/lazyboy/cua-{number}.sock"))
         }
+    }
+
+    /// Every call runs in its own CLI process, so the driver would otherwise
+    /// give each one an implicit session that dies with the process. Trajectory
+    /// recording, snapshots, and browser binds only line up under one label.
+    pub fn session_for_display(display: &str) -> String {
+        format!(
+            "lazyboy-{}",
+            normalize_display(display).trim_start_matches(':')
+        )
     }
 
     pub fn dbus_file(display: &str) -> PathBuf {
@@ -79,6 +89,33 @@ impl CuaClient {
         payload: &Value,
         extra: &[&str],
     ) -> Result<Value, ControlError> {
+        let mut body = with_session_label(screen, payload);
+        let mut escalated = false;
+        loop {
+            let outcome = self.attempt(screen, tool, &body, extra).await?;
+            if !escalated
+                && outcome.error.is_some()
+                && let Some(mode) = recommended_delivery(&outcome.value)
+                && let Some(map) = body.as_object_mut()
+            {
+                map.insert("delivery_mode".to_string(), json!(mode));
+                escalated = true;
+                continue;
+            }
+            return match outcome.error {
+                Some(error) => Err(error),
+                None => Ok(outcome.value),
+            };
+        }
+    }
+
+    async fn attempt(
+        &self,
+        screen: &str,
+        tool: &str,
+        payload: &Value,
+        extra: &[&str],
+    ) -> Result<Outcome, ControlError> {
         let socket = Self::socket_for_display(screen);
         if !socket.exists() {
             return Err(ControlError::DriverUnavailable);
@@ -102,14 +139,12 @@ impl CuaClient {
         let output = bounded_input_output(&mut command, payload).await?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{stdout}\n{stderr}");
-        let value =
-            parse_jsonish(&stdout).unwrap_or_else(|| Value::String(stdout.trim().to_string()));
-        let error = if !output.status.success() || stdout.trim_start().starts_with('❌') {
-            Some(classify_cua_failure(&combined))
-        } else {
-            response_error(&value)
-        };
+        let (value, error) = decode_stdout(
+            &stdout,
+            &stderr,
+            output.status.success(),
+            classify_cua_failure,
+        );
         tracing::info!(
             backend = "cua",
             tool,
@@ -117,12 +152,54 @@ impl CuaClient {
             duration_ms = started.elapsed().as_millis() as u64,
             success = error.is_none()
         );
-        if let Some(error) = error {
-            return Err(error);
-        }
-
-        Ok(value)
+        Ok(Outcome { value, error })
     }
+}
+
+struct Outcome {
+    value: Value,
+    error: Option<ControlError>,
+}
+
+/// Refusals and prose diagnostics can arrive with exit code 0, so only a JSON
+/// object counts as proof that the driver ran the tool.
+fn decode_stdout(
+    stdout: &str,
+    stderr: &str,
+    success: bool,
+    classify: impl Fn(&str) -> ControlError,
+) -> (Value, Option<ControlError>) {
+    let combined = format!("{stdout}\n{stderr}");
+    let trimmed = stdout.trim();
+    let empty = Value::Null;
+    let decoded = (!trimmed.is_empty())
+        .then(|| parse_jsonish(trimmed))
+        .flatten();
+    let error = if !success || trimmed.starts_with('\u{274c}') || decoded.is_none() {
+        Some(classify(&combined))
+    } else {
+        response_error(decoded.as_ref().unwrap_or(&empty))
+    };
+    (decoded.unwrap_or(empty), error)
+}
+
+/// The documented contract for `background_unavailable` is one retry with the
+/// delivery mode named in the structured escalation.
+fn recommended_delivery(value: &Value) -> Option<String> {
+    ["/escalation/recommended", "/error/escalation/recommended"]
+        .into_iter()
+        .filter_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+        .find(|mode| matches!(*mode, "foreground" | "background"))
+        .map(str::to_string)
+}
+
+fn with_session_label(display: &str, payload: &Value) -> Value {
+    let mut body = payload.clone();
+    if let Some(map) = body.as_object_mut() {
+        map.entry("session")
+            .or_insert_with(|| json!(CuaClient::session_for_display(display)));
+    }
+    body
 }
 
 fn response_error(value: &Value) -> Option<ControlError> {
@@ -166,7 +243,15 @@ async fn bounded_input_output(
             Ok::<(), std::io::Error>(())
         };
         let (written, output) = tokio::join!(write, child.wait_with_output());
-        written.map_err(|_| ControlError::DriverUnhealthy)?;
+        // A driver that exits before reading stdin (unknown tool, rejected
+        // arguments) closes the pipe, so a broken pipe is expected and the exit
+        // status plus stderr hold the real reason. Losing them here would
+        // downgrade every fast refusal to a generic driver failure.
+        if let Err(error) = written
+            && error.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(ControlError::DriverUnhealthy);
+        }
         output.map_err(|_| ControlError::DriverUnhealthy)
     })
     .await
@@ -291,6 +376,44 @@ mod tests {
         assert!(response_error(&serde_json::json!({"outline": "❌ payment declined"})).is_none());
     }
 
+    #[test]
+    fn only_a_json_object_proves_the_tool_ran() {
+        let classify = |text: &str| classify_cua_failure(text);
+        let (value, error) = decode_stdout(r#"{"width":1280}"#, "", true, classify);
+        assert!(error.is_none());
+        assert_eq!(value["width"], 1280);
+
+        // Prose with a zero exit code used to be reported as success.
+        let (value, error) = decode_stdout("no window matched", "", true, classify);
+        assert!(matches!(error, Some(ControlError::DriverUnhealthy)));
+        assert!(value.is_null());
+
+        let (_, error) = decode_stdout("\u{274c} unsupported tool", "", true, classify);
+        assert!(matches!(error, Some(ControlError::Unsupported)));
+
+        let (_, error) = decode_stdout(r#"{"code":"background_unavailable"}"#, "", true, classify);
+        assert!(error.is_some());
+
+        // A crash with empty stdout must never look like an empty success.
+        let (_, error) = decode_stdout("", "signal: 11", false, classify);
+        assert!(error.is_some());
+    }
+
+    #[test]
+    fn escalation_is_read_from_the_documented_pointers() {
+        assert_eq!(
+            recommended_delivery(&json!({"escalation": {"recommended": "foreground"}})).as_deref(),
+            Some("foreground")
+        );
+        assert_eq!(
+            recommended_delivery(&json!({"error": {"escalation": {"recommended": "background"}}}))
+                .as_deref(),
+            Some("background")
+        );
+        assert!(recommended_delivery(&json!({"escalation": {"recommended": "reboot"}})).is_none());
+        assert!(recommended_delivery(&json!({"ok": true})).is_none());
+    }
+
     #[tokio::test]
     async fn piped_json_reaches_eof_without_argv_exposure() {
         let mut command = Command::new("sh");
@@ -317,6 +440,27 @@ mod tests {
             bounded_output(&mut command, Duration::from_millis(20)).await,
             Err(ControlError::Timeout)
         ));
+    }
+
+    #[tokio::test]
+    async fn driver_that_never_reads_stdin_still_reports_its_exit() {
+        // Bigger than the pipe buffer: the child never reads, so the write can
+        // only fail with EPIPE and must not swallow the driver's own error.
+        let payload = json!({ "blob": "x".repeat(1 << 20) });
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo invalid_action_target >&2; exit 1"]);
+        let output = tokio::time::timeout(
+            Duration::from_secs(10),
+            bounded_input_output(&mut command, &payload),
+        )
+        .await
+        .expect("bounded")
+        .expect("exit status survives a broken stdin pipe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("invalid_action_target"),
+            "driver stderr must reach the classifier"
+        );
     }
 
     #[test]

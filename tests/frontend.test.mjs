@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from '../apps/web/node_modules/typescript/lib/typescript.js';
 function loadCatalog(file){
-  const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+  const source=fs.readFileSync(file,'utf8');
+  // transpileModule prints output even for a catalog that does not parse, so a
+  // missing comma silently loads a shorter catalog and every key check below
+  // still passes. Ask the parser, which actually keeps its errors.
+  const parsed=ts.createSourceFile(file,source,ts.ScriptTarget.ESNext,true,ts.ScriptKind.TS);
+  assert.deepEqual((parsed.parseDiagnostics||[]).map(d=>ts.flattenDiagnosticMessageText(d.messageText,' ')),[],`${file} must parse`);
+  const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
   const sandbox={exports:{},require:()=>({})};
   vm.runInNewContext(code,sandbox);
   return sandbox.exports.zhTW||sandbox.exports.en;
@@ -274,17 +280,15 @@ test('mobile shortcut row sends modifiers and hides with the keyboard',()=>{
  assert.equal(v.keyboard.focused,false);
  assert.equal(v.elements['keyboard-shortcuts'].hidden,true);
 });
-test('status and HUD sit outside the remote pixels; screenshots stay opt-in',()=>{
- const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
- assert.doesNotMatch(app,/RunStatus/);
+test('status sits outside the remote pixels; screenshots stay opt-in',()=>{
+  const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
+  assert.doesNotMatch(app,/RunStatus/);
  assert.match(app,/<RunProbe runId=\{computer\.busyRunId\|\|computer\.waitingRunId\}><Avatar/);
- assert.match(app,/\{!computerOpen&&hud\}<div className="preview">/);
- assert.match(app,/--visible-height/);
+  assert.match(app,/--visible-height/);
  assert.match(app,/<div className=\{`composer-dock \$\{statusMembers\.length\?"has-status":""\}`\}>\s*\{error&&<div className="error-banner"/);
  const css=fs.readFileSync('apps/web/src/computer.css','utf8');
  assert.doesNotMatch(css,/\.run-status/);
- assert.match(css,/\.computer-hud\{position:static/);
- const chat=fs.readFileSync('apps/web/src/chat.css','utf8');
+  const chat=fs.readFileSync('apps/web/src/chat.css','utf8');
  assert.match(chat,/\.composer-dock\{position:relative/);
  assert.doesNotMatch(chat,/\.composer-dock\{position:absolute/);
  assert.match(chat,/\.messages\{min-width:0;padding-bottom:24px/);
@@ -446,4 +450,163 @@ test('chat follows the event stream instead of a fixed two second poll',()=>{
   assert.match(app,/document\.addEventListener\("visibilitychange",resume\)/);
   assert.doesNotMatch(app,/const timer=setInterval\(\(\)=>\{refresh\(\)/,'the 2s transcript poll should be gone');
   assert.match(app,/const heartbeat=window\.setInterval\(\(\)=>\{const beat=roomsRef\.current[\s\S]*\},HEARTBEAT_MS\)/,'the heartbeat keeps its own minute cadence');
+});
+
+// The screen veil and the frame that survives it: both used to be driven by a
+// timer plus "null the url", which is what made booting and handing over feel
+// like a stall instead of a gesture.
+const handoffJs=ts.transpileModule(fs.readFileSync('apps/web/src/handoff.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+const handoffBox={exports:{},require:()=>({})};vm.runInNewContext(handoffJs,handoffBox);
+const {viewerPath,keepScreenUrl,handoffRemaining,nextVeil,viewOnlyFor,HANDOFF_MS,HANDOFF_MIN_MS,VEIL_FADE_MS}=handoffBox.exports;
+
+test('the viewer path is stable, so a frame can mount before the desktop answers',()=>{
+  assert.equal(viewerPath('bot 7'),'/view/bot%207/vnc.html');
+  assert.equal(viewerPath('a/b'),'/view/a%2Fb/vnc.html');
+  assert.equal(viewerPath('bot'),viewerPath('bot'),'no nonce, or the frame would remount every poll');
+});
+
+test('the path the frame mounts on is the byte the api hands back',()=>{
+  // The viewer mounts on the client's own path while the desktop is coming up,
+  // then adopts the url from the status round trip. If the two ever differ the
+  // iframe remounts mid-boot, which is the black flash this whole path exists
+  // to avoid, so the invariant is pinned to the server's own format string.
+  const routes=fs.readFileSync('crates/api/src/routes.rs','utf8');
+  const served=(routes.match(/"url": format!\("([^"]+)"\)/)||[])[1];
+  assert.equal(served,'/view/{id}/vnc.html');
+  const id='6f1d3a0e-2b7c-4d5e-8f90-1a2b3c4d5e6f';
+  assert.equal(viewerPath(id),served.replace('{id}',id));
+});
+
+test('pixels are dropped only for a computer that is really gone',()=>{
+  const url='/view/bot/vnc.html';
+  for(const state of ['booting','suspended','running'])assert.equal(keepScreenUrl(url,null,state),url,state+' must keep its VNC session');
+  for(const state of ['stopped','error'])assert.equal(keepScreenUrl(url,null,state),null,state+' has no desktop to keep');
+  assert.equal(keepScreenUrl(null,null,'running'),null,'nothing was ever mounted');
+  assert.equal(keepScreenUrl(url,'/other','booting'),'/other','a fresh url still wins');
+  assert.equal(keepScreenUrl(null,url,'booting'),url,'the first url arrives while booting');
+});
+
+test('a handoff holds one visible beat, never the whole round trip',()=>{
+  assert.ok(HANDOFF_MIN_MS<HANDOFF_MS,'the beat needs a floor and a ceiling');
+  assert.ok(VEIL_FADE_MS<=HANDOFF_MIN_MS,'the fade has to finish inside the beat');
+  assert.ok(HANDOFF_MS<=1_000,'a reply that never lands cannot strand the mascot');
+  assert.equal(handoffRemaining(1_000,1_000),HANDOFF_MIN_MS,'a reply this instant still owes the beat');
+  assert.equal(handoffRemaining(1_000,1_000+HANDOFF_MIN_MS),0,'served');
+  assert.equal(handoffRemaining(1_000,1_000+(HANDOFF_MIN_MS+HANDOFF_MS)/2),0,'past the floor is never a wait');
+  assert.equal(handoffRemaining(1_000,1_000+HANDOFF_MS),0);
+  const midway=handoffRemaining(1_000,1_000+HANDOFF_MIN_MS-10);
+  assert.equal(midway,10,'the remaining beat shrinks with the clock');
+});
+
+test('the veil fades in with its label and back out through the same mascot',()=>{
+  const empty={label:null,leaving:false};
+  assert.equal(nextVeil(null,empty),empty,'with nothing to say there is nothing to show');
+  const shown=nextVeil('換手中',empty);
+  assert.equal(shown.label,'換手中');assert.equal(shown.leaving,false);
+  assert.equal(nextVeil('換手中',shown),shown,'a repeated status must not restart the animation');
+  const leaving=nextVeil(null,shown);
+  assert.equal(leaving.label,'換手中','the label is held while it fades');assert.equal(leaving.leaving,true);
+  assert.equal(nextVeil(null,leaving),leaving,'it leaves exactly once');
+  const replaced=nextVeil('喚醒中',shown);
+  assert.equal(replaced.label,'喚醒中');assert.equal(replaced.leaving,false,'a new status replaces the label');
+  const revived=nextVeil('喚醒中',leaving);
+  assert.equal(revived.label,'喚醒中');assert.equal(revived.leaving,false,'and pulls it back out of the fade');
+});
+
+test('only a human moves the mouse, and the veil never holds it back',()=>{
+  assert.equal(viewOnlyFor('user'),false);
+  for(const holder of ['none','bot'])assert.equal(viewOnlyFor(holder),true,holder);
+});
+
+test('taking the screen flips the mouse on the click, not on the reply',()=>{
+  const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
+  const body=app.slice(app.indexOf('async function setControl('));
+  const flip=body.indexOf('controlHolder:holder');
+  const gate=body.indexOf('pushViewOnly(viewOnlyFor(holder))');
+  const post=body.indexOf('await api(`/api/computer/${botId}/${holder==="user"?"takeover":"release"}`');
+  const readBack=body.indexOf('finally{');
+  assert.ok(flip>0&&gate>0&&post>0&&readBack>0,'optimistic flip, gate, request, and read back all present');
+  assert.ok(flip<post&&gate<post,'badge and input move before the server answers');
+  assert.ok(readBack>post,'the truth is read back after the request');
+  assert.match(body.slice(readBack),/await refresh\(\)/);
+  assert.match(body,/if\(!botId\|\|controlBusyRef\.current\)return/,'a double click cannot fight itself');
+  assert.match(app,/const listener=\(event:MessageEvent\)=>\{[\s\S]*?lazyboy-request-control[\s\S]*?void setControl\("user"\)/);
+  assert.match(app,/if\(expectedHolderRef\.current&&status\.controlHolder===expectedHolderRef\.current\)/,'agreement, not a timer, ends the handoff');
+  assert.match(app,/onClick=\{onTakeOver\}/);
+  assert.match(app,/onClick=\{onRelease\}/);
+  assert.doesNotMatch(app,/action\(\(\)=>api\(`\/api\/computer\/[^`]*takeover/,'takeover no longer rides the global busy path');
+  assert.equal((app.match(/\/api\/computer\/\$\{[^}]*\}\/(takeover|release)/g)||[]).length,0,'every handoff goes through setControl');
+  assert.equal((app.match(/holder==="user"\?"takeover":"release"/g)||[]).length,1,'one request path, one owner of it');
+  assert.match(app,/void setControl\("user",active\.id\)/,'the call overlay hands over the same way');
+  assert.match(app,/await setControl\("user",id\)/,'the login screen boots, then takes the mouse without a second spinner');
+});
+
+test('the waiting veil covers the desktop the way it always did',()=>{
+  const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
+  assert.match(app,/<div className="preview">\{computerOpen\?<EmptyComputer state=\{computer\.state\}\/>:frame\}\{!computerOpen&&hud\}<\/div>/);
+  assert.match(app,/<div className="overlay-desktop">\{frame\}\{hud\}<\/div>/);
+  assert.match(app,/const hud=paneBot&&veil\.label\?<ComputerHud bot=\{paneBot\} label=\{veil\.label\} leaving=\{veil\.leaving\}\/>:null/);
+  const css=fs.readFileSync('apps/web/src/computer.css','utf8');
+  // Both parents are what make inset:0 cover the desktop rather than the page.
+  assert.match(css,/\.computer-part \.preview\{position:relative/);
+  assert.match(css,/\.overlay-screen \.overlay-desktop\{position:relative/);
+  // These values were compared against main in a real browser: rendered pixel
+  // for pixel identical, so drift here means the veil visibly changed.
+  const hud=css.match(/^\.computer-hud\{([^}]*)\}/m)[1];
+  for(const rule of ['position:absolute','inset:0','z-index:3','display:grid','align-content:center','justify-items:center','gap:14px','padding:10px 12px 8px','border-radius:inherit','background:radial-gradient(ellipse at center,#142722e8,#101012ed)','backdrop-filter:blur(8px)','pointer-events:none'])assert.ok(hud.includes(rule),`the veil needs ${rule}`);
+  assert.match(css,/\.computer-hud\.is-leaving\{opacity:0\}/);
+  assert.match(css,/\.computer-hud\{[^}]*transition:opacity \.22s ease\}/,'it fades instead of blinking off');
+  // main drew the label as static mint text; the shimmer belongs to the chat
+  // working label, and the veil keeps the mascot as the only moving part.
+  const label=css.match(/^\.computer-hud-label\{([^}]*)\}/m)[1];
+  assert.ok(!label.includes('animation'),'the veil label does not animate');
+  assert.ok(label.includes('color:#c9ddd5')&&label.includes('font-size:12px')&&label.includes('text-align:center')&&label.includes('max-width:90%'));
+  assert.ok(!/\.computer-hud[^{]*\{[^}]*working-shimmer/.test(css),'nothing shimmers inside the veil');
+  assert.match(css,/\.computer-signal\{[^}]*width:64px[^}]*animation:monitor-breathe/);
+  assert.match(css,/\.computer-signal::before\{[^}]*monitor-orbit/);
+  const responsive=fs.readFileSync('apps/web/src/responsive.css','utf8');
+  assert.match(responsive,/prefers-reduced-motion:reduce\)\{\.computer-signal,\.computer-signal::before,\.computer-signal-face i[^}]*animation:none/,'reduced motion still has to still the mascot');
+});
+
+test('a desktop that is still starting is dialled again fast, a dropped session calmly',()=>{
+  const source=fs.readFileSync('apps/web/vnc.html','utf8').match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/import RFB[^;]+;/,'');
+  // Any element the viewer touches answers, so the disconnect path runs the
+  // same way it does in a browser without a DOM to stand in.
+  const element=()=>new Proxy({style:{},classList:{toggle(){}},dataset:{},hidden:false,textContent:''},{get:(node,key)=>key in node?node[key]:()=>undefined,set:(node,key,value)=>{node[key]=value;return true}});
+  const instances=[],scheduled=[];
+  class RFB{constructor(){this._handlers={};instances.push(this._handlers);}
+    addEventListener(name,handler){(this._handlers[name]||(this._handlers[name]=[])).push(handler);} focus(){} blur(){} sendKey(){}}
+  const window={location:{pathname:'/vnc.html',protocol:'http:',host:'localhost',origin:'http://localhost',hash:''},parent:{postMessage(){}},addEventListener(){}};
+  vm.runInNewContext(source,{window,document:{location:{href:'http://localhost/vnc.html?view_only=false'},getElementById:()=>element(),querySelector:()=>null},navigator:{clipboard:{}},RFB,setTimeout:(fn,ms)=>{scheduled.push(ms);return scheduled.length},clearTimeout(){}});
+  const fire=(name,event)=>{for(const handlers of instances)(handlers[name]||[]).forEach(handler=>handler(event||{}));};
+  assert.equal(instances.length,1,'the viewer dials once on load');
+  fire('disconnect',{clean:false});
+  assert.equal(scheduled.at(-1),350,'a desktop that has never answered is retried eagerly');
+  fire('connect');
+  fire('disconnect',{clean:true});
+  assert.equal(scheduled.at(-1),1500,'a session that was really there is retried calmly');
+});
+
+test('a session dialed after a handoff starts with the mouse already handed over',()=>{
+  const vnc=fs.readFileSync('apps/web/vnc.html','utf8');
+  // Run the viewer rather than read it. The host hands the mouse over while the
+  // viewer sits between two sessions: exactly the moment a fresh RFB used to
+  // fall back to its view-only default and leave a taken-over desktop deaf with
+  // the veil already lifted. Only the gate message arriving is real here.
+  const body=vnc.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/import RFB[^;]+;/,'');
+  const element=()=>new Proxy({style:{},classList:{toggle(){}},dataset:{},hidden:false,textContent:''},{get:(node,key)=>key in node?node[key]:()=>undefined,set:(node,key,value)=>{node[key]=value;return true}});
+  const instances=[],scheduled=[],messages=[];
+  class RFB{constructor(){this._handlers={};instances.push(this);}addEventListener(name,handler){(this._handlers[name]||(this._handlers[name]=[])).push(handler);}focus(){this.focused=true;}blur(){}}
+  const parent={postMessage(){}};
+  const window={location:{pathname:'/vnc.html',protocol:'http:',host:'localhost',origin:'http://localhost',hash:''},parent,addEventListener(name,handler){if(name==='message')messages.push(handler);}};
+  vm.runInNewContext(body,{window,document:{location:{href:'http://localhost/vnc.html'},getElementById:()=>element(),querySelector:()=>null},navigator:{clipboard:{}},RFB,setTimeout:(fn)=>{scheduled.push(fn);return scheduled.length},clearTimeout(){}});
+  const fire=(name,event)=>instances.forEach(rfb=>(rfb._handlers[name]||[]).forEach(handler=>handler(event||{})));
+  fire('disconnect',{clean:false});
+  assert.ok(messages.length,'the viewer listens for the host gate');
+  messages.forEach(handler=>handler({origin:'http://localhost',source:parent,data:{type:'lazyboy-view-only',viewOnly:false}}));
+  scheduled.at(-1)();
+  fire('connect');
+  assert.equal(instances.length,2,'the retry dialed a new session');
+  assert.equal(instances.at(-1).viewOnly,false,'a handoff made mid-reconnect still owns the new session');
+  assert.equal(instances.at(-1).focused,true,'taking over lands the first keystroke');
 });

@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
 use lazyboy_contracts::{
-    BrowserProfileMode, ComputerCapabilities, ComputerMode, ComputerState, ComputerStatus,
-    ControlHolder, DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
+    BrowserProfileMode, ComputerCapabilities, ComputerMode, ComputerStatus, ControlHolder,
+    DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
 };
 use lazyboy_control::{
     AdapterContext, CommandRequest, EnsureScreenRequest, ProvisionRequest, admit_gui,
@@ -998,11 +998,6 @@ pub async fn heartbeat(state: &AppState, actor: &Actor, bot_id: &str) -> Result<
     Ok(())
 }
 
-#[allow(dead_code)]
-pub fn user_has_control(computer: &ComputerRow, bot_id: &str) -> bool {
-    user_has_screen_control(computer, None, bot_id)
-}
-
 pub fn user_has_screen_control(
     computer: &ComputerRow,
     screen: Option<&ScreenRow>,
@@ -1231,8 +1226,4 @@ struct ActiveRunRow {
     status: String,
     thread_id: String,
     step: Option<String>,
-}
-
-pub fn _keep_state(state: ComputerState, holder: ControlHolder, mode: BrowserProfileMode) {
-    let _ = (state, holder, mode);
 }

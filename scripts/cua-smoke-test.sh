@@ -100,6 +100,18 @@ if [[ "$code" -eq 0 ]]; then
   code=$?
 fi
 if [[ "$code" -eq 0 ]]; then
+  # Chromium writes its cookie database on a ~30 s timer and does not flush on
+  # SIGTERM, so restarting right away races that timer: the check below would
+  # then measure flush timing instead of profile persistence. Wait until the
+  # fixture cookie is on disk before restarting.
+  echo "waiting for the browser to persist its cookie"
+  for _ in $(seq 1 90); do
+    if docker exec -u 1000:1000 "$name" sh -c \
+      'grep -qa cuaSmoke "$HOME"/.browser-profiles/displays/*/Default/Cookies 2>/dev/null'; then
+      break
+    fi
+    sleep 1
+  done
   docker restart "$name" >/dev/null
   code=$?
 fi

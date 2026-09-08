@@ -1,13 +1,16 @@
 use async_trait::async_trait;
 use base64::Engine;
 use lazyboy_contracts::ComputerCapabilities;
-use lazyboy_contracts::{ActiveWindow, ComputerObservation, CursorPosition, SandboxKind};
+use lazyboy_contracts::{
+    ActiveWindow, ComputerObservation, CursorPosition, DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
+    SandboxKind,
+};
 use lazyboy_control::{
     ActionRequest, ActionResult, AdapterContext, BrowserRequest, CdpPage, CommandRequest,
     CommandResult, ComputerRef, EnsureScreenRequest, EnsureScreenResult, FileEntry,
     ProvisionRequest, RecordingRequest, RecordingResult, RecordingSession, SandboxError,
-    SandboxProvider, ScreenSession, observation_from_png, observation_with_elements,
-    parse_ui_elements,
+    SandboxProvider, ScreenSession, image_dimensions, observation_from_png,
+    observation_with_elements, parse_ui_elements,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -546,8 +549,13 @@ fn decode_observation(body: &Value) -> Result<ComputerObservation, SandboxError>
         .get("elements")
         .map(|value| parse_ui_elements(&value.to_string()))
         .unwrap_or_default();
+    // The control endpoint does not put the mode on the wire, so the frame
+    // itself decides: a desktop that is not 1280x800 must not be reported to
+    // the model as 1280x800.
+    let (width, height) =
+        image_dimensions(&png).unwrap_or((DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT));
     let mut observation = observation_with_elements(
-        observation_from_png(png, 1280, 800, cursor, window),
+        observation_from_png(png, width, height, cursor, window),
         elements,
     );
     observation.native_observation_complete = body
@@ -555,4 +563,31 @@ fn decode_observation(body: &Value) -> Result<ComputerObservation, SandboxError>
         .and_then(Value::as_bool)
         .unwrap_or(false);
     Ok(observation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_observation;
+    use lazyboy_contracts::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
+    use serde_json::json;
+
+    /// A 3x2 solid-red PNG: small enough to inline, real enough to decode.
+    const FRAME_3X2: &str = "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB\
+0gX7h/C5SAAAAABJRU5ErkJggg==";
+
+    #[test]
+    fn the_mode_is_read_from_the_frame() {
+        let observation = decode_observation(&json!({ "png_base64": FRAME_3X2 }))
+            .expect("a decodable frame makes an observation");
+        assert_eq!(observation.width, 3);
+        assert_eq!(observation.height, 2);
+    }
+
+    #[test]
+    fn an_undecodable_frame_falls_back_to_the_default_mode() {
+        let observation =
+            decode_observation(&json!({ "png_base64": "AAAAAAAAAAA=" })).expect("base64 decodes");
+        assert_eq!(observation.width, DEFAULT_SCREEN_WIDTH);
+        assert_eq!(observation.height, DEFAULT_SCREEN_HEIGHT);
+    }
 }

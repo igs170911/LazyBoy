@@ -36,7 +36,7 @@ pub fn translate_action(
             y,
             pointer_type,
             button,
-        } => Ok(translate_pointer(*x, *y, pointer_type, *button)),
+        } => translate_pointer(*x, *y, pointer_type, *button),
         ComputerAction::Clipboard { text } => {
             tracing::info!(backend = "cua", tool = "type_text", length = text.len());
             Ok(TranslatedAction::Cua {
@@ -44,7 +44,6 @@ pub fn translate_action(
                 payload: json!({
                     "text": text,
                     "scope": "desktop",
-                    "target": { "kind": "desktop", "display_id": "primary" },
                 }),
             })
         }
@@ -56,10 +55,9 @@ pub fn translate_action(
                     ScrollDirection::Up => "up",
                     ScrollDirection::Down => "down",
                 },
-                "amount": amount.unwrap_or(12),
+                "amount": amount.unwrap_or(12).clamp(1, 50),
                 "by": "line",
                 "scope": "desktop",
-                "target": { "kind": "desktop", "display_id": "primary" },
             }),
         }),
     }
@@ -70,40 +68,33 @@ fn translate_pointer(
     y: u32,
     pointer_type: &PointerType,
     button: Option<PointerButton>,
-) -> TranslatedAction {
+) -> Result<TranslatedAction, ControlError> {
     let button = match button.unwrap_or(PointerButton::Left) {
         PointerButton::Left => "left",
         PointerButton::Middle => "middle",
         PointerButton::Right => "right",
     };
     match pointer_type {
-        PointerType::Move => TranslatedAction::Cua {
+        PointerType::Move => Ok(TranslatedAction::Cua {
             tool: "move_cursor",
             payload: json!({
                 "x": x,
                 "y": y,
                 "scope": "desktop",
-                "target": { "kind": "desktop", "display_id": "primary" },
             }),
-        },
-        PointerType::Click => TranslatedAction::Cua {
+        }),
+        PointerType::Click => Ok(TranslatedAction::Cua {
             tool: "click",
             payload: json!({
                 "x": x,
                 "y": y,
                 "button": button,
                 "scope": "desktop",
-                "target": { "kind": "desktop", "display_id": "primary" },
             }),
-        },
-        PointerType::Down => TranslatedAction::Cua {
-            tool: "mouse_button_down",
-            payload: json!({ "x": x, "y": y, "button": button }),
-        },
-        PointerType::Up => TranslatedAction::Cua {
-            tool: "mouse_button_up",
-            payload: json!({ "x": x, "y": y, "button": button }),
-        },
+        }),
+        // A held-button gesture collapses into one `drag` call before it gets
+        // here; the CLI has no lease that keeps a button down between calls.
+        PointerType::Down | PointerType::Up => Err(ControlError::Unsupported),
     }
 }
 
@@ -118,7 +109,6 @@ fn translate_key(key: &str, modifiers: Option<&[String]>) -> TranslatedAction {
                 payload: json!({
                     "keys": keys,
                     "scope": "desktop",
-                    "target": { "kind": "desktop", "display_id": "primary" },
                 }),
             }
         }
@@ -127,7 +117,6 @@ fn translate_key(key: &str, modifiers: Option<&[String]>) -> TranslatedAction {
             payload: json!({
                 "key": key,
                 "scope": "desktop",
-                "target": { "kind": "desktop", "display_id": "primary" },
             }),
         },
     }
@@ -166,7 +155,76 @@ mod tests {
         assert_eq!(payload["x"], 40);
         assert_eq!(payload["y"], 80);
         assert_eq!(payload["scope"], "desktop");
-        assert_eq!(payload["target"]["display_id"], "primary");
+        // 0.23.2 rejects an explicit desktop target with invalid_action_target.
+        assert!(payload.get("target").is_none());
+    }
+
+    #[test]
+    fn desktop_actions_omit_the_rejected_target() {
+        for action in [
+            ComputerAction::Clipboard { text: "hi".into() },
+            ComputerAction::Key {
+                key: "return".into(),
+                modifiers: None,
+            },
+            ComputerAction::Key {
+                key: "c".into(),
+                modifiers: Some(vec!["ctrl".into()]),
+            },
+            ComputerAction::Pointer {
+                x: 1,
+                y: 2,
+                pointer_type: PointerType::Move,
+                button: None,
+            },
+            ComputerAction::Scroll {
+                direction: ScrollDirection::Down,
+                amount: None,
+            },
+        ] {
+            let TranslatedAction::Cua { payload, .. } =
+                translate_action(&action, ":1", None).unwrap()
+            else {
+                panic!("every desktop action translates to a Cua tool");
+            };
+            assert!(payload.get("target").is_none(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn scroll_amount_stays_inside_the_driver_window() {
+        let scroll = |amount| match translate_action(
+            &ComputerAction::Scroll {
+                direction: ScrollDirection::Down,
+                amount: Some(amount),
+            },
+            ":1",
+            None,
+        )
+        .unwrap()
+        {
+            TranslatedAction::Cua { payload, .. } => payload["amount"].as_i64().unwrap(),
+            other => panic!("expected scroll, got {other:?}"),
+        };
+        assert_eq!(scroll(0), 1);
+        assert_eq!(scroll(12), 12);
+        assert_eq!(scroll(200), 50);
+    }
+
+    #[test]
+    fn held_buttons_are_not_translated_one_by_one() {
+        for pointer_type in [PointerType::Down, PointerType::Up] {
+            let action = ComputerAction::Pointer {
+                x: 1,
+                y: 2,
+                pointer_type,
+                button: Some(PointerButton::Left),
+            };
+            assert!(matches!(
+                translate_action(&action, ":1", None),
+                Err(ControlError::Unsupported)
+            ));
+        }
     }
 
     #[test]

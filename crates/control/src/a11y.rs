@@ -1,8 +1,8 @@
 use lazyboy_contracts::UiElement;
 use serde_json::{Value, json};
 
+use crate::normalize_display;
 use crate::x11::{is_browser_title, parse_ui_elements};
-use crate::{PRIMARY_DISPLAY, normalize_display};
 
 const A11Y_PY: &str = include_str!("a11y.py");
 
@@ -28,10 +28,6 @@ pub fn a11y_command_on(display: &str, request: &Value) -> Vec<String> {
         A11Y_PY.into(),
         body.to_string(),
     ]
-}
-
-pub fn a11y_command(request: &Value) -> Vec<String> {
-    a11y_command_on(PRIMARY_DISPLAY, request)
 }
 
 pub fn parse_a11y_page(raw: &str) -> A11yPage {

@@ -25,6 +25,20 @@ pub fn observation_from_png(
     }
 }
 
+/// Pixel size of a captured frame, or `None` when the bytes are not decodable.
+/// Each driver captures with a different codec (the legacy pipeline emits JPEG
+/// from `xwd | convert`, the Cua driver writes PNG), so the dimensions have to
+/// come from the frame itself rather than from a configured constant.
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    use image::ImageDecoder;
+
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let decoder = reader.into_decoder().ok()?;
+    Some(decoder.dimensions())
+}
+
 pub fn observation_to_control_json(observation: &ComputerObservation) -> Value {
     let mut body = json!({
         "png_base64": base64::engine::general_purpose::STANDARD.encode(&observation.image),
@@ -109,6 +123,33 @@ pub fn signatures_similar(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::codecs::jpeg::JpegEncoder;
+    use image::codecs::png::PngEncoder;
+    use image::{ExtendedColorType, ImageEncoder, Rgb, RgbImage};
+    use std::io::Cursor;
+
+    #[test]
+    fn dimensions_come_from_the_frame_for_both_codecs() {
+        let frame = RgbImage::from_pixel(96, 48, Rgb([10, 20, 30]));
+
+        let mut png = Cursor::new(Vec::new());
+        PngEncoder::new(&mut png)
+            .write_image(frame.as_raw(), 96, 48, ExtendedColorType::Rgb8)
+            .unwrap();
+        assert_eq!(image_dimensions(&png.into_inner()), Some((96, 48)));
+
+        // The legacy driver captures JPEG, so a hardcoded size would drift the
+        // moment the Xvfb geometry changes.
+        let mut jpeg = Cursor::new(Vec::new());
+        JpegEncoder::new_with_quality(&mut jpeg, 60)
+            .encode(frame.as_raw(), 96, 48, ExtendedColorType::Rgb8)
+            .unwrap();
+        assert_eq!(image_dimensions(&jpeg.into_inner()), Some((96, 48)));
+
+        // A truncated capture must not invent a size.
+        assert_eq!(image_dimensions(&[0xFF, 0xD8, 0xFF]), None);
+        assert_eq!(image_dimensions(&[]), None);
+    }
 
     #[test]
     fn identical_bytes_share_a_frame_id() {

@@ -8,10 +8,14 @@ COMPOSE        ?= docker compose
 COMPUTER_IMAGE ?= lazyboy/computer:local
 WEB_DIR        ?= apps/web
 DATA_DIR       ?= ./data
+BUILDX_BUILDER  ?= lazyboy
+# PUSH=1 publishes the manifest list instead of writing an OCI archive.
+MULTI_FLAGS ?=
+$(if $(filter 1,$(PUSH)),$(eval MULTI_FLAGS := --push))
 
 .PHONY: help env env-force \
         up logs ps health down purge \
-        computer postgres postgres-down pg-collation \
+        computer computer-multi images-multi postgres postgres-down pg-collation \
         cua-smoke \
         build build-api build-supervisor build-controld \
         fmt fmt-check clippy lint audit test clean \
@@ -32,6 +36,8 @@ help: ## Show this help
 	@echo ""
 	@echo "  Individual pieces:"
 	@echo "    make computer       Build the heavy Debian desktop image (lazyboy/computer:local)"
+	@echo "    make computer-multi Cross-build the desktop image for amd64 + arm64 (PUSH=1 to publish)"
+	@echo "    make images-multi   Cross-build desktop + api + supervisor for amd64 + arm64"
 	@echo "    make cua-smoke      Run Cua Driver smoke test in a disposable desktop container"
 	@echo "    make postgres       Start only postgres (127.0.0.1:5434) and wait for ready"
 	@echo "    make postgres-down  Stop postgres"
@@ -93,7 +99,23 @@ purge: ## Stop containers and delete the postgres data volume
 # --- Individual pieces -----------------------------------------------------
 
 computer: ## Build the Debian desktop image used to spawn bot computers
-	docker build -f image/computer/Dockerfile -t $(COMPUTER_IMAGE) .
+	./scripts/build-image.sh --tag $(COMPUTER_IMAGE)
+
+# Cross-builds every supported CPU architecture into one manifest list. Needs a
+# docker-container builder + QEMU binfmt; both are bootstrapped by the script.
+# PUSH=1 publishes to a registry, otherwise an OCI archive is written.
+computer-multi: ## Cross-build the desktop image for all CPU architectures
+	./scripts/build-image.sh --file image/computer/Dockerfile --multi $(MULTI_FLAGS)
+
+# The api and supervisor images carry per-architecture binaries as well (ONNX
+# Runtime, node, the distroless libc), so they get the same treatment as the
+# desktop image instead of only ever existing for the build host.
+images-multi: ## Cross-build every shipped image for all CPU architectures
+	@for dockerfile in image/computer/Dockerfile image/supervisor/Dockerfile \
+		image/api/Dockerfile; do \
+	  echo "== $$dockerfile"; \
+	  ./scripts/build-image.sh --file "$$dockerfile" --multi $(MULTI_FLAGS) || exit 1; \
+	done
 
 cua-smoke: computer ## Run the Cua Driver smoke test inside a disposable desktop container
 	./scripts/cua-smoke-test.sh --docker --image $(COMPUTER_IMAGE)

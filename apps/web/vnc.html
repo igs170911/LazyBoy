@@ -85,6 +85,20 @@
 
       let rfb = null;
       let reconnectTimer = null;
+      // A desktop that has never answered on this page is still coming up, and
+      // x11vnc opens its port a heartbeat after the last attempt failed. Holding
+      // every retry at the calm cadence leaves up to half a second of veil on top
+      // of a desktop that is already there, so the first window of attempts comes
+      // back eager. Once a session has been seen the calm cadence returns: a
+      // genuinely dropped connection should not be hammered.
+      const CALM_RETRY_MS = 1500;
+      const EAGER_RETRY_MS = 350;
+      const EAGER_ATTEMPTS = 40;
+      let everConnected = false;
+      let eagerAttempts = 0;
+      const retryDelay = () => (!everConnected && eagerAttempts < EAGER_ATTEMPTS)
+        ? (eagerAttempts += 1, EAGER_RETRY_MS)
+        : CALM_RETRY_MS;
       const parentOrigin = window.location.origin;
       const keyboard = document.getElementById("mobile-keyboard");
       const sentinel = "\u200b";
@@ -347,12 +361,21 @@
         }
       }
 
+      // The host flips this gate whenever control changes hands, including
+      // while the frame is still dialling or between retries. Keep the last
+      // thing it asked for and hand it to every new RFB, so a handoff never
+      // depends on which side of a reconnect the message happened to land.
+      let wantedViewOnly = null;
       function applyViewOnly(value) {
+        wantedViewOnly = Boolean(value);
         if (!rfb) return;
-        if (value) { releaseDrag(); gesture = null; modifier = null; if (shortcuts) shortcuts.hidden = true; }
-        rfb.viewOnly = Boolean(value);
+        if (wantedViewOnly) { releaseDrag(); gesture = null; modifier = null; if (shortcuts) shortcuts.hidden = true; }
+        rfb.viewOnly = wantedViewOnly;
         updatePointerControls();
         if (rfb.viewOnly) { keyboard.blur(); resetKeyboard(); }
+        // Taking over has to be usable, not just painted: focus so the very
+        // first keystroke after the veil lands on the desktop.
+        else { try { rfb.focus(); } catch (_) {} }
       }
 
       function connect() {
@@ -368,10 +391,13 @@
         pinTaskbar();
         updatePointerControls();
         rfb.addEventListener("connect", () => {
+          everConnected = true;
+          eagerAttempts = 0;
           setStatus("");
           pinTaskbar();
           updatePointerControls();
           try { rfb.focus(); } catch (_) {}
+          if (wantedViewOnly !== null) applyViewOnly(wantedViewOnly);
           window.parent.postMessage({ type: "lazyboy-desktop-ready" }, parentOrigin);
         });
         rfb.addEventListener("disconnect", (event) => {
@@ -382,7 +408,7 @@
           const clean = event && event.detail && event.detail.clean;
           setStatus(clean ? "Disconnected — retrying" : "Desktop connection lost — retrying");
           if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connect, 1500);
+          reconnectTimer = setTimeout(connect, retryDelay());
         });
         rfb.addEventListener("clipboard", (event) => {
           const text = event && event.detail ? event.detail.text : "";

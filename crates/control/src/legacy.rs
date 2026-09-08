@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use lazyboy_contracts::{ComputerAction, ComputerObservation, RefVerb};
+use lazyboy_contracts::{
+    ComputerAction, ComputerObservation, DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH, RefVerb,
+};
 use tokio::time::{Duration, sleep};
 
 use crate::controller::{
@@ -11,7 +13,7 @@ use crate::process::{
 use crate::{
     ActionRequest, ActionResult, BrowserRequest, CdpPage, RecordingRequest, RecordingResult,
     RecordingSession, a11y_command_on, action_pause_ms, cdp_command_on, cdp_record_command_on,
-    cdp_record_stop_command, devtools_port, launch_argv_on, observation_from_png,
+    cdp_record_stop_command, devtools_port, image_dimensions, launch_argv_on, observation_from_png,
     observation_with_elements, open_argv_on, parse_a11y_page, parse_cdp_page, parse_pointer_state,
     parse_ui_elements, pointer_state_command_on, screenshot_command_on, teach_recorder_output,
     teach_trajectory_dir, window_list_command_on, xdotool_argv_on,
@@ -153,13 +155,17 @@ async fn legacy_browser(
 }
 
 pub async fn observe_display(display: &str) -> Result<ComputerObservation, ControlError> {
-    let png = capture_stdout(&screenshot_command_on(display))
+    let frame = capture_stdout(&screenshot_command_on(display))
         .await
         .map_err(|_| ControlError::Internal("screenshot failed".into()))?;
+    // The capture is a JPEG of the root window, so the frame carries the real
+    // geometry; the constants are only a fallback for an undecodable frame.
+    let (width, height) =
+        image_dimensions(&frame).unwrap_or((DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT));
     let ((cursor, window), elements) =
         tokio::join!(run_pointer_state(display), run_window_list(display));
     Ok(observation_with_elements(
-        observation_from_png(png, 1280, 800, cursor, window),
+        observation_from_png(frame, width, height, cursor, window),
         elements,
     ))
 }

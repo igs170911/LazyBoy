@@ -2,8 +2,8 @@ use lazyboy_contracts::UiElement;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::normalize_display;
 use crate::x11::parse_ui_elements;
-use crate::{PRIMARY_DISPLAY, normalize_display};
 
 const CDP_PY: &str = include_str!("cdp.py");
 
@@ -37,10 +37,6 @@ pub fn cdp_command_on(display: &str, profile: Option<&str>, request: &Value) -> 
         CDP_PY.into(),
         body.to_string(),
     ]
-}
-
-pub fn cdp_command(request: &Value) -> Vec<String> {
-    cdp_command_on(PRIMARY_DISPLAY, None, request)
 }
 
 /// Same as `cdp_command_on` but the JSON body is meant to arrive on stdin

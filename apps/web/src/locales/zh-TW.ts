@@ -64,7 +64,7 @@ export const zhTW = {
   mcpNoResults: "找不到符合的 MCP。換個關鍵字，或改用自訂接入。", mcpCustom: "自訂接入", mcpBackToList: "回到列表",
   mcpConnectNamed: "接入 {name}", mcpKeyHint: "這個 MCP 需要憑證才能連。",
   noMcp: "還沒有 MCP。點上面的「選擇 MCP」從市集接入。", toolsCount: "{count} 個工具", disabled: "已關閉", disconnected: "未連線", noTools: "沒有可用工具", reconnect: "重新連線", disable: "停用", enable: "啟用",
-  preparingDesktop: "正在準備 Agent 的獨立桌面…", computerPreviewHint: "開啟電腦後，畫面會顯示在這裡。", bootingProgress: "啟動中…", restartComputer: "重啟", shutDownComputer: "關閉電腦", computerPower: "電腦選單", sharedPowerHint: "此為共用電腦，操作會影響使用它的所有 Agent。", stopAndTakeOver: "停止並接管",
+  preparingDesktop: "正在準備 Agent 的獨立桌面…", computerPreviewHint: "開啟電腦後，畫面會顯示在這裡。", bootingProgress: "啟動中…", restartComputer: "重啟", shutDownComputer: "關閉電腦", computerPower: "電腦選單", sharedPowerHint: "此為共用電腦，操作會影響使用它的所有 Agent。", stopAndTakeOver: "停止並接管", takeoverBusy: "請先停止任務，再接手滑鼠。",
   hudBooting: "電腦啟動中…", hudWaking: "喚醒中…", hudConnecting: "連線中…", hudHandoff: "換手中…",
   pasteToRemoteComputer: "貼到遠端電腦", pasteRemoteHelp: "把外面的文字貼在這裡，再送進 VNC。這個方式在區網 HTTP 也能使用。", pasteTextPlaceholder: "在此貼上文字…", pasteIntoVnc: "貼入 VNC",
   botNamePlaceholder: "例如：研究助理", sharedComputerHint: "與其他機器人共用環境", privateComputerHint: "全新的獨立 Docker", create: "建立",

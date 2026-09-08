@@ -253,6 +253,7 @@ export const en: { [K in keyof typeof zhTW]: string } = {
   computerPower: "Computer menu",
   sharedPowerHint: "This is a shared computer. The action affects every agent using it.",
   stopAndTakeOver: "Stop and take over",
+  takeoverBusy: "Stop the task first, then take the mouse.",
   hudBooting: "Computer starting…",
   hudWaking: "Waking…",
   hudConnecting: "Connecting…",

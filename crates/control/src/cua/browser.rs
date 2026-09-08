@@ -8,8 +8,6 @@ use crate::controller::ControlError;
 use crate::process::spawn_detached;
 use crate::{BrowserRequest, CdpPage, launch_argv_on};
 
-pub const SESSION: &str = "lazyboy";
-
 #[derive(Debug, Clone)]
 pub struct BrowserBind {
     pub pid: u64,
@@ -253,12 +251,7 @@ async fn attach(
     window: &ListedWindow,
 ) -> Result<BrowserBind, ControlError> {
     client
-        .call(
-            display,
-            "start_session",
-            &json!({ "session": SESSION }),
-            &[],
-        )
+        .call(display, "start_session", &json!({}), &[])
         .await?;
     let pid = window.pid;
     let window_id = window.id;
@@ -269,7 +262,6 @@ async fn attach(
             &json!({
                 "pid": pid,
                 "window_id": window_id,
-                "session": SESSION,
                 "strategy": { "kind": "existing_profile" },
                 "allow_launch": false,
             }),
@@ -289,7 +281,6 @@ async fn attach(
             &json!({
                 "pid": pid,
                 "window_id": window_id,
-                "session": SESSION,
                 "include_screenshot": false,
             }),
             &[],
@@ -317,7 +308,6 @@ pub async fn snapshot(
             &json!({
                 "target_id": bind.target_id,
                 "tab_id": bind.tab_id,
-                "session": SESSION,
                 "snapshot_format": "semantic_v2",
                 "include_screenshot": false,
             }),
@@ -376,7 +366,6 @@ pub async fn run(
                     &json!({
                         "target_id": attached.target_id,
                         "tab_id": attached.tab_id,
-                        "session": SESSION,
                         "url": url,
                     }),
                     &[],
@@ -397,7 +386,6 @@ pub async fn run(
                         "key": key,
                         "pid": attached.pid,
                         "window_id": attached.window_id,
-                        "session": SESSION,
                     }),
                     &[],
                 )
@@ -422,7 +410,7 @@ async fn click(
         .as_deref()
         .ok_or_else(|| ControlError::InvalidAction("browser click needs a selector".into()))?;
     let page = bind.page.as_ref().ok_or(ControlError::StaleReference)?;
-    let Some(r#ref) = find_ref(&page, selector) else {
+    let Some(r#ref) = find_ref(page, selector) else {
         return Ok(CdpPage {
                 ok: false,
                 error: Some(
@@ -444,7 +432,6 @@ async fn click(
             &json!({
                 "target_id": bind.target_id,
                 "tab_id": bind.tab_id,
-                "session": SESSION,
                 "ref": r#ref,
                 "input_route": "dom_event",
             }),
@@ -465,7 +452,7 @@ async fn type_into(
     tracing::info!(backend = "cua", tool = "browser_type", length = text.len());
     if let Some(selector) = request.selector.as_deref() {
         let page = bind.page.as_ref().ok_or(ControlError::StaleReference)?;
-        let Some(r#ref) = find_ref(&page, selector) else {
+        let Some(r#ref) = find_ref(page, selector) else {
             return Ok(CdpPage {
                 ok: false,
                 error: Some("target field is unavailable; no text inserted".into()),
@@ -484,7 +471,6 @@ async fn type_into(
                 &json!({
                     "target_id": bind.target_id,
                     "tab_id": bind.tab_id,
-                    "session": SESSION,
                     "ref": r#ref,
                     "text": text,
                     "replace": true,
@@ -501,7 +487,6 @@ async fn type_into(
                     "text": text,
                     "pid": bind.pid,
                     "window_id": bind.window_id,
-                    "session": SESSION,
                 }),
                 &[],
             )

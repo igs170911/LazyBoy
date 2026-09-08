@@ -87,6 +87,30 @@ Lint 政策集中在三處，新增 crate 時只要補 `[lints] workspace = true
 依賴來源。它不是內建工具，第一次要先 `cargo install --locked cargo-deny`。
 已知無法升級的項目會寫進 `deny.toml` 的 `ignore` 並附原因與重檢時機。
 
+### 映像與 CPU 架構
+
+三個映像（`image/computer`、`image/api`、`image/supervisor`）一律用 `scripts/build-image.sh`
+建置。支援的架構是 **linux/amd64 與 linux/arm64**，這個上限由上游二進位發行決定，不是實作取捨：
+
+- Cua Driver `cua-driver-rs-v0.23.2` 的 Linux 發行檔只有 `linux-x86_64` 與 `linux-arm64`。
+- ONNX Runtime `v1.24.1` 的 Linux 發行檔只有 `linux-x64` 與 `linux-aarch64`。
+
+`image/computer/Dockerfile` 依 `TARGETARCH` 選檔並驗證 SHA256，`scripts/fetch-onnxruntime.sh`
+同樣只認這兩種架構，其他架構直接建置失敗；`build-image.sh` 在註冊 QEMU 與開始跨修編
+之前就先擋掉不支援的 `--platforms`，不會燒掉數 GB 才報錯。
+
+```bash
+make computer            # 本機架構，結果直接進本地 image 庫
+make computer-multi      # amd64 + arm64 -> dist/lazyboy-computer-multi.oci.tar
+make images-multi        # 三個映像都跨修 amd64 + arm64
+make images-multi PUSH=1 # 直接發布 manifest list 到 registry
+```
+
+多架構需要 `docker-container` builder 與 QEMU binfmt，`build-image.sh` 會自行建立 `lazyboy`
+builder 並註冊 binfmt；主機本身的架構會跳過註冊，否則在特權容器內會誤報失敗。
+不推送 registry 時輸出 OCI archive（`nerdctl load -i <檔>` 可載入），因為 Docker 的
+`docker` driver 無法匯出 manifest list。
+
 ### 專案結構
 
 ```text
