@@ -8,7 +8,7 @@ use crate::{launch_argv_on, open_argv_on};
 pub enum TranslatedAction {
     Cua { tool: &'static str, payload: Value },
     Sleep { ms: u64 },
-    LegacyArgv { argv: Vec<String> },
+    Launch { argv: Vec<String> },
     FocusTitle { title: String },
 }
 
@@ -19,15 +19,17 @@ pub fn translate_action(
 ) -> Result<TranslatedAction, ControlError> {
     match action {
         ComputerAction::Wait { ms } => Ok(TranslatedAction::Sleep { ms: u64::from(*ms) }),
-        ComputerAction::Open { path } => Ok(TranslatedAction::LegacyArgv {
+        ComputerAction::Open { path } => Ok(TranslatedAction::Launch {
             argv: open_argv_on(display, profile, path),
         }),
         ComputerAction::Launch { application, uri } => {
             let argv = launch_argv_on(display, profile, application, uri.as_deref())
                 .ok_or(ControlError::Unsupported)?;
-            Ok(TranslatedAction::LegacyArgv { argv })
+            Ok(TranslatedAction::Launch { argv })
         }
-        ComputerAction::Ref { .. } => Err(ControlError::Unsupported),
+        ComputerAction::CopySelection | ComputerAction::Ref { .. } => {
+            Err(ControlError::Unsupported)
+        }
         ComputerAction::Focus { title } => Ok(TranslatedAction::FocusTitle {
             title: title.clone(),
         }),

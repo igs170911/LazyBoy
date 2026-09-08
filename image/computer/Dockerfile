@@ -15,16 +15,34 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,id=lazyboy-computer-release,sharing=locked \
     cargo build --locked --release -p lazyboy-controld && cp /src/target/release/lazyboy-controld /lazyboy-controld
 
+# Cua 0.23.2 embeds Inter for session badges, which has no Chinese glyphs.
+# Build the same pinned release with our existing OFL Huninn UI font embedded.
+# The cosmetic patch reads the bot's selected color; input/permissions are unchanged.
+FROM rust:1.97.1-bookworm AS cua_driver
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libx11-dev libxi-dev libxtst-dev libxrandr-dev libxfixes-dev libxkbcommon-dev \
+    libwayland-dev pkg-config patch && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/trycua/cua/tar.gz/refs/tags/cua-driver-rs-v0.23.2 -o /tmp/cua.tar.gz \
+    && echo '151c72982c9f06bf168bd00f9611cef6760f2fc2459916dc216810ac24200f3d  /tmp/cua.tar.gz' | sha256sum -c \
+    && tar -xzf /tmp/cua.tar.gz --strip-components=1 \
+    && rm /tmp/cua.tar.gz
+RUN curl -fsSL https://github.com/justfont/open-huninn-font/releases/download/v2.1/jf-openhuninn-2.1.ttf -o /tmp/huninn.ttf \
+    && echo '9d5bf4932d31fe94c18cd8cfddc98bc1b14ce10f4e354c682179db290a99c825  /tmp/huninn.ttf' | sha256sum -c \
+    && cp /tmp/huninn.ttf libs/cua-driver/rust/crates/cursor-overlay/assets/Inter.ttf
+WORKDIR /src/libs/cua-driver/rust
+COPY image/computer/cua-color.rs crates/cursor-overlay/src/lazyboy_color.rs
+COPY image/computer/cua-color.patch /tmp/cua-color.patch
+RUN patch --batch --fuzz=0 -p1 < /tmp/cua-color.patch
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/libs/cua-driver/rust/target,id=lazyboy-cua-cjk,sharing=locked \
+    cargo build --locked --release -p cua-driver --features portal-input \
+    && cp target/release/cua-driver /cua-driver
+
 FROM debian:bookworm-slim
 
 # Keep Chromium, XFCE, CJK, AT-SPI, git. Skip Debian novnc (pulls nodejs) and
 # fonts-noto-core (Latin is DejaVu/Liberation/huninn).
-#
-# x11-apps + imagemagick look removable and are not: the legacy driver's
-# screenshot path is `xwd -root -silent | convert xwd:- … jpeg:-`
-# (control/src/x11.rs screenshot_command_on), reached by legacy observe_display
-# and by the supervisor's exec fallback. Nothing else in the image provides
-# /usr/bin/xwd or /usr/bin/convert, so removing either breaks the default driver.
 RUN printf '%s\n' \
       'path-include=/usr/share/locale/zh_TW/*' \
       'path-include=/usr/share/locale/zh/*' \
@@ -43,25 +61,20 @@ RUN printf '%s\n' \
     locales \
     procps \
     python3 \
-    python3-websocket \
     sudo \
     tmux \
     gosu \
     util-linux \
     websockify \
     wmctrl \
-    x11-apps \
     x11-utils \
     x11vnc \
-    xclip \
     xdg-utils \
-    imagemagick \
     xfce4-panel \
     xfce4-settings \
     xfce4-terminal \
     xfconf \
     xfdesktop4 \
-    xdotool \
     xfwm4 \
     xvfb \
     thunar \
@@ -112,33 +125,20 @@ RUN useradd --create-home --uid 1000 --shell /bin/zsh lazyboy \
     && mkdir -p /home/lazyboy /tmp/lazyboy /usr/share/lazyboy/skel /usr/share/lazyboy/xfce-skel /etc/gtk-3.0 /etc/fonts/conf.d \
     && chown -R 1000:1000 /home/lazyboy /tmp/lazyboy
 
-# Pin Cua Driver outside the persisted /home/lazyboy bind-mount.
-# Checksums are from the matching official release; select the target architecture.
-ARG CUA_DRIVER_RS_VERSION=0.23.2
-ARG TARGETARCH
-ARG CUA_DRIVER_RS_SHA256_AMD64=01bf8339ec129cc00f4b4b2c6056ef1a7c5b52df39ff83ad17c9b16818aec500
-ARG CUA_DRIVER_RS_SHA256_ARM64=be22768a207796a4bc1de50c52f32f9ef680b5e86e58c059e02eec2caba2e7bb
-RUN case "$TARGETARCH" in \
-      amd64) cua_arch=x86_64; cua_sha="$CUA_DRIVER_RS_SHA256_AMD64" ;; \
-      arm64) cua_arch=arm64; cua_sha="$CUA_DRIVER_RS_SHA256_ARM64" ;; \
-      *) echo "Unsupported Cua architecture: $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-  && curl -fsSL -o /tmp/cua-driver.tar.gz \
-      "https://github.com/trycua/cua/releases/download/cua-driver-rs-v${CUA_DRIVER_RS_VERSION}/cua-driver-rs-${CUA_DRIVER_RS_VERSION}-linux-${cua_arch}-binary.tar.gz" \
-  && echo "${cua_sha}  /tmp/cua-driver.tar.gz" | sha256sum -c \
-  && mkdir -p /usr/local/lib/cua-driver \
-  && tar -xzf /tmp/cua-driver.tar.gz -C /usr/local/lib/cua-driver \
-  && chmod 755 /usr/local/lib/cua-driver/cua-driver \
-  && ln -sf /usr/local/lib/cua-driver/cua-driver /usr/local/bin/cua-driver \
-  && rm -f /tmp/cua-driver.tar.gz \
-  && cua-driver --version
+# Install outside the persisted /home/lazyboy bind-mount.
+COPY --from=cua_driver --chmod=755 /cua-driver /usr/local/lib/cua-driver/cua-driver
+COPY --from=cua_driver /src/LICENSE.md /usr/share/licenses/cua-driver/LICENSE.md
+COPY image/computer/licenses/huninn-OFL.txt /usr/share/licenses/cua-driver/huninn-OFL.txt
+RUN ln -sf /usr/local/lib/cua-driver/cua-driver /usr/local/bin/cua-driver \
+    && cua-driver --version
 
 COPY --from=controld --chmod=755 /lazyboy-controld /usr/local/bin/lazyboy-controld
 COPY --chmod=755 image/computer/rotate-logs.py /usr/local/bin/lazyboy-rotate-logs
 COPY --chmod=755 image/computer/lazyboy-screen /usr/local/bin/lazyboy-screen
 COPY --chmod=755 image/computer/lazyboy-browser /usr/local/bin/lazyboy-browser
 COPY --chmod=755 image/computer/lazyboy-terminal /usr/local/bin/lazyboy-terminal
-COPY --chmod=755 image/computer/lazyboy-shell /usr/local/bin/lazyboy-shell
+COPY --chmod=755 image/computer/lazyboy-terminal-reset /usr/local/bin/lazyboy-terminal-reset
+COPY --chmod=755 image/computer/lazyboy-clipboard /usr/local/bin/lazyboy-clipboard
 COPY --chmod=644 apps/web/vnc.html /usr/share/novnc/vnc_lite.html
 COPY --chmod=644 apps/web/vnc.html /usr/share/novnc/index.html
 COPY --chmod=644 image/computer/fonts.conf /etc/fonts/conf.d/99-lazyboy-cjk.conf
@@ -177,6 +177,11 @@ COPY --chmod=644 image/computer/cua-smoke.html /usr/share/lazyboy/cua-smoke.html
 COPY --chmod=755 image/computer/cua-smoke-gtk.py /usr/local/bin/lazyboy-cua-smoke-gtk
 COPY --chmod=755 scripts/cua-smoke-inner.py /usr/local/bin/lazyboy-cua-smoke
 COPY --chmod=755 scripts/cua-adapter-test.py /usr/local/bin/lazyboy-cua-adapter-test
+COPY --chmod=755 scripts/cua-terminal-test.py /usr/local/bin/lazyboy-cua-terminal-test
+COPY --chmod=755 scripts/cua-clipboard-test.py /usr/local/bin/lazyboy-cua-clipboard-test
+COPY --chmod=755 scripts/cua-session-test.py /usr/local/bin/lazyboy-cua-session-test
+COPY --chmod=755 scripts/cua-cursor-test.py /usr/local/bin/lazyboy-cua-cursor-test
+COPY --chmod=755 scripts/cua-cursor-color-test.py /usr/local/bin/lazyboy-cua-cursor-color-test
 COPY --chmod=755 scripts/cua-isolation-test.py /usr/local/bin/lazyboy-cua-isolation-test
 COPY --chmod=755 scripts/cua-smoke-test.sh /usr/local/bin/lazyboy-cua-smoke-host
 

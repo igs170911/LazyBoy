@@ -59,8 +59,8 @@ lazyboy-supervisor (:7091, internal only)
           ├── provision / pause / resume / stop
           ├── CPU / memory / PID limits
           └── isolated computer containers
-                  ├── Chromium + CDP
-                  ├── XFCE + AT-SPI
+                  ├── Cua Driver → Chromium / XFCE
+                  ├── visible terminal + clipboard editor
                   ├── Xvfb + x11vnc + websockify
                   └── per-computer persisted home
 ```
@@ -73,7 +73,7 @@ lazyboy-supervisor (:7091, internal only)
 | `crates/api` | 對外 Axum API、Agent run、Session、排程、記憶、MCP、保險箱 |
 | `crates/harness` | 模型供應商、憑證解析與語音契約 |
 | `crates/supervisor` | Docker 電腦生命週期、隔離與資源上限 |
-| `crates/control` | CDP、AT-SPI、X11 與畫面觀察操作 |
+| `crates/control` | Cua 瀏覽器、原生視窗與共用桌面觀察；終端機與剪貼簿操作皆經 Cua |
 | `crates/controld` | 電腦容器內部的 localhost 控制服務 |
 | `crates/contracts` | 跨 crate 的 Bot、Run、Computer、Voice 資料契約 |
 | `PostgreSQL` | 對話、run、記憶、排程、憑證與保留政策 |

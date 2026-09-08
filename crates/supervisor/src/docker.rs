@@ -15,8 +15,7 @@ use futures_util::StreamExt;
 use lazyboy_control::{
     ActionRequest, BrowserRequest, CommandRequest, CommandResult, EnsureScreenRequest,
     EnsureScreenResult, HOME, RecordingRequest, ScreenTarget, TEAM_SCREEN_LIMIT, normalize_display,
-    normalize_workspace_path, pointer_state_command_on, screen_layout, screenshot_command_on,
-    window_list_command_on,
+    normalize_workspace_path, screen_layout,
 };
 use tokio::time::{Duration, sleep};
 
@@ -300,87 +299,7 @@ impl DockerHost {
         id: &str,
         target: &ScreenTarget,
     ) -> Result<ObservePayload, String> {
-        let mut body = if let Ok(value) = self.control_observe_json(id, target).await {
-            value
-        } else {
-            let (stdout, stderr, code) = self
-                .exec_raw(
-                    id,
-                    &screenshot_command_on(&target.display),
-                    None,
-                    target,
-                    None,
-                )
-                .await?;
-            if code != 0 {
-                return Err(String::from_utf8_lossy(&stderr).into_owned());
-            }
-            let mut body = serde_json::json!({
-                "png_base64": base64::engine::general_purpose::STANDARD.encode(&stdout)
-            });
-            if let Ok(meta) = self.pointer_state(id, target).await
-                && let serde_json::Value::Object(map) = meta
-                && let Some(obj) = body.as_object_mut()
-            {
-                if let (Some(x), Some(y)) = (map.get("x"), map.get("y")) {
-                    obj.insert("cursor".into(), serde_json::json!({ "x": x, "y": y }));
-                }
-                if map
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|id| !id.is_empty())
-                {
-                    obj.insert(
-                        "activeWindow".into(),
-                        serde_json::json!({ "id": map.get("id"), "title": map.get("title") }),
-                    );
-                }
-            }
-            body
-        };
-        self.attach_window_elements(id, target, &mut body).await;
-        ObservePayload::from_json(body)
-    }
-
-    async fn attach_window_elements(
-        &self,
-        id: &str,
-        target: &ScreenTarget,
-        body: &mut serde_json::Value,
-    ) {
-        if body
-            .get("elements")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-        {
-            return;
-        }
-        let Ok(result) = self
-            .exec_argv(id, &window_list_command_on(&target.display), None, target)
-            .await
-        else {
-            return;
-        };
-        if result.code != 0 {
-            return;
-        }
-        if let Ok(elements) = serde_json::from_str::<serde_json::Value>(&result.stdout) {
-            body["elements"] = elements;
-        }
-    }
-
-    async fn pointer_state(
-        &self,
-        id: &str,
-        target: &ScreenTarget,
-    ) -> Result<serde_json::Value, String> {
-        let result = self
-            .exec_argv(id, &pointer_state_command_on(&target.display), None, target)
-            .await?;
-        if result.code != 0 {
-            return Err(result.stderr);
-        }
-        serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
+        ObservePayload::from_json(self.control_observe_json(id, target).await?)
     }
 
     pub async fn act(&self, id: &str, request: ActionRequest) -> Result<serde_json::Value, String> {
@@ -453,7 +372,14 @@ impl DockerHost {
                 if name.is_empty() {
                     return Err("computer container has no name".into());
                 }
-                self.attach_screen_network(&name, network).await;
+                let attached = info
+                    .network_settings
+                    .as_ref()
+                    .and_then(|settings| settings.networks.as_ref())
+                    .is_some_and(|networks| networks.contains_key(network));
+                if !attached {
+                    self.attach_screen_network(&name, network).await?;
+                }
                 return Ok(name);
             }
             sleep(Duration::from_millis(100)).await;
@@ -461,7 +387,13 @@ impl DockerHost {
         Err("computer is not running".into())
     }
 
-    async fn attach_screen_network(&self, name: &str, network: &str) {
+    async fn attach_screen_network(&self, name: &str, network: &str) -> Result<(), String> {
+        // Refuse a missing network before connect: Docker can otherwise retain
+        // a broken attachment that prevents the container's next restart.
+        self.docker
+            .inspect_network::<String>(network, None)
+            .await
+            .map_err(|error| format!("screen network {network} is unavailable: {error}"))?;
         let result = self
             .docker
             .connect_network(
@@ -475,9 +407,10 @@ impl DockerHost {
         if let Err(error) = result {
             let text = error.to_string();
             if !text.to_lowercase().contains("already") {
-                tracing::warn!("attach {name} to screen network {network}: {text}");
+                return Err(format!("attach {name} to screen network {network}: {text}"));
             }
         }
+        Ok(())
     }
 
     async fn published_host_port(&self, id: &str, view_port: u16) -> Result<String, String> {
@@ -516,9 +449,11 @@ impl DockerHost {
     ) -> Result<EnsureScreenResult, String> {
         let layout = screen_layout(request.slot).map_err(|error| error.to_string())?;
         let script = format!(
-            "lazyboy-screen ensure {} {}",
+            "lazyboy-screen ensure {} {} {} {}",
             request.slot,
-            shell_single_quote(&request.profile_path)
+            shell_single_quote(&request.profile_path),
+            shell_single_quote(&request.bot_name),
+            shell_single_quote(&request.bot_color)
         );
         let result = self
             .exec_argv(

@@ -111,6 +111,71 @@ pub struct BoundScreen {
     pub gui_block: Option<String>,
 }
 
+/// Refresh presentation on an existing running screen without opening apps,
+/// changing the Cua session, or booting a stopped computer.
+pub async fn refresh_cursor_color(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+) -> Result<(), String> {
+    let Some(bot) = state
+        .db
+        .get_bot(actor, bot_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let Some(computer_id) = bot.computer_id else {
+        return Ok(());
+    };
+    let Some(computer) = state
+        .db
+        .get_computer(&computer_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    if computer.state != "running" {
+        return Ok(());
+    }
+    let Some(target) = computer_ref(&computer) else {
+        return Ok(());
+    };
+    let Some(screen) = state
+        .db
+        .get_screen(&computer_id, bot_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let result = state
+        .sandbox
+        .execute(
+            &target,
+            CommandRequest {
+                argv: vec![
+                    "/usr/local/bin/lazyboy-screen".into(),
+                    "color".into(),
+                    screen.slot.to_string(),
+                    bot.avatar_color,
+                ],
+                cwd: None,
+                timeout_ms: Some(5_000),
+                stdin: None,
+            },
+            &adapter_context_for(actor, bot_id, "cursor-color", Some(&screen), None),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if result.code != 0 {
+        return Err("cursor color refresh failed".into());
+    }
+    Ok(())
+}
+
 pub async fn ensure_bot_screen(
     state: &AppState,
     actor: &Actor,
@@ -210,10 +275,17 @@ pub async fn ensure_bot_screen(
         }
     };
     let ctx = adapter_context_for(actor, bot_id, "screen", Some(&row), run_id);
+    let bot = state
+        .db
+        .get_bot(actor, bot_id)
+        .await
+        .map_err(|error| error.to_string())?;
     let request = EnsureScreenRequest {
         slot: row.slot as u32,
         profile_path: row.profile_path.clone(),
         bot_id: bot_id.to_string(),
+        bot_name: bot.as_ref().map(|bot| bot.name.clone()).unwrap_or_default(),
+        bot_color: bot.map(|bot| bot.avatar_color).unwrap_or_default(),
     };
     let mut last_error = None;
     for attempt in 0..8 {
@@ -263,6 +335,7 @@ async fn restore_computer_screens(
             continue;
         }
         let ctx = adapter_context_for(actor, &screen.bot_id, "screen", Some(&screen), None);
+        let bot = state.db.get_bot(actor, &screen.bot_id).await.ok().flatten();
         let _ = state
             .sandbox
             .ensure_screen(
@@ -271,6 +344,8 @@ async fn restore_computer_screens(
                     slot: screen.slot as u32,
                     profile_path: screen.profile_path.clone(),
                     bot_id: screen.bot_id.clone(),
+                    bot_name: bot.as_ref().map(|bot| bot.name.clone()).unwrap_or_default(),
+                    bot_color: bot.map(|bot| bot.avatar_color).unwrap_or_default(),
                 },
                 &ctx,
             )

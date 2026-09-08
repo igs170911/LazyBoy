@@ -34,18 +34,12 @@ npm run build
 
 cd ../..
 node --test tests/frontend.test.mjs
-python3 tests/control.test.py
 python3 tests/log-rotation.test.py
-python3 tests/shell-session.test.py   # 持久終端機腳本，只需要 tmux
 
 # Cua Driver 能否控制現有 XFCE + Xvfb 桌面（會建 computer image）
 make cua-smoke
 # 結果摘要見 docs/cua-compatibility.md、docs/cua-review.md
-# 生產路徑預設仍是 legacy。要在本機明確跑 Cua：
-#   make cua-smoke
-#   docker compose -f docker-compose.yml -f docker-compose.cua.yml up -d --build
-# 或 LAZYBOY_COMPUTER_DRIVER=cua 寫進 .env 後重建 supervisor 與桌面容器。
-# Agent 工具 schema 不變。
+# 生產路徑只使用 Cua；更新後請重建 supervisor 與桌面映像。
 
 # Python 整合測試用 docker compose exec 連進 Postgres，自己建一次性資料庫後清掉
 python3 tests/retention.test.py
@@ -152,3 +146,9 @@ LazyBoy/
 - [ ] 若提供容器映像，再加入 SBOM、簽章與可重現版本發布流程。
 
 > 不建議現在顯示 CI passing、coverage、OpenSSF 或 Best Practices 徽章：目前 repository 沒有對應的公開結果，徽章會失真或直接顯示 unknown。
+
+### Cua saved-login integration
+
+`COMPUTER_IMAGE=lazyboy/computer:cua-work scripts/cua-login-test.sh` starts a disposable desktop, installs a test-only certificate utility, trusts a generated localhost certificate inside that container, and opens the HTTPS fixture through Cua. It runs the same field-filling function as `use_saved_login`, checks both exact fixture values, and verifies that the form was not submitted. No model key or real login is used; the container is removed on exit. Build the desktop image from the current tree first.
+
+Cua 0.23.2 can return `effect: refused` for an Email field despite a zero CLI exit status. The adapter treats that as a failure. A classified unsupported browser typing route can use a uniquely labelled native web field from Cua, click its freshly observed bounds, and paste through the Cua-operated clipboard editor. Other errors remain errors.

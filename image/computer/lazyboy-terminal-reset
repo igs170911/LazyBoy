@@ -1,0 +1,16 @@
+#!/bin/sh
+# Invoked visibly from the terminal through Cua. Replace this shell with a
+# clean login shell while retaining only the desktop connection environment.
+set -eu
+pkill -TERM -P "$$" 2>/dev/null || true
+cd /home/lazyboy
+exec env -i \
+  HOME=/home/lazyboy USER=lazyboy LOGNAME=lazyboy SHELL=/bin/zsh \
+  PATH=/home/lazyboy/.local/bin:/usr/local/bin:/usr/bin:/bin \
+  TERM=xterm-256color COLORTERM=truecolor \
+  LANG="${LANG:-zh_TW.UTF-8}" LC_ALL="${LC_ALL:-zh_TW.UTF-8}" \
+  DISPLAY="${DISPLAY:-:1}" \
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}" \
+  XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/home/lazyboy/.config}" \
+  XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+  /bin/zsh -l

@@ -1,5 +1,7 @@
 mod browser;
 mod client;
+mod clipboard;
+mod launch;
 mod native;
 mod record;
 mod translate;
@@ -20,9 +22,8 @@ use tokio::time::{Duration, sleep};
 use crate::controller::{
     ComputerController, ComputerDriver, ControlContext, ControlError, ControllerHealth,
 };
-use crate::process::spawn_detached;
 use crate::{
-    ActionRequest, ActionResult, BrowserRequest, CdpPage, RecordingRequest, RecordingResult,
+    ActionRequest, ActionResult, BrowserPage, BrowserRequest, RecordingRequest, RecordingResult,
     RecordingSession, action_pause_ms, image_dimensions, normalize_display, observation_from_png,
     observation_with_elements, teach_trajectory_dir,
 };
@@ -112,10 +113,8 @@ impl ComputerController for CuaController {
 
     async fn observe(&self, ctx: &ControlContext) -> Result<ComputerObservation, ControlError> {
         let _screen = self.lock_screen(&ctx.display).await;
-        self.browser
-            .lock()
-            .await
-            .remove(normalize_display(&ctx.display));
+        // A desktop screenshot does not change the browser binding. The next
+        // browser snapshot refreshes page refs; keep the session attachment warm.
         self.observe_display(&ctx.display).await
     }
 
@@ -125,6 +124,14 @@ impl ComputerController for CuaController {
         ctx: &ControlContext,
     ) -> Result<ActionResult, ControlError> {
         let _screen = self.lock_screen(&ctx.display).await;
+        if matches!(request.actions.as_slice(), [ComputerAction::CopySelection]) {
+            let text = clipboard::copy(&self.client, &ctx.display).await?;
+            return Ok(ActionResult {
+                completed: 1,
+                clipboard_text: Some(text),
+                observation: None,
+            });
+        }
         let display = ctx.display.as_str();
         let profile = ctx.profile_path.as_deref();
         let key = normalize_display(display).to_string();
@@ -144,6 +151,7 @@ impl ComputerController for CuaController {
                     None
                 };
                 Ok(ActionResult {
+                    clipboard_text: None,
                     completed,
                     observation,
                 })
@@ -159,7 +167,7 @@ impl ComputerController for CuaController {
         &self,
         request: &BrowserRequest,
         ctx: &ControlContext,
-    ) -> Result<CdpPage, ControlError> {
+    ) -> Result<BrowserPage, ControlError> {
         let _screen = self.lock_screen(&ctx.display).await;
         if !matches!(
             request.action.as_str(),
@@ -188,10 +196,10 @@ impl ComputerController for CuaController {
             .await
             {
                 Err(ControlError::BrowserUnavailable) if !had_bind => {
-                    return Ok(CdpPage {
+                    return Ok(BrowserPage {
                         ok: false,
-                        error: Some("cdp unavailable".into()),
-                        ..CdpPage::default()
+                        error: Some("Cua browser unavailable".into()),
+                        ..BrowserPage::default()
                     });
                 }
                 Err(error)
@@ -236,27 +244,14 @@ impl ComputerController for CuaController {
             .client
             .call(&ctx.display, "stop_recording", &json!({}), &[])
             .await;
-        if let Err(error) = self
-            .client
+        self.client
             .call(
                 &ctx.display,
                 "start_recording",
                 &json!({ "output_dir": output_dir, "record_video": false }),
                 &[],
             )
-            .await
-        {
-            tracing::warn!(error = %error, "cua start_recording failed");
-        }
-        if let Err(error) = crate::legacy::start_cdp_recorder(
-            &ctx.display,
-            ctx.profile_path.as_deref(),
-            &request.skill_id,
-        )
-        .await
-        {
-            tracing::warn!(error = %error, "cdp recorder start failed");
-        }
+            .await?;
         Ok(RecordingSession {
             skill_id: request.skill_id.clone(),
             output_dir,
@@ -265,14 +260,13 @@ impl ComputerController for CuaController {
 
     async fn stop_recording(
         &self,
-        request: &RecordingRequest,
+        _request: &RecordingRequest,
         ctx: &ControlContext,
     ) -> Result<(), ControlError> {
-        let _ = self
-            .client
+        self.client
             .call(&ctx.display, "stop_recording", &json!({}), &[])
-            .await;
-        crate::legacy::stop_cdp_recorder(&request.skill_id).await
+            .await?;
+        Ok(())
     }
 
     async fn collect_recording(
@@ -280,9 +274,8 @@ impl ComputerController for CuaController {
         request: &RecordingRequest,
         _ctx: &ControlContext,
     ) -> Result<RecordingResult, ControlError> {
-        let mut events = crate::legacy::collect_cdp_events(&request.skill_id).await;
         let dir = teach_trajectory_dir(&request.skill_id);
-        events.extend(record::events_from_dir(std::path::Path::new(&dir)));
+        let mut events = record::events_from_dir(std::path::Path::new(&dir));
         events.sort_by_key(|event| event.get("at").and_then(Value::as_i64).unwrap_or(0));
         let _ = tokio::fs::remove_dir_all(&dir).await;
         Ok(RecordingResult { events })
@@ -292,7 +285,7 @@ impl ComputerController for CuaController {
 fn update_browser_page(
     bind: &mut browser::BrowserBind,
     action: &str,
-    result: &Result<CdpPage, ControlError>,
+    result: &Result<BrowserPage, ControlError>,
 ) {
     // These checks neither observe nor mutate the page. Keep the refs returned
     // by the previous snapshot usable for the next click/type.
@@ -417,7 +410,7 @@ impl CuaController {
                 .enumerate()
                 .map(|(index, window)| UiElement {
                     id: (index + 1) as u32,
-                    title: window.title.chars().take(80).collect(),
+                    title: window.title.chars().take(256).collect(),
                     x: window.x.max(0) as u32,
                     y: window.y.max(0) as u32,
                     w: window.w,
@@ -509,11 +502,16 @@ impl CuaController {
                 sleep(Duration::from_millis(ms)).await;
                 Ok(())
             }
-            TranslatedAction::LegacyArgv { argv } => {
-                spawn_detached(&argv).await.map_err(ControlError::internal)
-            }
+            TranslatedAction::Launch { argv } => launch::run(&self.client, display, &argv).await,
             TranslatedAction::FocusTitle { title } => self.focus_title(display, &title).await,
             TranslatedAction::Cua { tool, mut payload } => {
+                if tool == "type_text"
+                    && let Some(text) = payload.get("text").and_then(Value::as_str)
+                    && (!text.is_ascii() || text.contains(['\n', '\r']))
+                {
+                    return clipboard::paste(&self.client, display, text).await;
+                }
+
                 if tool == "scroll" && payload.get("x").is_none() {
                     let (x, y) = self.scroll_point(display).await;
                     payload["x"] = json!(x);
@@ -608,12 +606,14 @@ pub(crate) struct ListedWindow {
     pub(crate) z: i64,
 }
 
-fn map_browser_unavailable(result: Result<CdpPage, ControlError>) -> Result<CdpPage, ControlError> {
+fn map_browser_unavailable(
+    result: Result<BrowserPage, ControlError>,
+) -> Result<BrowserPage, ControlError> {
     match result {
-        Err(ControlError::BrowserUnavailable) => Ok(CdpPage {
+        Err(ControlError::BrowserUnavailable) => Ok(BrowserPage {
             ok: false,
-            error: Some("cdp unavailable".into()),
-            ..CdpPage::default()
+            error: Some("Cua browser unavailable".into()),
+            ..BrowserPage::default()
         }),
         other => other,
     }
@@ -754,19 +754,19 @@ mod tests {
             window_id: 2,
             target_id: "target".into(),
             tab_id: "tab".into(),
-            page: Some(CdpPage {
+            page: Some(BrowserPage {
                 ok: true,
                 title: "original snapshot".into(),
-                ..CdpPage::default()
+                ..BrowserPage::default()
             }),
         };
         for action in ["probe", "ensure"] {
             update_browser_page(
                 &mut bind,
                 action,
-                &Ok(CdpPage {
+                &Ok(BrowserPage {
                     ok: true,
-                    ..CdpPage::default()
+                    ..BrowserPage::default()
                 }),
             );
             assert_eq!(bind.page.as_ref().unwrap().title, "original snapshot");
@@ -776,10 +776,10 @@ mod tests {
         update_browser_page(
             &mut bind,
             "snapshot",
-            &Ok(CdpPage {
+            &Ok(BrowserPage {
                 ok: true,
                 title: "fresh".into(),
-                ..CdpPage::default()
+                ..BrowserPage::default()
             }),
         );
         assert_eq!(bind.page.as_ref().unwrap().title, "fresh");

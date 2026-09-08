@@ -1,4 +1,3 @@
-use crate::is_browser_title;
 use lazyboy_contracts::{
     ComputerAction, PointerButton, PointerType, RefVerb, ScrollDirection, UiElement,
 };
@@ -123,62 +122,6 @@ pub fn click_fingerprint(actions: &Value) -> Option<String> {
 
 pub fn should_block_stale_click(miss_streak: u32, last: Option<&str>, next: Option<&str>) -> bool {
     miss_streak >= 2 && next.is_some() && next == last
-}
-
-/// When a CDP page snapshot is live, refuse pixel-clicking the Chromium window.
-pub fn browser_gui_block(actions: &Value, elements: &[UiElement]) -> Option<String> {
-    if !elements
-        .iter()
-        .any(|element| element.kind.as_deref() == Some("dom"))
-    {
-        return None;
-    }
-    let items = actions.as_array()?;
-    for raw in items {
-        let Some(action) = raw.as_object() else {
-            continue;
-        };
-        let kind = action
-            .get("kind")
-            .and_then(Value::as_str)
-            .or_else(|| action.get("type").and_then(Value::as_str))
-            .unwrap_or("");
-        if !matches!(kind, "click" | "move" | "down" | "up" | "hover" | "drag") {
-            continue;
-        }
-        if let Some(id) = element_id(action.get("element")) {
-            match elements.iter().find(|element| u64::from(element.id) == id) {
-                Some(element) if element.has_ref() => continue,
-                Some(element)
-                    if element.kind.as_deref() == Some("window")
-                        && is_browser_title(&element.title) =>
-                {
-                    return Some(browser_block_message(elements));
-                }
-                _ => continue,
-            }
-        } else {
-            return Some(browser_block_message(elements));
-        }
-    }
-    None
-}
-
-fn browser_block_message(elements: &[UiElement]) -> String {
-    let known: Vec<String> = elements
-        .iter()
-        .filter(|element| element.kind.as_deref() == Some("dom"))
-        .take(12)
-        .map(|element| format!("[{}] {}", element.id, element.title))
-        .collect();
-    format!(
-        "Chromium is in front: use the browser tool (snapshot / click element N) instead of computer_act pixel clicks. Known page elements: {}",
-        if known.is_empty() {
-            "call browser snapshot first".to_string()
-        } else {
-            known.join(", ")
-        }
-    )
 }
 
 pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, ActionError> {
@@ -620,49 +563,6 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-    }
-
-    #[test]
-    fn pixel_clicks_are_blocked_when_dom_is_live() {
-        let elements = vec![UiElement {
-            id: 1,
-            title: "Submit".into(),
-            selector: Some("[data-lazyboy=\"1\"]".into()),
-            kind: Some("dom".into()),
-            x: 10,
-            y: 20,
-            w: 80,
-            h: 24,
-            ..UiElement::default()
-        }];
-        let blocked = browser_gui_block(&json!([{"kind":"click","x":40,"y":80}]), &elements);
-        assert!(blocked.unwrap().contains("browser"));
-        assert!(browser_gui_block(&json!([{"kind":"click","element":1}]), &elements).is_none());
-    }
-
-    #[test]
-    fn chromium_window_clicks_are_blocked_when_dom_is_live() {
-        let elements = vec![
-            UiElement {
-                id: 1,
-                title: "Submit".into(),
-                selector: Some("[data-lazyboy=\"1\"]".into()),
-                kind: Some("dom".into()),
-                ..UiElement::default()
-            },
-            UiElement {
-                id: 2,
-                title: "Chromium".into(),
-                kind: Some("window".into()),
-                x: 0,
-                y: 0,
-                w: 1280,
-                h: 800,
-                ..UiElement::default()
-            },
-        ];
-        let blocked = browser_gui_block(&json!([{"kind":"click","element":2}]), &elements);
-        assert!(blocked.unwrap().contains("browser"));
     }
 
     #[test]

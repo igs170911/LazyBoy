@@ -6,7 +6,7 @@ use lazyboy_contracts::{
     SandboxKind,
 };
 use lazyboy_control::{
-    ActionRequest, ActionResult, AdapterContext, BrowserRequest, CdpPage, CommandRequest,
+    ActionRequest, ActionResult, AdapterContext, BrowserPage, BrowserRequest, CommandRequest,
     CommandResult, ComputerRef, EnsureScreenRequest, EnsureScreenResult, FileEntry,
     ProvisionRequest, RecordingRequest, RecordingResult, RecordingSession, SandboxError,
     SandboxProvider, ScreenSession, image_dimensions, observation_from_png,
@@ -241,11 +241,18 @@ impl SandboxProvider for DockerSandbox {
             .send()
             .await
             .map_err(|error| SandboxError::message(error.to_string()))?;
+        let response = response
+            .error_for_status()
+            .map_err(|error| SandboxError::message(error.to_string()))?;
         let body: Value = response
             .json()
             .await
             .map_err(|error| SandboxError::message(error.to_string()))?;
         Ok(ActionResult {
+            clipboard_text: body
+                .get("clipboardText")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             completed: body.get("completed").and_then(Value::as_u64).unwrap_or(0) as usize,
             observation: if body.get("png_base64").is_some() {
                 Some(decode_observation(&body)?)
@@ -260,7 +267,7 @@ impl SandboxProvider for DockerSandbox {
         computer: &ComputerRef,
         request: BrowserRequest,
         context: &AdapterContext,
-    ) -> Result<CdpPage, SandboxError> {
+    ) -> Result<BrowserPage, SandboxError> {
         let response = self
             .client
             .post(self.url(&format!("/computers/{}/browser", computer.id)))

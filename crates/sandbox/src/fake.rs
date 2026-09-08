@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use lazyboy_contracts::{ComputerObservation, SandboxKind};
 use lazyboy_control::{
-    ActionRequest, ActionResult, AdapterContext, BrowserRequest, CdpPage, CommandRequest,
+    ActionRequest, ActionResult, AdapterContext, BrowserPage, BrowserRequest, CommandRequest,
     CommandResult, ComputerRef, FileEntry, ProvisionRequest, RecordingRequest, RecordingResult,
     RecordingSession, SandboxError, SandboxProvider, ScreenSession, observation_from_png,
 };
@@ -94,6 +94,7 @@ impl SandboxProvider for FakeSandbox {
         context: &AdapterContext,
     ) -> Result<ActionResult, SandboxError> {
         Ok(ActionResult {
+            clipboard_text: None,
             completed: request.actions.len(),
             observation: if request.observe {
                 Some(self.observe(computer, context).await?)
@@ -108,12 +109,12 @@ impl SandboxProvider for FakeSandbox {
         _computer: &ComputerRef,
         _request: BrowserRequest,
         _context: &AdapterContext,
-    ) -> Result<CdpPage, SandboxError> {
-        Ok(CdpPage {
+    ) -> Result<BrowserPage, SandboxError> {
+        Ok(BrowserPage {
             ok: true,
             url: "about:blank".into(),
             title: "fake".into(),
-            ..CdpPage::default()
+            ..BrowserPage::default()
         })
     }
 

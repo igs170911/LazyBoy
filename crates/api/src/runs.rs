@@ -39,13 +39,13 @@ const SYSTEM: &str = "You are this bot's assistant. You have a Linux desktop you
 Reply in text — no tools — for greetings, small talk, questions you can answer from knowledge, planning, or explaining. Do not call computer_observe, computer_act, browser, launch_app, open_path, wait, list_files, or shell just to check the screen or because a desktop exists. A hello does not need a screenshot or a file listing.
 
 Use tools only when the user wants something done on the computer: open a site, click through a UI, run a command, read/write workspace files, or follow a taught skill. Route directly by task:
-1) Website, video, search, email, or anything in Chromium: use browser first. Navigate directly, then snapshot/click/type/press by element id. Do not use shell/curl or pixel clicks to inspect a web page.
+1) Website, video, search, email, or anything in Chromium: use browser first. Navigate directly, then snapshot/click/type/press by element id. Do not use shell/curl to inspect a web page. For canvas or controls the browser tool cannot operate, call computer_observe and use Cua computer_act coordinates from that fresh screenshot.
 2) Workspace files or commands: use list_files, read_file, write_file, or shell.
 3) Connected services: use an MCP tool when it directly matches the task.
 4) Opening a local file or non-browser app: use open_path or launch_app.
 5) Native GUI with no DOM (dialogs, file manager, XFCE): use computer_act by element id. Those ids are AT-SPI controls, not window boxes.
 
-The shell is one real terminal that stays open between calls: same directory, same exports, same background jobs. cd where the work is and stay there. A long-running job (server, build, download) comes back as status=running and keeps going — read it with log_lines, stop it with keys \"C-c\", and never type a second command into a terminal that is still busy.
+The shell is a visible Cua-controlled terminal on the shared VNC screen. The same session keeps its directory, exports and background jobs. Results are screenshots, not hidden stdout: inspect the prompt to decide whether a command finished. A timeout does not stop the job. Omit command to inspect it again, use keys \"C-c\" to interrupt, and never type a second command while busy. File tools also work through this visible terminal; read_file supports start_line and lines, and you can scroll to inspect longer output. These computer tools require a vision model.
 
 When you ARE using the desktop: the human can interact with the same live screen while you work; this does not pause your task. Prefer browser/native element actions over moving the shared pointer. If the screen changes unexpectedly, observe again and continue from the current state; do not undo human changes or replay an uncertain click. Request human assistance only when the task needs it. Only the latest screenshot you received is current; they may have interacted since. Call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
 
@@ -2837,7 +2837,11 @@ fn tool_needs_sandbox(name: &str) -> bool {
 fn tool_needs_gui(name: &str) -> bool {
     matches!(
         name,
-        "computer_observe"
+        "shell"
+            | "list_files"
+            | "read_file"
+            | "write_file"
+            | "computer_observe"
             | "computer_act"
             | "browser"
             | "connection_check"
@@ -3260,8 +3264,8 @@ mod tests {
         assert!(tool_needs_sandbox("shell"));
         assert!(tool_needs_gui("computer_observe"));
         assert!(tool_needs_gui("browser"));
-        assert!(!tool_needs_gui("shell"));
-        assert!(!tool_needs_gui("list_files"));
+        assert!(tool_needs_gui("shell"));
+        assert!(tool_needs_gui("list_files"));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 # Cua 遷移檢查（2026-09-07）
 
+> 歷史紀錄：本文描述 2026-09-07 的雙後端驗證，已非現況。目前只保留 Cua；操作方式見 [operations.md](operations.md)，最新驗證狀態見 [cua-migration-progress.md](cua-migration-progress.md)。
+
 結論：`a.md` Phase 1 規格尚未全部勾完，但 **opt-in Cua 已可在現有 XFCE + Xvfb 桌面容器使用**。生產預設仍是 `legacy`。
 
 本次在 Apple Silicon（linux/arm64）上以 `lazyboy/computer:local` + Cua Driver **0.23.2** 重跑隔離桌面驗收。

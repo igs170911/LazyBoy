@@ -129,6 +129,10 @@ pub struct EnsureScreenRequest {
     pub slot: u32,
     pub profile_path: String,
     pub bot_id: String,
+    #[serde(default)]
+    pub bot_name: String,
+    #[serde(default)]
+    pub bot_color: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +144,8 @@ pub struct EnsureScreenResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard_text: Option<String>,
     pub completed: usize,
     pub observation: Option<ComputerObservation>,
 }
@@ -260,7 +266,7 @@ pub trait SandboxProvider: Send + Sync {
         computer: &ComputerRef,
         request: BrowserRequest,
         context: &AdapterContext,
-    ) -> Result<crate::CdpPage, SandboxError> {
+    ) -> Result<crate::BrowserPage, SandboxError> {
         let _ = (computer, request, context);
         Err(SandboxError::message("browser is unavailable"))
     }

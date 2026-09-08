@@ -13,6 +13,7 @@ if command -v xfce4-terminal >/dev/null 2>&1; then
   exec xfce4-terminal \
     --disable-server \
     --geometry=92x28+48+48 \
+    --dynamic-title-mode=none \
     --title=終端機 \
     --command="/bin/zsh -l" \
     "$@"

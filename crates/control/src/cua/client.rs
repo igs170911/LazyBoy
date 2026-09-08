@@ -40,6 +40,17 @@ impl CuaClient {
     /// give each one an implicit session that dies with the process. Trajectory
     /// recording, snapshots, and browser binds only line up under one label.
     pub fn session_for_display(display: &str) -> String {
+        let number = normalize_display(display)
+            .trim_start_matches(':')
+            .to_string();
+        if let Ok(name) =
+            std::fs::read_to_string(format!("/tmp/lazyboy/screen-{number}.agent-name"))
+        {
+            let name = public_agent_name(&name);
+            if !name.is_empty() {
+                return name;
+            }
+        }
         format!(
             "lazyboy-{}",
             normalize_display(display).trim_start_matches(':')
@@ -91,8 +102,21 @@ impl CuaClient {
     ) -> Result<Value, ControlError> {
         let mut body = with_session_label(screen, payload);
         let mut escalated = false;
+        let mut revived = false;
         loop {
             let outcome = self.attempt(screen, tool, &body, extra).await?;
+            if outcome.session_ended && !revived && tool != "start_session" {
+                let session = with_session_label(screen, &json!({}));
+                let started = self.attempt(screen, "start_session", &session, &[]).await?;
+                if let Some(error) = started.error {
+                    return Err(error);
+                }
+                revived = true;
+                if !read_after_session_restart(tool) {
+                    return Err(ControlError::StaleReference);
+                }
+                continue;
+            }
             if !escalated
                 && outcome.error.is_some()
                 && let Some(mode) = recommended_delivery(&outcome.value)
@@ -152,11 +176,43 @@ impl CuaClient {
             duration_ms = started.elapsed().as_millis() as u64,
             success = error.is_none()
         );
-        Ok(Outcome { value, error })
+        let session_ended = !output.status.success()
+            && [&*stdout, &*stderr].iter().any(|text| {
+                text.trim_start().starts_with("session '") && text.contains("has ended; tool call")
+            });
+        Ok(Outcome {
+            value,
+            error,
+            session_ended,
+        })
     }
 }
 
+fn public_agent_name(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(80)
+        .collect()
+}
+
+fn read_after_session_restart(tool: &str) -> bool {
+    matches!(
+        tool,
+        "get_desktop_state"
+            | "list_windows"
+            | "get_window_state"
+            | "get_accessibility_tree"
+            | "get_browser_state"
+            | "health_report"
+            | "get_cursor_position"
+    )
+}
+
 struct Outcome {
+    session_ended: bool,
     value: Value,
     error: Option<ControlError>,
 }
@@ -210,10 +266,12 @@ fn response_error(value: &Value) -> Option<ControlError> {
         .is_some_and(|code| code != "ok")
         || value.get("ok").and_then(Value::as_bool) == Some(false)
         || value.get("isError").and_then(Value::as_bool) == Some(true)
-        || matches!(
-            value.get("status").and_then(Value::as_str),
-            Some("refused" | "error")
-        )
+        || ["status", "effect"].iter().any(|key| {
+            matches!(
+                value.get(*key).and_then(Value::as_str),
+                Some("refused" | "error")
+            )
+        })
     {
         Some(classify_cua_failure(&value.to_string()))
     } else {
@@ -348,7 +406,10 @@ pub fn first_array_of_objects<'a>(value: &'a Value, required: &str) -> Vec<&'a V
 
 fn classify_cua_failure(text: &str) -> ControlError {
     let lower = text.to_ascii_lowercase();
-    if lower.contains("stale") || (lower.contains("session") && lower.contains("ended")) {
+    if lower.contains("stale")
+        || lower.contains("not a live binding in this session")
+        || (lower.contains("session") && lower.contains("ended"))
+    {
         ControlError::StaleReference
     } else if lower.contains("not_found") || lower.contains("not found") {
         ControlError::TargetNotFound
@@ -358,7 +419,7 @@ fn classify_cua_failure(text: &str) -> ControlError {
         ControlError::PermissionDenied
     } else if lower.contains("invalid_action_target") {
         ControlError::InvalidAction("Cua rejected the action target".into())
-    } else if lower.contains("unsupported") {
+    } else if lower.contains("unsupported") || lower.contains("route_unavailable") {
         ControlError::Unsupported
     } else {
         // Driver diagnostics can echo typed text or credentials. Keep raw
@@ -369,11 +430,44 @@ fn classify_cua_failure(text: &str) -> ControlError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_name_preserves_unicode_without_control_characters() {
+        assert_eq!(
+            super::public_agent_name("  小幫手\n Alice\u{0007}  "),
+            "小幫手 Alice"
+        );
+        assert_eq!(
+            super::public_agent_name(&"小".repeat(100)).chars().count(),
+            80
+        );
+    }
+
     use super::*;
+
+    #[test]
+    fn expired_sessions_only_retry_observations() {
+        assert_eq!(
+            classify_cua_failure(
+                "confirmation provider failed: target bt-old is not a live binding in this session — re-run get_browser_state with pid + window_id"
+            ),
+            ControlError::StaleReference
+        );
+        assert!(read_after_session_restart("get_desktop_state"));
+        assert!(read_after_session_restart("get_browser_state"));
+        for tool in ["click", "type_text", "browser_type", "hotkey", "launch_app"] {
+            assert!(!read_after_session_restart(tool));
+        }
+    }
 
     #[test]
     fn structured_refusals_are_errors_but_page_text_is_not() {
         assert!(response_error(&serde_json::json!({"code": "invalid_action_target"})).is_some());
+        assert!(matches!(
+            response_error(
+                &json!({"effect":"refused","escalation":{"reason":"route_unavailable"}})
+            ),
+            Some(ControlError::Unsupported)
+        ));
         assert!(response_error(&serde_json::json!({"outline": "❌ payment declined"})).is_none());
     }
 

@@ -158,7 +158,7 @@ async fn act(
     );
     match app.controller.act(&request, &ctx).await {
         Ok(result) => {
-            let mut body = serde_json::json!({ "completed": result.completed });
+            let mut body = serde_json::json!({ "completed": result.completed, "clipboardText": result.clipboard_text });
             if let Some(observation) = result.observation
                 && let serde_json::Value::Object(map) = observation_to_control_json(&observation)
             {

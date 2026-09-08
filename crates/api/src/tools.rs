@@ -4,10 +4,9 @@ use lazyboy_contracts::{
     ComputerAction, ComputerMode, ComputerObservation, PointerType, UiElement,
 };
 use lazyboy_control::{
-    ActionError, ActionRequest, AdapterContext, BrowserRequest, CdpPage, CommandRequest,
-    ComputerRef, SandboxProvider, a11y_command_on, apply_element_targets, browser_gui_block,
-    cdp_stdin_command_on, click_fingerprint, element_id, format_ui_elements, frames_match,
-    merge_ui_elements, overlay_elements, parse_a11y_page, parse_cdp_page, parse_computer_actions,
+    ActionError, ActionRequest, AdapterContext, BrowserPage, BrowserRequest, ComputerRef,
+    SandboxProvider, apply_element_targets, click_fingerprint, element_id, format_ui_elements,
+    frames_match, merge_ui_elements, overlay_elements, parse_computer_actions,
     resolve_bot_workspace_cwd, resolve_bot_workspace_path, should_block_stale_click,
 };
 use rig_core::completion::ToolDefinition;
@@ -61,12 +60,12 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
     let mut definitions = vec![
         ToolDefinition {
             name: "computer_observe".into(),
-            description: "Capture a fresh desktop screenshot plus numbered targets (page DOM when Chromium is open, otherwise AT-SPI buttons/fields, otherwise windows). Only when the user asked you to do something on the computer. Not for greetings, chat, or listing files — those need no screenshot. The image attaches only if the screen changed.".into(),
+            description: "Capture a fresh desktop screenshot plus numbered targets (page DOM when Chromium is open, otherwise AT-SPI buttons/fields, otherwise windows). Only when the user asked you to do something on the computer. Not for greetings or chat. File tools already return their visible terminal screenshot. The image attaches only if the screen changed.".into(),
             parameters: json!({"type":"object","properties":{}}),
         },
         ToolDefinition {
             name: "computer_act".into(),
-            description: "Drive native desktop GUI (dialogs, file manager, XFCE) when the user asked you to operate the computer. Prefer element id from the latest observation (AT-SPI, not pixels). For Chromium pages use the browser tool — computer_act clicks on the browser window are rejected. x,y are 1280x800 fallback for canvas / no-tree widgets.".into(),
+            description: "Drive native desktop GUI (dialogs, file manager, XFCE) when the user asked you to operate the computer. Prefer element id from the latest observation (AT-SPI, not pixels). Prefer the browser tool for web page elements. For canvas or unsupported browser controls, observe the current screenshot first and use Cua coordinate actions. x,y use the screenshot pixel dimensions.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -102,14 +101,13 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "shell".into(),
-            description: "Type a command into a terminal on this bot's computer when the user asked you to do work there. The terminal is a real, persistent one: it keeps its working directory, exported variables, and background jobs between calls, so `cd` once and later calls run there. Use a session name per piece of work (default \"main\"). A command that has not finished after wait_ms comes back as status=running with the output so far and keeps running in the terminal: poll it with log_lines, or stop it with keys \"C-c\". Never type a second command into a terminal that is still busy. Not for greetings, small talk, or questions you can answer in text.".into(),
+            description: "Use Cua to type in a visible persistent terminal on the shared VNC desktop. The same session keeps directory, environment and background jobs. Results are screenshots: inspect the prompt before sending another command; do not type while a command is busy. Omit command to inspect the terminal, or send keys C-c to interrupt. Use computer_act to scroll through output. Not for greetings or questions that need no computer.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{
                     "command":{"type":"string","description":"Command to type. Omit it to just read the terminal."},
                     "session":{"type":"string","description":"Terminal name: the same name is the same terminal. Default main."},
-                    "wait_ms":{"type":"number","description":"How long to wait for the command, default 20000, max 110000. Longer jobs return status=running and keep going."},
-                    "log_lines":{"type":"number","description":"Read the last N lines of the terminal instead of typing anything."},
+                    "wait_ms":{"type":"number","description":"Wait before capturing the terminal, default 1000 ms, max 10000. Longer jobs keep running; poll by omitting command."},
                     "keys":{"type":"string","description":"Keys instead of a command, space separated: \"C-c\", \"q\", \"Escape Enter\"."},
                     "reset":{"type":"boolean","description":"Start this terminal over: drops directory, exports, and jobs."},
                     "cwd":{"type":"string","description":"Directory for this command; the terminal stays there."}
@@ -123,12 +121,12 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read a UTF-8 text file from this bot's home when the user asked about that file. Not for greetings or chat.".into(),
-            parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
+            description: "Read a page of a UTF-8 file through Cua in the visible terminal. Output is a screenshot; use start_line and lines for further pages or scroll the terminal.".into(),
+            parameters: json!({"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer"},"lines":{"type":"integer"}},"required":["path"]}),
         },
         ToolDefinition {
             name: "write_file".into(),
-            description: "Write a UTF-8 file into this bot's home when the user asked you to save something there. Not for greetings or chat.".into(),
+            description: "Write a UTF-8 file by typing a quoted command through Cua in the visible terminal. Inspect the returned screenshot for errors and the written byte count.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{"path":{"type":"string"},"content":{"type":"string"}},
@@ -445,7 +443,7 @@ fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
         None
     } else {
         Some(ToolOutcome {
-            text: "This model cannot see the screen. Use shell and file tools, or pick a vision model.".into(),
+            text: "This model cannot see the shared desktop. Pick a vision model for Cua computer tools.".into(),
             image: None,
             pause: false,
             blocks: Vec::new(),
@@ -534,40 +532,21 @@ async fn attach_ui_elements(
     mut observation: ComputerObservation,
     note: &str,
 ) -> (ComputerObservation, String) {
-    let page = cdp_snapshot(ctx, false).await;
-    let include_browser = page
-        .as_ref()
-        .map(|page| !page.ok || page.elements.is_empty())
-        .unwrap_or(true);
-    let a11y = if observation.native_observation_complete {
-        None
-    } else {
-        a11y_snapshot(ctx, include_browser).await
-    };
+    let page = browser_snapshot(ctx, false).await;
     let page_elements = page
         .as_ref()
         .map(|page| page.elements.as_slice())
         .unwrap_or(&[]);
-    let a11y_elements = a11y
-        .as_ref()
-        .filter(|page| page.ok)
-        .map(|page| page.elements.as_slice())
-        .unwrap_or(&[]);
-    if observation.native_observation_complete {
-        let native: Vec<_> = observation
-            .elements
-            .iter()
-            .filter(|element| element.kind.as_deref() == Some("a11y"))
-            .cloned()
-            .collect();
-        observation
-            .elements
-            .retain(|element| element.kind.as_deref() != Some("a11y"));
-        observation.elements = merge_ui_elements(observation.elements, page_elements, &native);
-    } else {
-        observation.elements =
-            merge_ui_elements(observation.elements, page_elements, a11y_elements);
-    }
+    let native: Vec<_> = observation
+        .elements
+        .iter()
+        .filter(|element| element.kind.as_deref() == Some("a11y"))
+        .cloned()
+        .collect();
+    observation
+        .elements
+        .retain(|element| element.kind.as_deref() != Some("a11y"));
+    observation.elements = merge_ui_elements(observation.elements, page_elements, &native);
     let mut note = note.to_string();
     if let Some(page) = page.as_ref().filter(|page| page.ok) {
         if !page.url.is_empty() || !page.title.is_empty() {
@@ -581,55 +560,12 @@ async fn attach_ui_elements(
     (observation, note)
 }
 
-async fn a11y_snapshot(ctx: &ToolCtx, include_browser: bool) -> Option<lazyboy_control::A11yPage> {
-    let page = a11y_call(
-        ctx,
-        json!({"action": "snapshot", "includeBrowser": include_browser}),
-    )
-    .await;
+async fn browser_snapshot(ctx: &ToolCtx, ensure: bool) -> Option<BrowserPage> {
+    let page = browser_call(ctx, json!({"action": "snapshot", "ensure": ensure})).await;
     if page.ok { Some(page) } else { None }
 }
 
-async fn a11y_call(ctx: &ToolCtx, request: serde_json::Value) -> lazyboy_control::A11yPage {
-    let adapter = ctx.adapter();
-    let display = adapter.display.as_deref().unwrap_or(":1");
-    let argv = a11y_command_on(display, &request);
-    match ctx
-        .sandbox
-        .execute(
-            &ctx.computer_ref(),
-            CommandRequest {
-                argv,
-                cwd: None,
-                timeout_ms: Some(8_000),
-                stdin: None,
-            },
-            &ctx.adapter(),
-        )
-        .await
-    {
-        Ok(result) => {
-            let raw = if result.stdout.trim().is_empty() {
-                result.stderr
-            } else {
-                result.stdout
-            };
-            parse_a11y_page(&raw)
-        }
-        Err(error) => lazyboy_control::A11yPage {
-            ok: false,
-            error: Some(error.to_string()),
-            ..lazyboy_control::A11yPage::default()
-        },
-    }
-}
-
-async fn cdp_snapshot(ctx: &ToolCtx, ensure: bool) -> Option<CdpPage> {
-    let page = cdp_call(ctx, json!({"action": "snapshot", "ensure": ensure})).await;
-    if page.ok { Some(page) } else { None }
-}
-
-async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
+async fn browser_call(ctx: &ToolCtx, request: Value) -> BrowserPage {
     let adapter = ctx.adapter();
     let mut browser_request: BrowserRequest =
         serde_json::from_value(request.clone()).unwrap_or_default();
@@ -651,15 +587,15 @@ async fn cdp_call(ctx: &ToolCtx, request: Value) -> CdpPage {
         .await
     {
         Ok(page) => page,
-        Err(error) => CdpPage {
+        Err(error) => BrowserPage {
             ok: false,
             error: Some(error.to_string()),
-            ..CdpPage::default()
+            ..BrowserPage::default()
         },
     }
 }
 
-fn is_connection_check(page: &CdpPage) -> bool {
+fn is_connection_check(page: &BrowserPage) -> bool {
     let text = format!("{} {}", page.title, page.text).to_lowercase();
     page.ok
         && (text.contains("需要確認您的連線是安全")
@@ -705,7 +641,7 @@ async fn connection_check(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     if x > i32::MAX as u64 || y > i32::MAX as u64 {
         return text_outcome("Checkbox coordinates are out of range.");
     }
-    let page = cdp_call(ctx, json!({"action":"snapshot","ensure":false})).await;
+    let page = browser_call(ctx, json!({"action":"snapshot","ensure":false})).await;
     if !is_connection_check(&page) {
         return text_outcome(
             "No supported Cloudflare connection-check page was confirmed. Re-observe; use request_takeover for other CAPTCHA, login or 2FA. No click was sent.",
@@ -744,7 +680,7 @@ async fn connection_check(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     }
     for _ in 0..3 {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        let after = cdp_call(ctx, json!({"action":"snapshot","ensure":false})).await;
+        let after = browser_call(ctx, json!({"action":"snapshot","ensure":false})).await;
         // Disappearance alone is not proof of success: loading/error pages
         // can also remove the checkbox. Return evidence for the task check.
         if after.ok && !is_connection_check(&after) && !after.text.trim().is_empty() {
@@ -816,7 +752,7 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             }
         ));
     }
-    let page = cdp_call(ctx, request).await;
+    let page = browser_call(ctx, request).await;
     if page.ok || !page.elements.is_empty() {
         *ctx.elements.lock().unwrap() = page.elements.clone();
     }
@@ -867,7 +803,7 @@ async fn browser(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     }
 }
 
-fn browser_result_text(action: &str, page: &CdpPage) -> String {
+fn browser_result_text(action: &str, page: &BrowserPage) -> String {
     format!(
         "browser {action}\nPage: {} {}\nClickable page elements: {}\nVisible text:\n{}",
         page.title,
@@ -884,9 +820,6 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
     let mut args = args.clone();
     let elements = ctx.elements.lock().unwrap().clone();
     let actions_value = args.get("actions").cloned().unwrap_or(Value::Null);
-    if let Some(message) = browser_gui_block(&actions_value, &elements) {
-        return text_outcome(message);
-    }
     let click_key = click_fingerprint(&actions_value);
     if should_block_stale_click(
         *ctx.miss_streak.lock().unwrap(),
@@ -1019,19 +952,16 @@ async fn apply_semantic_actions(ctx: &ToolCtx, items: &mut [Value], elements: &[
             request["text"] = json!(text);
         }
         let ok = if ref_kind == "dom" {
-            let page = cdp_call(ctx, request.clone()).await;
+            let page = browser_call(ctx, request.clone()).await;
             if doubled && page.ok {
-                cdp_call(ctx, request).await.ok
+                browser_call(ctx, request).await.ok
             } else {
                 page.ok
             }
         } else {
-            let page = a11y_call(ctx, request.clone()).await;
-            if doubled && page.ok {
-                a11y_call(ctx, request).await.ok
-            } else {
-                page.ok
-            }
+            // Native references are resolved only by Cua's snapshot cache.
+            // Unknown references must fail instead of reaching the removed AT-SPI driver.
+            continue;
         };
         if ok {
             if let Some(object) = item.as_object_mut() {
@@ -1112,267 +1042,232 @@ fn pack_observation(ctx: &ToolCtx, note: &str, observation: ComputerObservation)
     }
 }
 
-/// How long a `shell` call waits for its command before handing back a
-/// terminal that keeps working. Long enough for a build step to finish, short
-/// enough that a server is reported as running rather than as a timeout.
-const SHELL_WAIT_MS_DEFAULT: u64 = 20_000;
-const SHELL_WAIT_MS_MAX: u64 = 110_000;
-/// The exec has to outlive the wait: the script returns as soon as the terminal
-/// prints its markers, so this only covers tmux being slow to answer.
-const SHELL_EXEC_SLACK_MS: u64 = 15_000;
-const SHELL_LOG_LINES_DEFAULT: u64 = 120;
-
-fn shell_session(args: &Value) -> String {
-    args.get("session")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .unwrap_or("main")
-        .to_string()
-}
-
-fn shell_log_lines(args: &Value) -> u64 {
-    args.get("log_lines")
-        .and_then(Value::as_u64)
-        .unwrap_or(SHELL_LOG_LINES_DEFAULT)
-        .clamp(1, 4_000)
-}
-
-fn shell_wait_ms(args: &Value) -> u64 {
-    args.get("wait_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(SHELL_WAIT_MS_DEFAULT)
-        .clamp(1_000, SHELL_WAIT_MS_MAX)
-}
-
-/// Quote one argument for the shell inside the terminal.
+/// Quote literal shell text typed by Cua into the visible terminal.
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// One call, one mode: keys and log reads never type a command, and a command
-/// never waits longer than the model asked for.
-fn shell_argv(args: &Value, session: &str, cwd: Option<&str>) -> Result<Vec<String>, String> {
-    let mut argv = vec!["lazyboy-shell".to_string()];
-    if args.get("reset").and_then(Value::as_bool).unwrap_or(false) {
-        argv.extend(["reset".to_string(), session.to_string()]);
-        return Ok(argv);
-    }
-    if let Some(keys) = args.get("keys").and_then(Value::as_str) {
-        let keys: Vec<String> = keys.split_whitespace().map(str::to_string).collect();
-        if keys.is_empty() {
-            return Err("`keys` needs a key to send, for example \"C-c\".".to_string());
+// X11 key injection cannot represent every Unicode character in a terminal.
+// Type one ASCII shell literal, then let the visible shell decode its UTF-8
+// bytes. This also keeps multiline commands in one deliberate Enter action.
+fn terminal_command(command: &str) -> String {
+    let mut encoded = String::new();
+    for byte in command.bytes() {
+        match byte {
+            b'\\' => encoded.push_str("\\\\"),
+            b'\'' => encoded.push_str("\\'"),
+            32..=126 => encoded.push(char::from(byte)),
+            _ => encoded.push_str(&format!("\\x{byte:02x}")),
         }
-        argv.extend(["keys".to_string(), session.to_string()]);
-        argv.extend(keys);
-        return Ok(argv);
     }
-    let command = args
-        .get("command")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if command.is_empty() {
-        // Nothing to type: show the terminal rather than guessing at a command.
-        argv.extend([
-            "log".to_string(),
-            session.to_string(),
-            shell_log_lines(args).to_string(),
-        ]);
-        return Ok(argv);
-    }
-    let command = match cwd {
-        Some(dir) => format!("cd -- {} && {{\n{}\n}}", shell_quote(dir), command),
-        None => command,
-    };
-    argv.extend([
-        "run".to_string(),
-        session.to_string(),
-        shell_wait_ms(args).to_string(),
-        command,
-    ]);
-    Ok(argv)
+    format!("eval $'{encoded}'")
 }
 
-/// Desktop images built before persistent terminals have no lazyboy-shell; the
-/// exit code of the missing command is the only signal worth matching on.
-fn shell_script_missing(code: i32, stderr: &str) -> bool {
-    code == 127 && stderr.contains("lazyboy-shell")
+fn terminal_actions(
+    args: &Value,
+    title: &str,
+    exists: bool,
+    cwd: Option<&str>,
+) -> Result<Vec<ComputerAction>, String> {
+    let mut actions = vec![if exists {
+        ComputerAction::Focus {
+            title: title.into(),
+        }
+    } else {
+        ComputerAction::Launch {
+            application: "terminal".into(),
+            uri: Some(format!("--title={title}")),
+        }
+    }];
+    if args.get("reset").and_then(Value::as_bool) == Some(true) {
+        actions.push(ComputerAction::Key {
+            key: "ctrl+c".into(),
+            modifiers: None,
+        });
+        actions.push(ComputerAction::Clipboard {
+            text: "exec /usr/local/bin/lazyboy-terminal-reset".into(),
+        });
+        actions.push(ComputerAction::Key {
+            key: "return".into(),
+            modifiers: None,
+        });
+    } else if let Some(keys) = args.get("keys").and_then(Value::as_str) {
+        if keys.trim().is_empty() {
+            return Err("keys must contain at least one key".into());
+        }
+        for key in keys.split_whitespace() {
+            let key = key.replace("C-", "ctrl+").replace("M-", "alt+");
+            actions.push(ComputerAction::Key {
+                key,
+                modifiers: None,
+            });
+        }
+    } else if let Some(command) = args
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+    {
+        let command = if let Some(cwd) = cwd {
+            let path = if cwd.starts_with('/') {
+                cwd.into()
+            } else {
+                format!("/home/lazyboy/{cwd}")
+            };
+            format!(
+                "cd -- {} && eval {}",
+                shell_quote(&path),
+                shell_quote(command)
+            )
+        } else {
+            command.to_string()
+        };
+        actions.push(ComputerAction::Clipboard {
+            text: terminal_command(&command),
+        });
+        actions.push(ComputerAction::Key {
+            key: "return".into(),
+            modifiers: None,
+        });
+    }
+    if actions.len() > lazyboy_control::MAX_COMPUTER_ACTIONS {
+        return Err("too many keys; split the call".into());
+    }
+    Ok(actions)
 }
 
 async fn shell(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
-    let cwd = args.get("cwd").and_then(Value::as_str);
-    let cwd = resolve_bot_workspace_cwd(ctx.mode, &ctx.bot_id, cwd)
-        .ok()
-        .flatten();
-    let session = shell_session(args);
-    let argv = match shell_argv(args, &session, cwd.as_deref()) {
-        Ok(argv) => argv,
-        Err(message) => return text_outcome(message),
-    };
-    let timeout_ms = shell_wait_ms(args) + SHELL_EXEC_SLACK_MS;
-    let result = ctx
+    if let Some(blocked) = vision_guard(ctx) {
+        return blocked;
+    }
+    let session = args
+        .get("session")
+        .and_then(Value::as_str)
+        .unwrap_or("main")
+        .trim();
+    if session.is_empty()
+        || session.len() > 80
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    {
+        return text_outcome(
+            "session must contain 1–80 letters, digits, dots, underscores or hyphens",
+        );
+    }
+    let title = format!("LazyBoy terminal {} {session}", ctx.bot_id);
+    let observation = match ctx
         .sandbox
-        .execute(
-            &ctx.computer_ref(),
-            CommandRequest {
-                argv,
-                cwd: None,
-                timeout_ms: Some(timeout_ms),
-                stdin: None,
-            },
-            &ctx.adapter(),
-        )
-        .await;
-    let result = match result {
-        Ok(result) if shell_script_missing(result.code, &result.stderr) => {
-            // Older image: one shell per call, which is worse but not fatal.
-            let Some(command) = args.get("command").and_then(Value::as_str) else {
-                return text_outcome(
-                    "This desktop image has no terminal sessions. Rebuild it with `make computer`.",
-                );
-            };
-            match ctx
-                .sandbox
-                .execute(
-                    &ctx.computer_ref(),
-                    CommandRequest {
-                        argv: vec!["bash".into(), "-lc".into(), command.to_string()],
-                        cwd,
-                        timeout_ms: Some(SHELL_WAIT_MS_MAX + SHELL_EXEC_SLACK_MS),
-                        stdin: None,
-                    },
-                    &ctx.adapter(),
-                )
-                .await
-            {
-                Ok(fallback) => {
-                    let note = "note: this desktop image has no persistent terminal, so the directory, exports, and background jobs of this command end with this call. Rebuild with `make computer` for a terminal that keeps them.";
-                    return text_outcome(format!(
-                        "{note}\nexit {}\n{}\n{}",
-                        fallback.code, fallback.stdout, fallback.stderr
-                    ));
-                }
-                Err(error) => return text_outcome(error.to_string()),
-            }
-        }
-        Ok(result) => result,
+        .observe(&ctx.computer_ref(), &ctx.adapter())
+        .await
+    {
+        Ok(observation) => observation,
         Err(error) => return text_outcome(error.to_string()),
     };
-    text_outcome(
-        format!("{}\n{}", result.stdout.trim_end(), result.stderr.trim_end())
-            .trim_end()
-            .to_string(),
-    )
+    let exists = observation
+        .elements
+        .iter()
+        .any(|element| element.kind.as_deref() == Some("window") && element.title == title);
+    // An existing terminal keeps its working directory unless explicitly changed.
+    let cwd = if !exists || args.get("cwd").is_some() {
+        match resolve_bot_workspace_cwd(
+            ctx.mode,
+            &ctx.bot_id,
+            args.get("cwd").and_then(Value::as_str),
+        ) {
+            Ok(cwd) => cwd,
+            Err(error) => return text_outcome(error.to_string()),
+        }
+    } else {
+        None
+    };
+    let actions = match terminal_actions(args, &title, exists, cwd.as_deref()) {
+        Ok(actions) => actions,
+        Err(error) => return text_outcome(error),
+    };
+    let wait_ms = args
+        .get("wait_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(1000)
+        .min(10000) as u32;
+    match ctx
+        .sandbox
+        .act(
+            &ctx.computer_ref(),
+            ActionRequest::new(actions, true, wait_ms),
+            &ctx.adapter(),
+        )
+        .await
+    {
+        Ok(result) => match result.observation {
+            Some(observation) => pack_observation(
+                ctx,
+                &format!(
+                    "Terminal {session} on the shared desktop. Read the screenshot to check output and whether the prompt returned. A running command keeps running; omit command to inspect it again, or use keys C-c to interrupt. No exit status is inferred."
+                ),
+                observation,
+            ),
+            None => text_outcome("terminal action completed but no screenshot was returned"),
+        },
+        Err(error) => text_outcome(error.to_string()),
+    }
+}
+
+fn visible_file_path(ctx: &ToolCtx, args: &Value, default: &str) -> Result<String, String> {
+    let requested = args.get("path").and_then(Value::as_str).unwrap_or(default);
+    let stored = resolve_bot_workspace_path(ctx.mode, &ctx.bot_id, requested)
+        .map_err(|error| error.to_string())?;
+    Ok(format!("/home/lazyboy/{stored}"))
 }
 
 async fn list_files(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
-    let requested = args.get("path").and_then(Value::as_str).unwrap_or("");
-    let stored = match resolve_bot_workspace_path(ctx.mode, &ctx.bot_id, requested) {
+    let path = match visible_file_path(ctx, args, "") {
         Ok(path) => path,
-        Err(error) => {
-            return ToolOutcome {
-                text: error.to_string(),
-                image: None,
-                pause: false,
-                blocks: Vec::new(),
-            };
-        }
+        Err(error) => return text_outcome(error),
     };
-    match ctx
-        .sandbox
-        .list_files(&ctx.computer_ref(), &stored, &ctx.adapter())
-        .await
-    {
-        Ok(entries) => ToolOutcome {
-            text: serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into()),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-        Err(error) => ToolOutcome {
-            text: error.to_string(),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-    }
+    shell(
+        ctx,
+        &json!({"session":"files", "command":format!("ls -la -- {}", shell_quote(&path))}),
+    )
+    .await
 }
 
 async fn read_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
-    let requested = args.get("path").and_then(Value::as_str).unwrap_or("");
-    let stored = match resolve_bot_workspace_path(ctx.mode, &ctx.bot_id, requested) {
+    let path = match visible_file_path(ctx, args, "") {
         Ok(path) => path,
-        Err(error) => {
-            return ToolOutcome {
-                text: error.to_string(),
-                image: None,
-                pause: false,
-                blocks: Vec::new(),
-            };
-        }
+        Err(error) => return text_outcome(error),
     };
-    match ctx
-        .sandbox
-        .read_file(&ctx.computer_ref(), &stored, &ctx.adapter())
-        .await
-    {
-        Ok(bytes) => ToolOutcome {
-            text: String::from_utf8_lossy(&bytes).into_owned(),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-        Err(error) => ToolOutcome {
-            text: error.to_string(),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-    }
+    let start = args
+        .get("start_line")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .max(1);
+    let count = args
+        .get("lines")
+        .and_then(Value::as_u64)
+        .unwrap_or(25)
+        .clamp(1, 200);
+    let end = start.saturating_add(count - 1);
+    shell(ctx, &json!({"session":"files", "command":format!("sed -n '{start},{end}p' -- {}", shell_quote(&path))})).await
 }
 
 async fn write_file(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
-    let requested = args
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or("notes.txt");
-    let content = args.get("content").and_then(Value::as_str).unwrap_or("");
-    let stored = match resolve_bot_workspace_path(ctx.mode, &ctx.bot_id, requested) {
+    let path = match visible_file_path(ctx, args, "notes.txt") {
         Ok(path) => path,
-        Err(error) => {
-            return ToolOutcome {
-                text: error.to_string(),
-                image: None,
-                pause: false,
-                blocks: Vec::new(),
-            };
-        }
+        Err(error) => return text_outcome(error),
     };
-    match ctx
-        .sandbox
-        .write_file(
-            &ctx.computer_ref(),
-            &stored,
-            content.as_bytes(),
-            &ctx.adapter(),
-        )
-        .await
-    {
-        Ok(()) => ToolOutcome {
-            text: json!({"ok": true, "path": requested}).to_string(),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-        Err(error) => ToolOutcome {
-            text: error.to_string(),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
-        },
-    }
+    let content = args.get("content").and_then(Value::as_str).unwrap_or("");
+    let parent = std::path::Path::new(&path)
+        .parent()
+        .and_then(|path| path.to_str())
+        .unwrap_or("/home/lazyboy");
+    let command = format!(
+        "mkdir -p -- {} && printf %s {} > {} && wc -c -- {}",
+        shell_quote(parent),
+        shell_quote(content),
+        shell_quote(&path),
+        shell_quote(&path)
+    );
+    shell(ctx, &json!({"session":"files", "command":command})).await
 }
 
 async fn open_path(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
@@ -1525,66 +1420,110 @@ async fn use_saved_login(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
             Err(error) => return text_outcome(error),
         };
     let (account, username, password) = secret;
-    let adapter = ctx.adapter();
-    let display = adapter.display.as_deref().unwrap_or(":1");
-    let request = json!({
-        "action": "fill_login",
-        "expectedHost": account.host,
-        "ensure": false,
-        "username": username,
-        "password": password,
-        "display": display,
-        "port": lazyboy_control::devtools_port(display),
-        "profile": adapter.profile_path.clone().unwrap_or_default(),
-    });
-    let argv = cdp_stdin_command_on(display, adapter.profile_path.as_deref());
-    let raw = match ctx
-        .sandbox
-        .execute(
-            &ctx.computer_ref(),
-            CommandRequest {
-                argv,
-                cwd: None,
-                timeout_ms: Some(20_000),
-                stdin: Some(request.to_string()),
-            },
-            &ctx.adapter(),
-        )
-        .await
+    let page = browser_call(ctx, json!({"action":"snapshot","ensure":false})).await;
+    let filled = match fill_login_fields(
+        page,
+        &account.host,
+        username,
+        password,
+        |selector, text| async move {
+            browser_call(
+                ctx,
+                json!({"action":"type","selector":selector,"text":text,"ensure":false}),
+            )
+            .await
+        },
+    )
+    .await
     {
-        Ok(result) => {
-            if result.stdout.trim().is_empty() {
-                result.stderr
-            } else {
-                result.stdout
-            }
-        }
-        Err(error) => {
-            return text_outcome(format!("could not fill login: {error}"));
-        }
+        Ok(fields) => fields,
+        Err(message) => return text_outcome(message),
     };
-    let page = parse_cdp_page(&raw);
-    if !page.ok {
-        return text_outcome(format!(
-            "could not fill {} login: {}",
-            account.site,
-            page.error.unwrap_or_else(|| "unknown error".into())
-        ));
-    }
-    let submitted = serde_json::from_str::<Value>(raw.trim())
-        .ok()
-        .and_then(|value| value.get("submitted").and_then(Value::as_bool))
-        .unwrap_or(false);
     text_outcome(format!(
-        "Filled {} as {}. {} For a simple Cloudflare checkbox, observe and try connection_check once; for other CAPTCHA or 2FA, call request_takeover.",
-        account.site,
-        account.username,
-        if submitted {
-            "Submitted the form."
-        } else {
-            "Username and password are in the fields; click Sign in if needed."
-        }
+        "Filled {} for {} through Cua on the shared desktop. Inspect the form before submitting. For a multi-step login, advance the form and call use_saved_login again.",
+        filled.join(" and "),
+        account.site
     ))
+}
+
+async fn fill_login_fields<F, Fut>(
+    mut page: BrowserPage,
+    host: &str,
+    username: String,
+    password: String,
+    mut type_field: F,
+) -> Result<Vec<&'static str>, &'static str>
+where
+    F: FnMut(String, String) -> Fut,
+    Fut: std::future::Future<Output = BrowserPage>,
+{
+    let mut filled = Vec::new();
+    for (field, value) in [("username", username), ("password", password)] {
+        if !login_page_matches(&page, host) {
+            return Err(
+                "Login fields were not filled: the current page must use HTTPS and exactly match the saved account host.",
+            );
+        }
+        let Some(selector) = login_field(&page, field) else {
+            continue;
+        };
+        page = type_field(selector, value).await;
+        if !page.ok {
+            // Driver errors can contain the attempted secret. Never echo them.
+            return Err(
+                "Cua could not fill the login field. Observe the page again before retrying.",
+            );
+        }
+        filled.push(field);
+    }
+    if filled.is_empty() {
+        return Err(
+            "No uniquely labelled login fields were found. Open the login form or request human takeover; no credentials were entered.",
+        );
+    }
+    Ok(filled)
+}
+
+fn login_page_matches(page: &BrowserPage, host: &str) -> bool {
+    page.ok
+        && reqwest::Url::parse(&page.url).ok().is_some_and(|url| {
+            url.scheme() == "https"
+                && url
+                    .host_str()
+                    .is_some_and(|current| current.eq_ignore_ascii_case(host))
+        })
+}
+
+fn login_field(page: &BrowserPage, field: &str) -> Option<String> {
+    let words: &[&str] = if field == "password" {
+        &["password", "密碼", "密码"]
+    } else {
+        &[
+            "username",
+            "user name",
+            "email",
+            "e-mail",
+            "帳號",
+            "账号",
+            "電子郵件",
+            "電子郵箱",
+            "使用者名稱",
+            "用戶名",
+        ]
+    };
+    let mut matches = page.elements.iter().filter(|element| {
+        let label = element.title.to_lowercase();
+        let editable = element
+            .role
+            .as_deref()
+            .is_some_and(|role| matches!(role, "textbox" | "searchbox" | "entry"));
+        editable && words.iter().any(|word| label.contains(word))
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    first.selector.clone()
 }
 
 async fn create_schedule_tool(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
@@ -1709,7 +1648,7 @@ mod connection_check_tests {
             "Cloudflare Verify you are human",
             "Dcard 需要確認您的連線是安全的",
         ] {
-            assert!(is_connection_check(&CdpPage {
+            assert!(is_connection_check(&BrowserPage {
                 ok: true,
                 text: text.into(),
                 ..Default::default()
@@ -1720,13 +1659,13 @@ mod connection_check_tests {
             "Sign in with your password",
             "",
         ] {
-            assert!(!is_connection_check(&CdpPage {
+            assert!(!is_connection_check(&BrowserPage {
                 ok: true,
                 text: text.into(),
                 ..Default::default()
             }));
         }
-        assert!(!is_connection_check(&CdpPage {
+        assert!(!is_connection_check(&BrowserPage {
             ok: false,
             text: "Cloudflare Verify you are human".into(),
             ..Default::default()
@@ -1737,74 +1676,144 @@ mod connection_check_tests {
 #[cfg(test)]
 mod shell_session_tests {
     use super::*;
-
-    /// The same pairing the tool makes: a session name, then a mode.
-    fn argv(args: Value) -> Vec<String> {
-        shell_argv(&args, &shell_session(&args), None).expect("argv")
+    #[test]
+    fn terminal_encoding_preserves_utf8_quotes_and_literal_shell_syntax() {
+        let text = "中文🙂\nquotes ' \" and literal $HOME `id` $(printf injected) \\ end";
+        let command = terminal_command(&format!("printf %s {}", shell_quote(text)));
+        assert!(command.is_ascii());
+        let result = std::process::Command::new("bash")
+            .args(["-c", &command])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, text.as_bytes());
     }
 
     #[test]
-    fn a_command_runs_in_its_named_terminal_and_waits_its_own_time() {
+    fn existing_terminal_is_focused_and_poll_does_not_type() {
+        let actions = terminal_actions(&json!({}), "session", true, None).unwrap();
         assert_eq!(
-            argv(json!({"command":"ls -l","session":"build","wait_ms":45000})),
-            ["lazyboy-shell", "run", "build", "45000", "ls -l"]
+            actions,
+            vec![ComputerAction::Focus {
+                title: "session".into()
+            }]
         );
-        let defaults = argv(json!({"command":"pwd"}));
-        assert_eq!(defaults[1], "run");
-        assert_eq!(defaults[2], "main");
-        assert_eq!(defaults[3], SHELL_WAIT_MS_DEFAULT.to_string());
+    }
+    #[test]
+    fn commands_and_interrupts_use_cua_input() {
+        let actions = terminal_actions(
+            &json!({"command":"echo '中文'"}),
+            "session",
+            false,
+            Some("/tmp/a b"),
+        )
+        .unwrap();
+        assert!(matches!(&actions[0], ComputerAction::Launch { .. }));
+        assert!(
+            matches!(&actions[1], ComputerAction::Clipboard { text } if text.is_ascii() && text.starts_with("eval $\'cd -- "))
+        );
+        assert!(matches!(&actions[2], ComputerAction::Key { key, .. } if key == "return"));
+        let keys = terminal_actions(&json!({"keys":"C-c"}), "session", true, None).unwrap();
+        assert!(matches!(&keys[1], ComputerAction::Key { key, .. } if key == "ctrl+c"));
+    }
+}
+
+#[cfg(test)]
+mod saved_login_tests {
+    use super::*;
+    // Runs against a disposable desktop with scripts/cua-login-fixture.py on
+    // trusted https://localhost:8443. No model/provider or real credentials.
+    #[tokio::test]
+    #[ignore = "requires CUA_LOGIN_TEST_CONTAINER with a trusted local HTTPS fixture"]
+    async fn saved_login_fills_real_cua_fields_without_submitting() {
+        fn browser(request: Value) -> BrowserPage {
+            use std::io::Write;
+            use std::process::{Command, Stdio};
+            let container = std::env::var("CUA_LOGIN_TEST_CONTAINER").unwrap();
+            let script = "import importlib.machinery,json,sys; a=importlib.machinery.SourceFileLoader('a','/usr/local/bin/lazyboy-cua-adapter-test').load_module(); print(json.dumps(a.api('/browser',json.load(sys.stdin))))";
+            let mut child = Command::new("docker")
+                .args(["exec", "-i", &container, "python3", "-c", script])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&serde_json::to_vec(&request).unwrap())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "fixture browser request failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            serde_json::from_slice(&output.stdout).unwrap()
+        }
+        let page =
+            browser(json!({"action":"navigate","url":"https://localhost:8443/","ensure":true}));
+        assert!(
+            page.text.contains("Saved login verification"),
+            "trusted fixture must be visible"
+        );
+        let filled = fill_login_fields(
+            page,
+            "localhost",
+            "cua@example.test".into(),
+            "fixture-only-123".into(),
+            |selector, text| async move {
+                browser(json!({"action":"type","selector":selector,"text":text,"ensure":false}))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(filled, ["username", "password"]);
+        let page = browser(json!({"action":"snapshot","ensure":false}));
+        assert!(
+            page.text.contains("Both fields verified"),
+            "fixture must verify both exact input values: {}",
+            page.text
+        );
+        assert!(page.text.contains("Not submitted"));
     }
 
     #[test]
-    fn a_call_without_a_command_reads_the_terminal_instead_of_typing() {
-        assert_eq!(
-            argv(json!({"session":"build","log_lines":40})),
-            ["lazyboy-shell", "log", "build", "40"]
-        );
-        assert_eq!(argv(json!({})), ["lazyboy-shell", "log", "main", "120"]);
-    }
-
-    #[test]
-    fn keys_and_reset_never_type_a_command() {
-        assert_eq!(
-            argv(json!({"session":"build","keys":"C-c"})),
-            ["lazyboy-shell", "keys", "build", "C-c"]
-        );
-        assert_eq!(
-            argv(json!({"reset":true})),
-            ["lazyboy-shell", "reset", "main"]
-        );
-        assert!(shell_argv(&json!({"keys":"   "}), "main", None).is_err());
-    }
-
-    #[test]
-    fn cwd_moves_this_command_into_a_directory_and_survives_quotes() {
-        let argv =
-            shell_argv(&json!({"command":"make\ntest"}), "main", Some("/tmp/a b'c")).expect("argv");
-        assert_eq!(argv[4], "cd -- '/tmp/a b'\\''c' && {\nmake\ntest\n}");
-    }
-
-    #[test]
-    fn waits_stay_inside_the_range_the_desktop_can_honour() {
-        assert_eq!(shell_wait_ms(&json!({"wait_ms":900})), 1_000);
-        assert_eq!(
-            shell_wait_ms(&json!({"wait_ms":900_000})),
-            SHELL_WAIT_MS_MAX
-        );
-        assert_eq!(shell_wait_ms(&json!({})), SHELL_WAIT_MS_DEFAULT);
-        assert_eq!(shell_log_lines(&json!({"log_lines":0})), 1);
-    }
-
-    #[test]
-    fn only_a_missing_script_falls_back_to_one_shot() {
-        assert!(shell_script_missing(
-            127,
-            "bash: lazyboy-shell: command not found"
+    fn credentials_require_the_exact_https_host() {
+        let page = |url: &str| BrowserPage {
+            ok: true,
+            url: url.into(),
+            ..Default::default()
+        };
+        assert!(login_page_matches(
+            &page("https://example.com/login"),
+            "example.com"
         ));
-        assert!(!shell_script_missing(
-            127,
-            "bash: whatever: command not found"
-        ));
-        assert!(!shell_script_missing(1, "lazyboy-shell: nope"));
+        for url in [
+            "http://example.com/login",
+            "https://example.com.attacker.test",
+            "https://example.com@attacker.test",
+            "about:blank",
+        ] {
+            assert!(!login_page_matches(&page(url), "example.com"));
+        }
+    }
+    #[test]
+    fn ambiguous_fields_are_never_guessed() {
+        let mut page = BrowserPage {
+            ok: true,
+            elements: vec![UiElement {
+                title: "Email".into(),
+                role: Some("textbox".into()),
+                selector: Some("p1:0".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(login_field(&page, "username").as_deref(), Some("p1:0"));
+        assert!(login_field(&page, "password").is_none());
+        page.elements.push(page.elements[0].clone());
+        assert!(login_field(&page, "username").is_none());
     }
 }

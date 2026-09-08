@@ -5,9 +5,8 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::cua::CuaController;
-use crate::legacy::LegacyController;
 use crate::{
-    ActionRequest, ActionResult, BrowserRequest, CdpPage, RecordingRequest, RecordingResult,
+    ActionRequest, ActionResult, BrowserPage, BrowserRequest, RecordingRequest, RecordingResult,
     RecordingSession,
 };
 use lazyboy_contracts::ComputerObservation;
@@ -96,7 +95,6 @@ fn truncate_error(text: &str) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComputerDriver {
-    Legacy,
     Cua,
 }
 
@@ -104,29 +102,25 @@ impl ComputerDriver {
     pub const ENV: &'static str = "LAZYBOY_COMPUTER_DRIVER";
 
     pub fn from_env() -> Self {
-        match std::env::var(Self::ENV) {
-            Ok(value) if value.trim().is_empty() => Self::Legacy,
-            Ok(value) => match value.parse() {
-                Ok(driver) => driver,
-                Err(error) => {
-                    tracing::error!("{error}; using legacy");
-                    Self::Legacy
-                }
-            },
-            Err(_) => Self::Legacy,
+        if let Ok(value) = std::env::var(Self::ENV)
+            && !value.trim().is_empty()
+            && value.parse::<Self>().is_err()
+        {
+            tracing::warn!(
+                "Only the Cua computer driver is supported; ignoring obsolete driver setting"
+            );
         }
+        Self::Cua
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Legacy => "legacy",
             Self::Cua => "cua",
         }
     }
 
     pub fn controller(self) -> Arc<dyn ComputerController> {
         match self {
-            Self::Legacy => Arc::new(LegacyController),
             Self::Cua => Arc::new(CuaController::default()),
         }
     }
@@ -137,7 +131,6 @@ impl FromStr for ComputerDriver {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "legacy" => Ok(Self::Legacy),
             "cua" => Ok(Self::Cua),
             other => Err(UnknownComputerDriver(other.to_string())),
         }
@@ -145,7 +138,7 @@ impl FromStr for ComputerDriver {
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-#[error("unknown computer driver {0:?}; expected legacy or cua")]
+#[error("unknown computer driver {0:?}; expected cua")]
 pub struct UnknownComputerDriver(pub String);
 
 #[async_trait]
@@ -166,7 +159,7 @@ pub trait ComputerController: Send + Sync {
         &self,
         request: &BrowserRequest,
         ctx: &ControlContext,
-    ) -> Result<CdpPage, ControlError>;
+    ) -> Result<BrowserPage, ControlError>;
 
     async fn start_recording(
         &self,
@@ -193,10 +186,7 @@ mod tests {
 
     #[test]
     fn parses_driver_names() {
-        assert_eq!(
-            "legacy".parse::<ComputerDriver>().unwrap(),
-            ComputerDriver::Legacy
-        );
+        assert!("legacy".parse::<ComputerDriver>().is_err());
         assert_eq!(
             "CUA".parse::<ComputerDriver>().unwrap(),
             ComputerDriver::Cua

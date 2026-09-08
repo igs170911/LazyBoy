@@ -118,10 +118,23 @@ pub(super) async fn act(
     verb: RefVerb,
     text: Option<&str>,
 ) -> Result<(), ControlError> {
+    client
+        .call(
+            display,
+            "bring_to_front",
+            &json!({
+                "pid": target.pid, "window_id": target.window_id,
+            }),
+            &[],
+        )
+        .await?;
     let mut payload =
         json!({"pid": target.pid, "window_id": target.window_id, "element_token": target.token});
     let tool = match verb {
-        RefVerb::Click => "click",
+        RefVerb::Click => {
+            payload["delivery_mode"] = json!("foreground");
+            "click"
+        }
         RefVerb::SetValue => {
             payload["value"] = json!(text.unwrap_or(""));
             "set_value"

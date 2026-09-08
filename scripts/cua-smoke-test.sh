@@ -79,6 +79,15 @@ if ! docker exec -u 1000:1000 "$name" test -f /tmp/lazyboy/ready; then
   exit 1
 fi
 
+# Warm reconnects must reuse one daemon and release the startup lock.
+for _ in 1 2 3; do
+  docker exec -u 1000:1000 "$name" lazyboy-screen ensure 0 >/dev/null
+done
+docker exec -u 1000:1000 "$name" sh -c '
+  test "$(pgrep -c -x cua-driver)" -eq 1 &&
+  flock -n /tmp/lazyboy/screen-0.lock true
+'
+
 echo "running $repeat Cua smoke iterations"
 set +e
 docker exec -u 1000:1000 "$name" /usr/local/bin/lazyboy-cua-smoke --repeat "$repeat" --ready-timeout "$ready_timeout"
@@ -88,7 +97,19 @@ if [[ "$code" -eq 0 ]]; then
   code=$?
 fi
 if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-terminal-test
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-clipboard-test
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
   docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-isolation-test
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-session-test
   code=$?
 fi
 if [[ "$code" -eq 0 ]]; then
@@ -127,11 +148,25 @@ if [[ "$code" -eq 0 ]]; then
   docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-adapter-test --check-persistence
   code=$?
 fi
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-cursor-test
+  code=$?
+fi
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-cursor-color-test
+  code=$?
+fi
 set -e
 
 out="${CUA_SMOKE_OUT:-/tmp/lazyboy-cua-smoke-last}"
 mkdir -p "$out"
 docker cp "$name:/tmp/lazyboy/cua-smoke-report/." "$out/" 2>/dev/null || true
+for index in 0 1; do
+  docker cp "$name:/tmp/cua-cursor-${index}.png" "$out/cua-cursor-${index}.png" 2>/dev/null || true
+done
+for color in purple green pink; do
+  docker cp "$name:/tmp/cua-cursor-${color}.png" "$out/cua-cursor-${color}.png" 2>/dev/null || true
+done
 docker exec -u 1000:1000 "$name" sh -c 'tail -n 80 /tmp/lazyboy/screen-1-cua.log 2>/dev/null || true' \
   >"$out/cua-driver.log" || true
 

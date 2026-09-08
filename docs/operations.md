@@ -57,7 +57,7 @@
 | `LAZYBOY_COMPUTER_MEMORY_MB` | 每台電腦記憶體 | `2048` |
 | `LAZYBOY_COMPUTER_PIDS` | 每台電腦 PID 上限 | `2048` |
 | `LAZYBOY_COMPUTER_SUDO` | 容器內免密碼 sudo；重建桌面容器後生效 | `false` |
-| `LAZYBOY_COMPUTER_DRIVER` | 桌面控制後端：`legacy`（預設，CDP/AT-SPI/xdotool）或 `cua`（opt-in Cua Driver）。改完需重建桌面容器。本機可用 `docker compose -f docker-compose.yml -f docker-compose.cua.yml up -d --build` | `legacy` |
+| `LAZYBOY_COMPUTER_DRIVER` | 只支援 `cua`。舊後端已移除；更新映像後需重建桌面容器。 | `cua` |
 | `LAZYBOY_MEMORY_ENABLED` | 長期記憶 | `true` |
 
 完整清單與保留政策請見 [`.env.example`](../.env.example)。
@@ -138,39 +138,13 @@ LAZYBOY_RUN_HARD_MINUTES=240 # 時間保險絲
 
 ## 容器內終端機
 
-AI 的 `shell` 不再每條命令開一個新的 `bash -lc`，而是用**有名字的 tmux 終端機**：工作目錄、
-`export`、背景程序、互動式程式都留在原處，跟人用同一台終端機一樣。
+Agent 透過 Cua 操作 VNC 上的真實終端機。`session` 指定持續使用的視窗；`command` 輸入命令，
+省略則只查看畫面。`keys: "C-c"` 可中斷前景命令，`reset: true` 重新建立乾淨的登入 shell。
+`cwd` 只有明確指定時才改變既有終端機的工作目錄。
 
-| 參數 | 作用 |
-| --- | --- |
-| `command` | 要執行的命令 |
-| `session` | 終端機名稱，預設 `main`（tmux 內是 `lazyboy-main`）；不同的工作可以分台跑 |
-| `wait_ms` | 最多等多久，預設 20 秒、上限 110 秒。時間到還沒結束就回傳「還在跑」 |
-| `log_lines` | 不給 `command` 時，讀終端機目前顯示的內容 |
-| `keys` | 送按鍵或文字：`C-c`、`Enter`，或逐字輸入給互動式提示 |
-| `reset` | 收掉這台終端機重開一台 |
-| `cwd` | 先切到這個目錄再執行 |
-
-- 長工作**不要**把 `wait_ms` 拉很長：先讓它回傳「還在跑」，之後用 `log_lines` 續讀。觀察與輪詢
-  不被當成鬼打牆（見[任務跑多久：輪次政策](#任務跑多久輪次政策)）。
-- 終端機被 `exit`、`exec bash` 或 Ctrl-C 打死時會自動重建，並回到原本的目錄、重新載入原本
-  `export` 的環境變數。
-- 人可以隨時看同一台終端機。終端機跑在容器裡的 uid 1000，容器名稱是 `lb-<主線>`：
-
-  ```bash
-  docker exec -it -u 1000:1000 lb-team-local-space tmux ls
-  docker exec -it -u 1000:1000 lb-team-local-space tmux attach -t lazyboy-main  # Ctrl-b d 離開
-  ```
-
-  聊天時直接叫 AI「把終端機開給我看」也可以，它會用 `lazyboy-shell show` 在桌面開一個視窗，
-  你按同一段鍵盤就能接手。
-
-- 桌面映像檔需要 `tmux`。映像檔裡沒有 `lazyboy-shell` 時，命令退回一次性 `bash -lc`（可用，
-  但不保留狀態），重建後再請 AI `reset` 一次即可：
-
-  ```bash
-  docker compose build computer   # 或 make computer
-  ```
+`wait_ms` 預設 1000 毫秒、最多 10000 毫秒。回傳的是截圖，等待時間到不代表命令完成；
+請看提示字元與畫面上的結果，長工作可以稍後再次查看。長輸出可用 Cua 捲動。
+直接在共用 VNC 點選同一個視窗即可觀看與接管，不需要額外開 tmux 工作階段。
 
 ## 網站連線驗證
 

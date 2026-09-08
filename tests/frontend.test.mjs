@@ -40,13 +40,7 @@ test('VNC paste delegates once to confirmed backend and rejects another source',
  handlers.message({origin:'http://localhost',source:{},data:{type:'lazyboy-host-clipboard',text:'bad'}});assert.equal(sent.at(-1).text,'中文\nhello');
 });
 
-test('saved login rejects HTTP, lookalike hosts, and missing host before touching fields',()=>{
- const py=fs.readFileSync('crates/control/src/cdp.py','utf8');const expression=py.match(/FILL_LOGIN_JS = r"""([\s\S]*?)"""/)[1];
- for(const [protocol,hostname,expectedHost] of [['https:','evil.example','bank.example'],['http:','bank.example','bank.example'],['https:','bank.example.evil','bank.example'],['https:','bank.example','']]) {
-  const evaluate=vm.runInNewContext(`(${expression})`,{location:{protocol,hostname},document:{querySelectorAll(){throw Error('must not touch fields')}}});
-  assert.equal(evaluate({username:'u',password:'secret',expectedHost}).ok,false);
- }
-});
+
 
 const mdJs=ts.transpileModule(fs.readFileSync('apps/web/src/markdown.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
 const mdBox={exports:{},require:(name)=>{

@@ -1,5 +1,7 @@
 # Cua Driver compatibility (LazyBoy desktop)
 
+> 歷史紀錄：本文描述 2026-09-07 的雙後端驗證，已非現況。目前只保留 Cua；操作方式見 [operations.md](operations.md)，最新驗證狀態見 [cua-migration-progress.md](cua-migration-progress.md)。
+
 This report answers one question, from a real `make cua-smoke` run on 2026-09-07:
 
 > Can Cua Driver reliably control the existing LazyBoy XFCE + Xvfb desktop container?

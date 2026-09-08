@@ -5,8 +5,7 @@ use tokio::time::{Duration, sleep};
 use super::ListedWindow;
 use super::client::CuaClient;
 use crate::controller::ControlError;
-use crate::process::spawn_detached;
-use crate::{BrowserRequest, CdpPage, launch_argv_on};
+use crate::{BrowserPage, BrowserRequest, launch_argv_on};
 
 #[derive(Debug, Clone)]
 pub struct BrowserBind {
@@ -14,7 +13,7 @@ pub struct BrowserBind {
     pub window_id: u64,
     pub target_id: String,
     pub tab_id: String,
-    pub page: Option<CdpPage>,
+    pub page: Option<BrowserPage>,
 }
 
 pub fn is_cua_ref(selector: &str) -> bool {
@@ -34,7 +33,7 @@ pub fn allowed_navigate_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://") || url.starts_with("about:")
 }
 
-pub fn page_from_semantic(value: &Value) -> CdpPage {
+pub fn page_from_semantic(value: &Value) -> BrowserPage {
     let page = value.get("page").unwrap_or(value);
     let url = page
         .get("url")
@@ -62,7 +61,7 @@ pub fn page_from_semantic(value: &Value) -> CdpPage {
     }
     let ok = value.get("status").and_then(Value::as_str) != Some("refused")
         && value.get("ok").and_then(Value::as_bool) != Some(false);
-    CdpPage {
+    BrowserPage {
         ok,
         error: if ok {
             None
@@ -147,7 +146,7 @@ fn number(value: &Value, key: &str) -> Option<u32> {
         .map(|n| n as u32)
 }
 
-pub fn find_ref<'a>(page: &'a CdpPage, selector: &'a str) -> Option<&'a str> {
+pub fn find_ref<'a>(page: &'a BrowserPage, selector: &'a str) -> Option<&'a str> {
     if is_cua_ref(selector) {
         return page
             .elements
@@ -227,9 +226,7 @@ pub async fn ensure_bind(
     let mut listed = windows.to_vec();
     if chromium_window(&listed).is_none() && ensure {
         if let Some(argv) = launch_argv_on(display, profile, "browser", None) {
-            spawn_detached(&argv)
-                .await
-                .map_err(ControlError::internal)?;
+            super::launch::run(client, display, &argv).await?;
         }
         for _ in 0..24 {
             sleep(Duration::from_millis(250)).await;
@@ -300,7 +297,7 @@ pub async fn snapshot(
     client: &CuaClient,
     display: &str,
     bind: &BrowserBind,
-) -> Result<CdpPage, ControlError> {
+) -> Result<BrowserPage, ControlError> {
     let value = client
         .call(
             display,
@@ -324,11 +321,11 @@ pub async fn run(
     request: &BrowserRequest,
     windows: &[ListedWindow],
     bind: &mut Option<BrowserBind>,
-) -> Result<CdpPage, ControlError> {
+) -> Result<BrowserPage, ControlError> {
     if request.action == "probe" {
-        return Ok(CdpPage {
+        return Ok(BrowserPage {
             ok: chromium_window(windows).is_some(),
-            ..CdpPage::default()
+            ..BrowserPage::default()
         });
     }
     let attached = match bind.as_ref() {
@@ -340,10 +337,25 @@ pub async fn run(
         }
     };
     if request.action == "ensure" {
-        return Ok(CdpPage {
+        return Ok(BrowserPage {
             ok: true,
-            ..CdpPage::default()
+            ..BrowserPage::default()
         });
+    }
+    if matches!(
+        request.action.as_str(),
+        "navigate" | "click" | "type" | "press"
+    ) {
+        client
+            .call(
+                display,
+                "bring_to_front",
+                &json!({
+                    "pid": attached.pid, "window_id": attached.window_id,
+                }),
+                &[],
+            )
+            .await?;
     }
     match request.action.as_str() {
         "snapshot" => snapshot(client, display, &attached).await,
@@ -386,6 +398,7 @@ pub async fn run(
                         "key": key,
                         "pid": attached.pid,
                         "window_id": attached.window_id,
+                        "delivery_mode": "foreground",
                     }),
                     &[],
                 )
@@ -404,14 +417,14 @@ async fn click(
     display: &str,
     bind: &BrowserBind,
     request: &BrowserRequest,
-) -> Result<CdpPage, ControlError> {
+) -> Result<BrowserPage, ControlError> {
     let selector = request
         .selector
         .as_deref()
         .ok_or_else(|| ControlError::InvalidAction("browser click needs a selector".into()))?;
     let page = bind.page.as_ref().ok_or(ControlError::StaleReference)?;
     let Some(r#ref) = find_ref(page, selector) else {
-        return Ok(CdpPage {
+        return Ok(BrowserPage {
                 ok: false,
                 error: Some(
                     "element gone: the page changed and ids were renumbered. Use the fresh element list in this result."
@@ -421,7 +434,7 @@ async fn click(
                 title: page.title.clone(),
                 text: page.text.clone(),
                 elements: page.elements.clone(),
-                ..CdpPage::default()
+                ..BrowserPage::default()
             });
     };
     let r#ref = r#ref.to_string();
@@ -442,29 +455,57 @@ async fn click(
     snapshot(client, display, bind).await
 }
 
+fn unique_native_web_entry<'a>(state: &'a Value, label: &str) -> Result<&'a Value, ControlError> {
+    if label.is_empty() {
+        return Err(ControlError::TargetNotFound);
+    }
+    let mut matches = state
+        .get("elements")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|element| {
+            element.get("label").and_then(Value::as_str) == Some(label)
+                && element.get("in_web_content").and_then(Value::as_bool) == Some(true)
+                && matches!(
+                    element.get("role").and_then(Value::as_str),
+                    Some("entry" | "password text" | "text")
+                )
+                && element.get("frame").is_some_and(|frame| {
+                    frame["w"].as_f64().unwrap_or(0.0) > 0.0
+                        && frame["h"].as_f64().unwrap_or(0.0) > 0.0
+                })
+        });
+    let first = matches.next().ok_or(ControlError::TargetNotFound)?;
+    if matches.next().is_some() {
+        return Err(ControlError::TargetNotFound);
+    }
+    Ok(first)
+}
+
 async fn type_into(
     client: &CuaClient,
     display: &str,
     bind: &BrowserBind,
     request: &BrowserRequest,
-) -> Result<CdpPage, ControlError> {
+) -> Result<BrowserPage, ControlError> {
     let text = request.text.clone().unwrap_or_default();
     tracing::info!(backend = "cua", tool = "browser_type", length = text.len());
     if let Some(selector) = request.selector.as_deref() {
         let page = bind.page.as_ref().ok_or(ControlError::StaleReference)?;
         let Some(r#ref) = find_ref(page, selector) else {
-            return Ok(CdpPage {
+            return Ok(BrowserPage {
                 ok: false,
                 error: Some("target field is unavailable; no text inserted".into()),
                 url: page.url.clone(),
                 title: page.title.clone(),
                 text: page.text.clone(),
                 elements: page.elements.clone(),
-                ..CdpPage::default()
+                ..BrowserPage::default()
             });
         };
         let r#ref = r#ref.to_string();
-        client
+        let typed = client
             .call(
                 display,
                 "browser_type",
@@ -477,7 +518,69 @@ async fn type_into(
                 }),
                 &[],
             )
-            .await?;
+            .await;
+        match typed {
+            Ok(_) => {}
+            Err(ControlError::Unsupported) => {
+                // The pinned driver can refuse Input.insertText for email
+                // fields. Resolve a unique visible native web entry from Cua;
+                // never guess a pixel or a similarly named browser-chrome field.
+                let label = page
+                    .elements
+                    .iter()
+                    .find(|element| element.selector.as_deref() == Some(r#ref.as_str()))
+                    .map(|element| element.title.as_str())
+                    .ok_or(ControlError::StaleReference)?;
+                let native = client.call(display, "get_window_state", &json!({
+                    "pid": bind.pid, "window_id": bind.window_id, "include_screenshot": false,
+                }), &[]).await?;
+                let entry = unique_native_web_entry(&native, label)?;
+                let frame = &entry["frame"];
+                let x = frame["x"].as_f64().ok_or(ControlError::TargetNotFound)?
+                    + frame["w"].as_f64().unwrap_or(0.0) / 2.0;
+                let y = frame["y"].as_f64().ok_or(ControlError::TargetNotFound)?
+                    + frame["h"].as_f64().unwrap_or(0.0) / 2.0;
+                client
+                    .call(
+                        display,
+                        "click",
+                        &json!({
+                            "x": x, "y": y, "scope": "desktop",
+                        }),
+                        &[],
+                    )
+                    .await?;
+                client
+                    .call(
+                        display,
+                        "hotkey",
+                        &json!({
+                            "pid": bind.pid, "window_id": bind.window_id,
+                            "keys": ["ctrl", "a"], "delivery_mode": "foreground",
+                        }),
+                        &[],
+                    )
+                    .await?;
+                if text.is_empty() {
+                    client
+                        .call(
+                            display,
+                            "press_key",
+                            &json!({
+                                "pid": bind.pid, "window_id": bind.window_id,
+                                "key": "backspace", "delivery_mode": "foreground",
+                            }),
+                            &[],
+                        )
+                        .await?;
+                } else {
+                    super::clipboard::paste(client, display, &text).await?;
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    } else if !text.is_ascii() || text.contains('\n') {
+        super::clipboard::paste(client, display, &text).await?;
     } else if !text.is_empty() {
         client
             .call(
@@ -509,6 +612,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_typing_requires_a_unique_visible_web_field() {
+        let entry = json!({"label":"Email","role":"entry","in_web_content":true,"frame":{"w":100,"h":20},"element_token":"s1:1"});
+        assert_eq!(
+            unique_native_web_entry(&json!({"elements":[entry.clone()]}), "Email").unwrap()["element_token"],
+            "s1:1"
+        );
+        assert!(
+            unique_native_web_entry(&json!({"elements":[entry.clone(),entry.clone()]}), "Email")
+                .is_err()
+        );
+        let mut chrome = entry.clone();
+        chrome["in_web_content"] = json!(false);
+        assert!(unique_native_web_entry(&json!({"elements":[chrome]}), "Email").is_err());
+        let mut hidden = entry;
+        hidden["frame"]["w"] = json!(0);
+        assert!(unique_native_web_entry(&json!({"elements":[hidden]}), "Email").is_err());
+    }
+
+    #[test]
     fn detects_snapshot_scoped_refs() {
         assert!(is_cua_ref("p1:1"));
         assert!(is_cua_ref("p28:12"));
@@ -518,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_snapshot_becomes_cdp_page() {
+    fn semantic_snapshot_becomes_browser_page() {
         let raw = json!({
             "status": "ok",
             "outline": "- button \"Smoke Click\"\n- textbox \"Smoke Entry\"",

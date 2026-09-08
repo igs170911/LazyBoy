@@ -1,14 +1,10 @@
 //! Skills taught by demonstration.
 //!
-//! Flow: the human presses "teach it a task", takes control of the bot's
-//! desktop and does the task once. Meanwhile a CDP recorder inside the
-//! desktop logs *semantic* browser events (which control was clicked, what
-//! text went into which field, which URL loaded) and a poller keeps window
-//! titles plus a few keyframes. When the human stops, a model distils the
-//! trace into an intent-level playbook (goal, inputs, steps described by
-//! meaning, how to verify). Later runs get the playbook and execute it with the
-//! ordinary tools, locating controls on the live screen instead of replaying
-//! coordinates.
+//! The human demonstrates on the shared desktop. Cua observations supply
+//! window changes and keyframes; Cua trajectory recording adds actions invoked
+//! through the driver. Trajectories do not record raw human VNC input. A model
+//! distils the available visual evidence into an intent-level playbook, which
+//! later runs execute using controls located on the current screen.
 
 use std::time::Duration;
 
@@ -304,7 +300,7 @@ async fn start_skill(
             &skill_id,
             &bot_id,
             &format!(
-                "開始學習：{goal}\n畫面交給你了，請直接在上面示範一次。我會記錄你點了哪些控制項、輸入了什麼、去了哪些頁面（密碼欄位不會記錄）。做完請按「完成示範」。"
+                "開始學習：{goal}\n畫面交給你了，請直接在上面示範一次。我會擷取示範中的畫面與視窗變化，整理成可供你確認的流程草稿。每個步驟完成後請稍停一下，做完請按「完成示範」。"
             ),
         )
         .await;
@@ -1051,10 +1047,17 @@ async fn finalize(
     .await;
 
     if let Some(thread_id) = &row.thread_id {
-        let mut body = format!("我學會了「{name}」。\n{}", summarize_playbook(&playbook));
-        if error.is_some() {
-            body.push_str("\n\n（模型整理失敗，這是依事件直接列出的版本，建議先修改再儲存。）");
-        }
+        let mut body = if error.is_some() {
+            format!(
+                "已保留「{name}」的示範，但模型整理失敗，流程草稿尚未完成。請補齊並確認步驟後再儲存。\n{}",
+                summarize_playbook(&playbook)
+            )
+        } else {
+            format!(
+                "已整理「{name}」的流程草稿，請先確認內容。\n{}",
+                summarize_playbook(&playbook)
+            )
+        };
         body.push_str("\n\n確認名稱後按「儲存」，之後跟我說「執行");
         body.push_str(&name);
         body.push_str("」就會照這個流程做；或先「試跑」看看。");
@@ -1237,9 +1240,9 @@ fn pick_frames(frames: &[Value]) -> Vec<Value> {
     picked
 }
 
-const DISTILL_SYSTEM: &str = "You turn a human's one-time screen demonstration into a reusable skill for a computer-use agent that controls the same Linux desktop (Chromium via a DOM snapshot/click/type tool, plus screenshots and xdotool for native windows).
+const DISTILL_SYSTEM: &str = "You turn a human's one-time screen demonstration into a reusable skill for a computer-use agent that controls the same Linux desktop (Cua browser and native element tools, plus shared-desktop screenshots).
 
-You receive: the human's stated goal, a timeline of what they did (semantic browser events: which control was clicked by its label/text, what text was typed into which field, which URLs loaded, active window titles) and a few screenshots taken along the way. The trace is noisy: ignore mis-clicks, corrections, tab switches and anything unrelated to the goal.
+You receive the human's stated goal, window changes and screenshots captured during the demonstration. Driver-invoked actions may also appear, but raw human clicks and keystrokes are not recorded as semantic events. Infer steps only when the visual evidence supports them; mark missing or ambiguous steps for user review instead of inventing an action. Ignore corrections, tab switches and anything unrelated to the goal.
 
 Produce a playbook that captures INTENT and PROCESS, never pixel positions:
 - Describe each step by what it achieves and which control to use, named by its visible label/role/page (e.g. \"在 Wikipedia 首頁的搜尋框輸入 <主題> 並按 Enter\"), so the agent can find it on a slightly different layout.

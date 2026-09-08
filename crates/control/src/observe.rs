@@ -26,7 +26,7 @@ pub fn observation_from_png(
 }
 
 /// Pixel size of a captured frame, or `None` when the bytes are not decodable.
-/// Each driver captures with a different codec (the legacy pipeline emits JPEG
+/// Capture inputs may use different codecs (imported frames may be JPEG
 /// from `xwd | convert`, the Cua driver writes PNG), so the dimensions have to
 /// come from the frame itself rather than from a configured constant.
 pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
@@ -138,7 +138,7 @@ mod tests {
             .unwrap();
         assert_eq!(image_dimensions(&png.into_inner()), Some((96, 48)));
 
-        // The legacy driver captures JPEG, so a hardcoded size would drift the
+        // Imported captures can use JPEG, so a hardcoded size would drift the
         // moment the Xvfb geometry changes.
         let mut jpeg = Cursor::new(Vec::new());
         JpegEncoder::new_with_quality(&mut jpeg, 60)

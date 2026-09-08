@@ -73,3 +73,7 @@
 
 .slash-suggestions button[aria-selected="true"]{background:rgba(255,255,255,.08)}
 .slash-suggestions small{flex-shrink:0;color:var(--muted);font-size:11px}
+
+.message{padding-bottom:21px}
+.message-time{position:absolute;bottom:0;left:0;font-size:11px;line-height:17px;color:var(--muted);font-variant-numeric:tabular-nums}
+.message.user .message-time{left:auto;right:28px}
