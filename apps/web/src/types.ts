@@ -11,8 +11,8 @@ export interface RoomMember { id:string; name:string; avatarColor:string; avatar
 export interface Room { id:string; name:string; members:RoomMember[]; lastMessageAt:string|null; lastPreview:string|null; unreadCount:number }
 export interface ComputerStatus { botId:string; mode:ComputerMode; state:ComputerState; sharedInput?:boolean; controlHolder:"none"|"bot"|"user"; takeoverRequested:boolean; busyBotName:string|null; busySessionId:string|null; busyRunId:string|null; busyStep?:string|null; usingComputer?:boolean; waitingRunId?:string|null; waitingSessionId?:string|null; queuedRuns?:number; display:string|null; profileMode:string; screenAvailable:boolean }
 /** One line of the live trail a run writes while it works. */
-export type RunActivityKind = "run"|"model"|"tool"|"retry"|"notice";
-export interface RunActivityEntry { id:number; kind:RunActivityKind; createdAt:string; turn?:number|null; event?:string|null; task?:string|null; reason?:string|null; turns?:number|null; limit?:number|null; error?:string|null; name?:string|null; step?:string|null; status?:string|null; elapsedMs?:number|null; toolCalls?:number|null; text?:string|null; snippet?:string|null; attempt?:number|null; gaveUp?:boolean|null }
+export type RunActivityKind = "run"|"model"|"tool"|"retry"|"notice"|"memory";
+export interface RunActivityEntry { memories?:{id:string;revision:number}[]; enabled?:boolean; botId?:string; id:number; kind:RunActivityKind; createdAt:string; turn?:number|null; event?:string|null; task?:string|null; reason?:string|null; turns?:number|null; limit?:number|null; error?:string|null; name?:string|null; step?:string|null; status?:string|null; elapsedMs?:number|null; toolCalls?:number|null; text?:string|null; snippet?:string|null; attempt?:number|null; gaveUp?:boolean|null }
 export interface RunActivityError { code:string; headline:string; action?:string; raw:string }
 export interface RunActivity { runId:string; status:string; turn:number|null; turnLimit:number|null; step:string|null; stepAt?:string|null; elapsedMs:number|null; error:RunActivityError|null; activity:RunActivityEntry[] }
 
@@ -48,3 +48,5 @@ export interface VoiceSettings {
 export interface WorkspaceProvider { id:ModelProviderId; name:string; needsBaseUrl:boolean; needsKey:boolean; defaultBaseUrl:string|null; defaultModel:string|null }
 export interface WorkspaceModel { id:string; name:string }
 export interface WorkspaceSettings { provider:ModelProviderId; modelId:string; baseUrl:string; apiKeySet:boolean; envKeySet:boolean; envKeyName:string; providers:WorkspaceProvider[]; models:WorkspaceModel[] }
+
+export interface MemoryStatus { globallyEnabled:boolean; embeddingStatus:"disabled"|"loading"|"ready"|"busy"|"unavailable"; storedCount:number; indexedCount:number }

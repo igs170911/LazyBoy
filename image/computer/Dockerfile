@@ -34,6 +34,9 @@ WORKDIR /src/libs/cua-driver/rust
 COPY image/computer/cua-color.rs crates/cursor-overlay/src/lazyboy_color.rs
 COPY image/computer/cua-color.patch /tmp/cua-color.patch
 RUN patch --batch --fuzz=0 -p1 < /tmp/cua-color.patch
+COPY image/computer/cua-browser-cursor.rs crates/platform-linux/src/lazyboy_browser_cursor.rs
+COPY image/computer/cua-browser-cursor.patch /tmp/cua-browser-cursor.patch
+RUN patch --batch --fuzz=0 -p1 < /tmp/cua-browser-cursor.patch
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/libs/cua-driver/rust/target,id=lazyboy-cua-cjk,sharing=locked \
     cargo build --locked --release -p cua-driver --features portal-input \
@@ -182,6 +185,7 @@ COPY --chmod=755 scripts/cua-clipboard-test.py /usr/local/bin/lazyboy-cua-clipbo
 COPY --chmod=755 scripts/cua-session-test.py /usr/local/bin/lazyboy-cua-session-test
 COPY --chmod=755 scripts/cua-cursor-test.py /usr/local/bin/lazyboy-cua-cursor-test
 COPY --chmod=755 scripts/cua-cursor-color-test.py /usr/local/bin/lazyboy-cua-cursor-color-test
+COPY --chmod=755 scripts/cua-observe-http-test.py /usr/local/bin/lazyboy-cua-observe-http-test
 COPY --chmod=755 scripts/cua-isolation-test.py /usr/local/bin/lazyboy-cua-isolation-test
 COPY --chmod=755 scripts/cua-smoke-test.sh /usr/local/bin/lazyboy-cua-smoke-host
 

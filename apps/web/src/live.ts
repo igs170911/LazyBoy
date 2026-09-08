@@ -4,10 +4,14 @@
 // subscribe, decode, drop replays, and collapse a burst into one refresh.
 
 export type SessionEventKind =
+  | "reply.started"
+  | "reply.delta"
+  | "reply.reset"
   | "message.created"
   | "run.started"
   | "run.paused"
   | "run.failed"
+  | "run.cancelled"
   | "run.completed"
   | "session.cleared";
 
@@ -17,10 +21,12 @@ export type SessionEventKind =
  * caller's safety poll still picks anything new up within a few seconds.
  */
 export const SESSION_EVENT_TYPES: SessionEventKind[] = [
+  "reply.started", "reply.delta", "reply.reset",
   "message.created",
   "run.started",
   "run.paused",
   "run.failed",
+  "run.cancelled",
   "run.completed",
   "session.cleared",
 ];

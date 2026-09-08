@@ -74,6 +74,7 @@ export function shortDuration(ms?: number | null): string {
 }
 
 function kindLabel(kind: string): string {
+  if (kind === "memory") return t("monitorKindMemory");
   if (kind === "model") return t("monitorKindModel");
   if (kind === "tool") return t("monitorKindTool");
   if (kind === "retry") return t("monitorKindRetry");
@@ -100,6 +101,9 @@ export function trailText(entry: RunActivityEntry): string {
     if (entry.event === "retry") return t("monitorRunRetry");
     return entry.text || entry.reason || t("monitorKindRun");
   }
+  if (entry.kind === "memory") {
+    return entry.enabled === false ? t("monitorMemoryDisabled") : t("monitorMemoryUsed", {count:entry.memories?.length ?? 0,time:shortDuration(entry.elapsedMs)});
+  }
   if (entry.kind === "model") {
     const head = t("monitorModelTurn", { turn: entry.turn ?? 0, time: shortDuration(entry.elapsedMs) });
     return entry.text ? `${head} — ${entry.text}` : head;
@@ -118,6 +122,23 @@ export function trailText(entry: RunActivityEntry): string {
     return entry.error ? `${head} — ${entry.error}` : head;
   }
   return entry.text || t("monitorKindNotice");
+}
+
+function MemoryUsage({runId,activityId}:{runId:string;activityId:number}) {
+  const[open,setOpen]=useState(false);
+  const[items,setItems]=useState<{id:string;revision:number;content:string|null}[]|null>(null);
+  const[error,setError]=useState(false);
+  useEffect(()=>{
+    if(!open)return;
+    let stopped=false;setError(false);setItems(null);
+    api<{id:string;revision:number;content:string|null}[]>(`/api/runs/${runId}/memories/${activityId}`)
+      .then(result=>{if(!stopped)setItems(result)}).catch(()=>{if(!stopped)setError(true)});
+    return()=>{stopped=true};
+  },[open,runId,activityId]);
+  return <span className="run-memory-usage" onKeyDown={e=>e.stopPropagation()}>
+    <button type="button" className="outline" aria-expanded={open} onClick={e=>{e.stopPropagation();setOpen(value=>!value)}}>{t("memoryViewIncluded")}</button>
+    {open&&<span className="run-memory-list">{error?t("monitorLoadFailed"):items===null?t("memoryLoadingIncluded"):items.map(item=><span className="run-memory-item" key={`${item.id}:${item.revision}`}><small>{t("memoryRevision",{revision:item.revision})}</small><span>{item.content??t("memoryHistoricalUnavailable")}</span></span>)}</span>}
+  </span>
 }
 
 function clockOf(createdAt: string): string {
@@ -164,8 +185,9 @@ export function RunProbe({ runId, align = "start", label, children }: { runId?: 
   const [entries, setEntries] = useState<RunActivityEntry[]>([]);
   const [stale, setStale] = useState(false);
   const [copied, setCopied] = useState<boolean | null>(null);
-  const [box, setBox] = useState<{ left: number; bottom: number } | null>(null);
+  const [box, setBox] = useState<{ left: number; top: number } | null>(null);
   const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const panelRef = useRef<HTMLSpanElement | null>(null);
   const listRef = useRef<HTMLSpanElement | null>(null);
   const lastId = useRef(0);
   const followTail = useRef(true);
@@ -189,10 +211,13 @@ export function RunProbe({ runId, align = "start", label, children }: { runId?: 
     const rect = node.getBoundingClientRect();
     const width = Math.min(PANEL_WIDTH, window.innerWidth - 24);
     const edge = align === "end" ? rect.right - width : rect.left;
-    setBox({
-      left: Math.max(12, Math.min(edge, window.innerWidth - 12 - width)),
-      bottom: Math.max(12, window.innerHeight - rect.top + 8),
-    });
+    const height=Math.min(panelRef.current?.getBoundingClientRect().height||260,window.innerHeight-24);
+    const above=rect.top>window.innerHeight-rect.bottom;
+    const next={
+      left:Math.max(12,Math.min(edge,window.innerWidth-12-width)),
+      top:Math.max(12,Math.min(above?rect.top-height-8:rect.bottom+8,window.innerHeight-height-12)),
+    };
+    setBox(current=>current?.left===next.left&&current?.top===next.top?current:next);
   }, [align]);
 
   useEffect(() => {
@@ -229,7 +254,10 @@ export function RunProbe({ runId, align = "start", label, children }: { runId?: 
     if (!open) return;
     place();
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    window.addEventListener("scroll",place,true);
+    const observer=new ResizeObserver(place);
+    if(panelRef.current)observer.observe(panelRef.current);
+    return () => {window.removeEventListener("resize",place);window.removeEventListener("scroll",place,true);observer.disconnect()};
   }, [open, place]);
 
   useEffect(() => {
@@ -300,8 +328,9 @@ export function RunProbe({ runId, align = "start", label, children }: { runId?: 
       {children}
       {open ? (
         <span
+          ref={panelRef}
           className={`run-monitor ${pinned ? "pinned" : ""}`}
-          style={box ? { left: box.left, bottom: box.bottom, width: Math.min(PANEL_WIDTH, window.innerWidth - 24) } : { display: "none" }}
+          style={box ? { left: box.left, top: box.top, width: Math.min(PANEL_WIDTH, window.innerWidth - 24) } : { display: "none" }}
           role="dialog"
           aria-label={t("monitorTitle")}
           onMouseEnter={hoverIn}
@@ -315,7 +344,7 @@ export function RunProbe({ runId, align = "start", label, children }: { runId?: 
             </span>
           </span>
           <span className={`run-monitor-step ${snapshot?.error ? "bad" : ""}`}>
-            {snapshot?.step ? t("monitorNow", { step: snapshot.step }) : snapshot?.error?.headline || t("monitorEmpty")}
+            {snapshot?.status==="completed"?t("monitorCompletedLabel"):snapshot?.status==="cancelled"?t("monitorCancelledLabel"):snapshot?.error?.headline||(snapshot?.step?t("monitorNow",{step:snapshot.step}):entries.length?t("monitorRecordedLabel"):t("monitorEmpty"))}
           </span>
           <span
             className="run-monitor-list"
@@ -330,7 +359,7 @@ export function RunProbe({ runId, align = "start", label, children }: { runId?: 
               <span className={`run-line kind-${entry.kind} ${entry.status && entry.status !== "ok" ? `is-${entry.status}` : ""}`} key={entry.id}>
                 <span className="run-line-clock">{clockOf(entry.createdAt)}</span>
                 <span className="run-line-kind">{kindLabel(entry.kind)}</span>
-                <span className="run-line-text">{trailText(entry)}</span>
+                <span className="run-line-text">{trailText(entry)}{entry.kind==="memory"&&Boolean(entry.memories?.length)&&runId&&<MemoryUsage runId={runId} activityId={entry.id}/>}</span>
               </span>
             ))}
           </span>

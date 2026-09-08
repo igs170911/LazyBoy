@@ -161,12 +161,15 @@ impl AppState {
             .await
             .map_err(|error| error.to_string())?;
         let sandbox = sandbox_from_env();
+        let memory = MemoryService::from_env();
+        memory.warmup();
+        memory.start_indexer(pool.clone());
         Ok(Self {
             db: Db { pool },
             sandbox,
             data_dir: std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".into()),
             auth: AuthConfig::from_env(),
-            memory: MemoryService::from_env(),
+            memory,
             mcp: McpHub::new(),
             calls: CallRegistry::default(),
             wakes: WakeBus::default(),

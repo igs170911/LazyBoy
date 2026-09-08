@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -14,12 +16,14 @@ pub const PRIMARY_SOCKET: &str = "/tmp/lazyboy/cua.sock";
 #[derive(Debug, Clone)]
 pub struct CuaClient {
     bin: PathBuf,
+    motion_sessions: Arc<tokio::sync::Mutex<HashMap<(PathBuf, String), SystemTime>>>,
 }
 
 impl Default for CuaClient {
     fn default() -> Self {
         Self {
             bin: PathBuf::from("cua-driver"),
+            motion_sessions: Arc::default(),
         }
     }
 }
@@ -51,10 +55,7 @@ impl CuaClient {
                 return name;
             }
         }
-        format!(
-            "lazyboy-{}",
-            normalize_display(display).trim_start_matches(':')
-        )
+        format!("lazyboy-{number}")
     }
 
     pub fn dbus_file(display: &str) -> PathBuf {
@@ -93,6 +94,45 @@ impl CuaClient {
         Ok(text)
     }
 
+    // Apply Cua's supported motion settings once per named session/daemon.
+    // Short, tight glides avoid the driver's 750 ms default flight.
+    async fn configure_cursor_motion(&self, screen: &str, body: &Value, force: bool) {
+        let Some(session) = body.get("session").and_then(Value::as_str) else {
+            return;
+        };
+        let socket = Self::socket_for_display(screen);
+        let Ok(stamp) = std::fs::metadata(&socket).and_then(|meta| meta.modified()) else {
+            return;
+        };
+        let key = (socket, session.to_owned());
+        {
+            let configured = self.motion_sessions.lock().await;
+            if !force && configured.get(&key) == Some(&stamp) {
+                return;
+            }
+        }
+        let _ = tokio::time::timeout(
+            Duration::from_millis(500),
+            self.attempt(
+                screen,
+                "set_agent_cursor_motion",
+                &json!({
+                    "session":session,"glide_duration_ms":120,"turn_radius":8,
+                    "spring":1,"dwell_after_click_ms":40,
+                }),
+                &[],
+            ),
+        )
+        .await;
+        let mut configured = self.motion_sessions.lock().await;
+        if configured.len() >= 128 {
+            configured.clear();
+        }
+        // Remember the attempt even when the tool refuses, so a missing or
+        // slow overlay cannot add 500 ms to every later click.
+        configured.insert(key, stamp);
+    }
+
     pub async fn call(
         &self,
         screen: &str,
@@ -101,17 +141,21 @@ impl CuaClient {
         extra: &[&str],
     ) -> Result<Value, ControlError> {
         let mut body = with_session_label(screen, payload);
+        if needs_cursor_motion(tool) {
+            self.configure_cursor_motion(screen, &body, false).await;
+        }
         let mut escalated = false;
         let mut revived = false;
         loop {
             let outcome = self.attempt(screen, tool, &body, extra).await?;
             if outcome.session_ended && !revived && tool != "start_session" {
-                let session = with_session_label(screen, &json!({}));
+                let session = json!({"session":body["session"]});
                 let started = self.attempt(screen, "start_session", &session, &[]).await?;
                 if let Some(error) = started.error {
                     return Err(error);
                 }
                 revived = true;
+                self.configure_cursor_motion(screen, &body, true).await;
                 if !read_after_session_restart(tool) {
                     return Err(ControlError::StaleReference);
                 }
@@ -196,6 +240,26 @@ fn public_agent_name(name: &str) -> String {
         .filter(|ch| !ch.is_control())
         .take(80)
         .collect()
+}
+
+fn needs_cursor_motion(tool: &str) -> bool {
+    matches!(
+        tool,
+        "click"
+            | "drag"
+            | "move_cursor"
+            | "scroll"
+            | "type_text"
+            | "press_key"
+            | "hotkey"
+            | "mouse_button_down"
+            | "mouse_button_up"
+            | "mouse_drag"
+            | "browser_click"
+            | "browser_type"
+            | "browser_navigate"
+            | "set_value"
+    )
 }
 
 fn read_after_session_restart(tool: &str) -> bool {
@@ -440,6 +504,63 @@ mod tests {
             super::public_agent_name(&"小".repeat(100)).chars().count(),
             80
         );
+    }
+
+    #[test]
+    fn session_label_is_the_agent_name_even_when_a_color_file_exists() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let display = ":1903";
+        let number = super::normalize_display(display)
+            .trim_start_matches(':')
+            .to_string();
+        let name_path = format!("/tmp/lazyboy/screen-{number}.agent-name");
+        let color_path = format!("/tmp/lazyboy/screen-{number}.agent-color");
+        let old_name = fs::read_to_string(&name_path).ok();
+        let old_color = fs::read_to_string(&color_path).ok();
+
+        fs::create_dir_all("/tmp/lazyboy").unwrap();
+        {
+            let mut file = File::create(&color_path).unwrap();
+            file.write_all(b"#8b5cf6").unwrap();
+        }
+        {
+            let mut file = File::create(&name_path).unwrap();
+            file.write_all("\n小幫手 Alice\n".as_bytes()).unwrap();
+        }
+        assert_eq!(
+            super::CuaClient::session_for_display(display),
+            "小幫手 Alice"
+        );
+
+        fs::remove_file(&name_path).unwrap();
+        assert_eq!(
+            super::CuaClient::session_for_display(display),
+            "lazyboy-1903"
+        );
+
+        if let Some(value) = old_name {
+            fs::write(&name_path, value).unwrap();
+        } else {
+            let _ = fs::remove_file(&name_path);
+        }
+        if let Some(value) = old_color {
+            fs::write(&color_path, value).unwrap();
+        } else {
+            let _ = fs::remove_file(&color_path);
+        }
+    }
+
+    #[test]
+    fn cursor_motion_is_only_configured_before_visible_input() {
+        assert!(super::needs_cursor_motion("click"));
+        assert!(super::needs_cursor_motion("browser_click"));
+        assert!(super::needs_cursor_motion("type_text"));
+        assert!(!super::needs_cursor_motion("get_desktop_state"));
+        assert!(!super::needs_cursor_motion("list_windows"));
+        assert!(!super::needs_cursor_motion("health_report"));
+        assert!(!super::needs_cursor_motion("set_agent_cursor_motion"));
     }
 
     use super::*;

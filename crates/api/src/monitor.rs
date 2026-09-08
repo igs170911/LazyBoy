@@ -21,7 +21,67 @@ const MAX_ACTIVITY_LIMIT: i32 = 200;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/runs/{id}/activity", get(activity))
+        .route("/api/runs/{id}/memories/{activity_id}", get(memory_usage))
         .route("/api/runs/{id}/retry", post(retry))
+}
+
+/// Read the exact historical revisions included in a run. Deleted memories
+/// and revisions removed by retention remain unavailable, even in old runs.
+async fn memory_usage(
+    State(state): State<AppState>,
+    Path((run_id, activity_id)): Path<(String, i64)>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = state.bootstrap().await.map_err(internal)?;
+    memory_usage_items(state.pool(), &actor, &run_id, activity_id).await
+}
+
+async fn memory_usage_items(
+    pool: &sqlx::PgPool,
+    actor: &Actor,
+    run_id: &str,
+    activity_id: i64,
+) -> Result<Json<Value>, ApiError> {
+    let payload: Option<Value> = sqlx::query_scalar(
+        "SELECT a.payload FROM run_activity a JOIN runs r ON r.id=a.run_id
+         WHERE a.id=$1 AND r.id=$2 AND a.kind='memory' AND r.space_id=$3 AND r.user_id=$4",
+    )
+    .bind(activity_id)
+    .bind(run_id)
+    .bind(&actor.space_id)
+    .bind(&actor.user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(internal)?;
+    let payload = payload.ok_or_else(|| not_found("memory activity not found"))?;
+    let references = payload
+        .get("memories")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let items: Vec<(String, i32, Option<String>)> = sqlx::query_as(
+        "SELECT refs.id::text,refs.revision,v.content
+         FROM jsonb_to_recordset($1) AS refs(id uuid,revision integer)
+         JOIN runs r ON r.id=$2 AND r.space_id=$3 AND r.user_id=$4
+         LEFT JOIN memory_items m ON m.id=refs.id AND m.bot_id=r.bot_id
+           AND m.space_id=r.space_id AND m.user_id=r.user_id AND m.deleted_at IS NULL
+         LEFT JOIN memory_revisions v ON v.memory_id=m.id AND v.revision=refs.revision
+           AND v.bot_id=r.bot_id AND v.space_id=r.space_id AND v.user_id=r.user_id
+         LIMIT 50",
+    )
+    .bind(references)
+    .bind(run_id)
+    .bind(&actor.space_id)
+    .bind(&actor.user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!(
+        items
+            .into_iter()
+            .map(|(id, revision, content)| {
+                json!({"id":id,"revision":revision,"content":content})
+            })
+            .collect::<Vec<_>>()
+    )))
 }
 
 /// Append one line to the run's trail. Diagnostics never fail a run: a write
@@ -427,7 +487,7 @@ fn internal(error: sqlx::Error) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunFailure, clamp_strings, classify_run_error, failure_message, snippet};
+    use super::{Actor, RunFailure, clamp_strings, classify_run_error, failure_message, snippet};
     use serde_json::json;
 
     fn code(error: &str) -> String {
@@ -536,5 +596,94 @@ mod tests {
             51
         );
         assert_eq!(clamped["n"].as_i64(), Some(7));
+    }
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn memory_usage_is_historical_scoped_and_respects_deletion(pool: sqlx::PgPool) {
+        sqlx::query("INSERT INTO users(id,name) VALUES ('u','test')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO spaces(id,user_id,name) VALUES ('s','u','test')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for bot in ["a", "b"] {
+            sqlx::query("INSERT INTO bots(id,space_id,user_id,name) VALUES ($1,'s','u',$1)")
+                .bind(bot)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO threads(id,space_id,user_id,bot_id) VALUES ('t','s','u','a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO runs(id,space_id,user_id,bot_id,thread_id,status) VALUES ('r','s','u','a','t','completed')").execute(&pool).await.unwrap();
+        let own = uuid::Uuid::new_v4();
+        let other = uuid::Uuid::new_v4();
+        for (id, bot) in [(own, "a"), (other, "b")] {
+            sqlx::query("INSERT INTO memory_items(id,space_id,user_id,bot_id,content,revision) VALUES ($1,'s','u',$2,'edited content',2)")
+                .bind(id).bind(bot).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO memory_revisions(memory_id,revision,space_id,user_id,bot_id,content,importance,action) VALUES ($1,1,'s','u',$2,'original content',0.5,'create')")
+                .bind(id).bind(bot).execute(&pool).await.unwrap();
+        }
+        let activity: i64 = sqlx::query_scalar(
+            "INSERT INTO run_activity(run_id,kind,payload) VALUES ('r','memory',$1) RETURNING id",
+        )
+        .bind(json!({"memories":[{"id":own,"revision":1},{"id":other,"revision":1}]}))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let actor = Actor {
+            user_id: "u".into(),
+            space_id: "s".into(),
+        };
+        let data = super::memory_usage_items(&pool, &actor, "r", activity)
+            .await
+            .unwrap()
+            .0;
+        let own_row = data
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == own.to_string())
+            .unwrap();
+        assert_eq!(own_row["content"], "original content");
+        let other_row = data
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == other.to_string())
+            .unwrap();
+        assert!(other_row["content"].is_null());
+        let outsider = Actor {
+            user_id: "someone-else".into(),
+            space_id: "s".into(),
+        };
+        assert!(
+            super::memory_usage_items(&pool, &outsider, "r", activity)
+                .await
+                .is_err()
+        );
+        assert!(
+            super::memory_usage_items(&pool, &actor, "another-run", activity)
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE memory_items SET deleted_at=now() WHERE id=$1")
+            .bind(own)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let data = super::memory_usage_items(&pool, &actor, "r", activity)
+            .await
+            .unwrap()
+            .0;
+        assert!(
+            data.as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["content"].is_null())
+        );
     }
 }

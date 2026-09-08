@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import ts from '../apps/web/node_modules/typescript/lib/typescript.js';
+async function moduleFrom(path){
+  const {outputText}=ts.transpileModule(readFileSync(new URL(path,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}});
+  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+}
+const {applyReplyEvent}=await moduleFrom('../apps/web/src/reply-stream.ts');
+const {subscribeToSession}=await moduleFrom('../apps/web/src/live.ts');
+let state={},listeners={};
+const feed=subscribeToSession('thread',event=>state=applyReplyEvent(state,event),{source:()=>({addEventListener:(kind,fn)=>listeners[kind]=fn,close(){}})});
+const emit=(kind,id,payload)=>listeners[kind]({lastEventId:String(id),data:JSON.stringify(payload)});
+emit('reply.started',1,{runId:'a',botId:'bot-a',generation:'first'});
+emit('reply.delta',2,{runId:'a',generation:'first',text:'你好'});
+emit('reply.delta',2,{runId:'a',generation:'first',text:'你好'});
+assert.equal(state.a.text,'你好','reconnect replay is not appended twice');
+emit('reply.started',3,{runId:'b',botId:'bot-b',generation:'parallel'});
+emit('reply.delta',4,{runId:'b',generation:'parallel',text:'另一位'});
+emit('reply.started',5,{runId:'a',botId:'bot-a',generation:'retry'});
+emit('reply.delta',6,{runId:'a',generation:'first',text:'late failed attempt'});
+assert.equal(state.a.text,'');assert.equal(state.b.text,'另一位');
+emit('reply.delta',7,{runId:'a',generation:'retry',text:'重試回覆'});
+emit('reply.reset',8,{runId:'a',generation:'first'});assert.equal(state.a.text,'重試回覆');
+emit('run.paused',9,{runId:'a'});assert.equal(state.a,undefined);
+emit('message.created',10,{runId:'b',role:'user',id:'steering',body:'keep going'});assert.equal(state.b.text,'另一位');
+emit('message.created',11,{runId:'b',role:'assistant',id:'answer',body:'完整回覆'});assert.equal(state.b.messageId,'answer');assert.equal(state.b.text,'完整回覆');
+emit('run.completed',12,{runId:'b'});assert.equal(state.b.messageId,'answer','keep final text until transcript fetch catches up');
+emit('reply.started',13,{runId:'c',botId:'bot-c',generation:'last'});
+emit('session.cleared',14,{});assert.deepEqual(state,{});
+emit('reply.started',15,{runId:'stop',botId:'bot-a',generation:'stopping'});
+emit('reply.delta',16,{runId:'stop',generation:'stopping',text:'partial'});
+emit('run.cancelled',17,{runId:'stop'});assert.deepEqual(state,{});
+feed.close();console.log('Reply stream: replay, retry isolation, concurrent agents, pause, final message and clear passed');
