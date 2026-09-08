@@ -172,6 +172,9 @@ pub struct ComputerStatus {
     pub mode: ComputerMode,
     pub kind: SandboxKind,
     pub state: ComputerState,
+    /// Human input is independent of the agent execution/pause lease.
+    #[serde(default)]
+    pub shared_input: bool,
     pub control_holder: ControlHolder,
     pub control_bot_id: Option<String>,
     pub takeover_requested: bool,

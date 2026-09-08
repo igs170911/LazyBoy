@@ -128,7 +128,7 @@ async fn upstream_target(
         .sandbox
         .connect_screen(
             &computer_ref,
-            computer::user_has_screen_control(&computer, screen.as_ref(), bot_id),
+            computer::user_can_interact(&computer, screen.as_ref(), bot_id),
             &computer::adapter_context_for(&actor, bot_id, "view", screen.as_ref(), None),
         )
         .await

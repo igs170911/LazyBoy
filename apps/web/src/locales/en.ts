@@ -2,6 +2,9 @@ import type { zhTW } from "./zh-TW";
 
 /** English UI copy. Keys must stay in lockstep with zh-TW. */
 export const en: { [K in keyof typeof zhTW]: string } = {
+  sharedDesktop: "Shared control",
+  sharedNeedsUser: "{name} is waiting for you to finish the steps on screen. Then press “Done, continue”.",
+  doneContinue: "Done, continue",
   search: "Search",
   sharedComputer: "Shared computer",
   privateComputer: "Private computer",

@@ -9,7 +9,7 @@ use lazyboy_contracts::{
 use lazyboy_control::{
     AdapterContext, CommandRequest, EnsureScreenRequest, ProvisionRequest, admit_gui,
     admit_new_screen, browser_profile_path, execution_blocks_user_takeover, profile_lock_key,
-    screen_layout, team_bot_workspace_directory, user_holds_control,
+    screen_layout, team_bot_workspace_directory,
 };
 use uuid::Uuid;
 
@@ -46,6 +46,7 @@ pub fn status_from(
         mode: parse_mode(&computer.scope),
         kind: parse_kind(&computer.kind),
         state: parse_state(&computer.state),
+        shared_input: true,
         control_holder,
         control_bot_id,
         takeover_requested: false,
@@ -910,7 +911,7 @@ pub async fn takeover(
             &thread_id,
             &run_id,
             bot_id,
-            "你已接手操作。完成後釋放控制權，我會從目前畫面繼續。",
+            "我已暫停等你操作。完成後按「完成，繼續」，我會從目前畫面接著做。",
         )
         .await;
     }
@@ -998,27 +999,12 @@ pub async fn heartbeat(state: &AppState, actor: &Actor, bot_id: &str) -> Result<
     Ok(())
 }
 
-pub fn user_has_screen_control(
-    computer: &ComputerRow,
-    screen: Option<&ScreenRow>,
-    bot_id: &str,
-) -> bool {
-    if let Some(screen) = screen {
-        return user_holds_control(
-            parse_holder(&screen.control_holder),
-            Some(screen.bot_id.as_str()),
-            bot_id,
-            screen.control_lease_expires_at,
-            Utc::now(),
-        );
-    }
-    user_holds_control(
-        parse_holder(&computer.control_holder),
-        computer.control_bot_id.as_deref(),
-        bot_id,
-        computer.control_lease_expires_at,
-        Utc::now(),
-    )
+/// Viewing/input does not acquire the human pause lease. Agent execution and
+/// explicit requests for human assistance retain their own pause/resume flow.
+pub fn user_can_interact(computer: &ComputerRow, screen: Option<&ScreenRow>, bot_id: &str) -> bool {
+    computer.state == "running"
+        && computer.provider_ref.is_some()
+        && screen.is_some_and(|screen| screen.bot_id == bot_id && screen.computer_id == computer.id)
 }
 
 pub async fn idle_loop(state: AppState) {
@@ -1226,4 +1212,79 @@ struct ActiveRunRow {
     status: String,
     thread_id: String,
     step: Option<String>,
+}
+
+#[cfg(test)]
+mod shared_input_tests {
+    use super::*;
+
+    fn desktop() -> (ComputerRow, ScreenRow) {
+        let computer = ComputerRow {
+            id: "computer".into(),
+            space_id: "space".into(),
+            user_id: "user".into(),
+            scope: "team".into(),
+            scope_key: "team:space".into(),
+            home_key: "home".into(),
+            home_revision: "1".into(),
+            kind: "docker".into(),
+            provider_ref: Some("container".into()),
+            state: "running".into(),
+            control_holder: "bot".into(),
+            control_lease_id: None,
+            control_lease_expires_at: None,
+            control_bot_id: Some("bot".into()),
+            control_run_id: None,
+            execution_run_id: Some("run".into()),
+            execution_bot_id: Some("bot".into()),
+            execution_lease_expires_at: None,
+            execution_fence: 1,
+            browser_profile_mode: "per-bot".into(),
+        };
+        let screen = ScreenRow {
+            id: "screen".into(),
+            computer_id: computer.id.clone(),
+            bot_id: "bot".into(),
+            slot: 1,
+            display: ":1".into(),
+            view_port: 6080,
+            profile_mode: "per-bot".into(),
+            profile_path: "/tmp/profile".into(),
+            control_holder: "bot".into(),
+            control_lease_id: None,
+            control_lease_expires_at: None,
+            execution_run_id: Some("run".into()),
+            execution_lease_expires_at: None,
+            execution_fence: 1,
+        };
+        (computer, screen)
+    }
+
+    #[test]
+    fn human_input_does_not_require_or_change_the_agent_lease() {
+        let (computer, mut screen) = desktop();
+        for holder in ["bot", "none", "user"] {
+            screen.control_holder = holder.into();
+            assert!(user_can_interact(&computer, Some(&screen), "bot"));
+            assert_eq!(screen.execution_run_id.as_deref(), Some("run"));
+            assert!(status_from("bot", &computer, Some(&screen), None).shared_input);
+        }
+    }
+
+    #[test]
+    fn shared_input_requires_the_bots_own_live_screen() {
+        let (mut computer, mut screen) = desktop();
+        assert!(!user_can_interact(&computer, None, "bot"));
+        assert!(!user_can_interact(&computer, Some(&screen), "other-bot"));
+        screen.computer_id = "other-computer".into();
+        assert!(!user_can_interact(&computer, Some(&screen), "bot"));
+        screen.computer_id = computer.id.clone();
+        for state in ["stopped", "booting", "suspended", "error"] {
+            computer.state = state.into();
+            assert!(!user_can_interact(&computer, Some(&screen), "bot"));
+        }
+        computer.state = "running".into();
+        computer.provider_ref = None;
+        assert!(!user_can_interact(&computer, Some(&screen), "bot"));
+    }
 }

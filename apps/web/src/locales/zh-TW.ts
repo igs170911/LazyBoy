@@ -1,5 +1,8 @@
 /** Traditional Chinese UI copy. Keep keys stable when adding another locale. */
 export const zhTW = {
+  sharedDesktop: "共同操作",
+  sharedNeedsUser: "{name} 已暫停等你完成畫面上的步驟。完成後按「完成，繼續」。",
+  doneContinue: "完成，繼續",
   search: "搜尋", sharedComputer: "共用電腦", privateComputer: "私人電腦",
   stopped: "已關閉", booting: "啟動中", running: "執行中", suspended: "休眠中", error: "發生錯誤",
   openComputer: "開啟電腦", stopTask: "停止任務", takeControl: "取得控制", takeOverNow: "接手操作", releaseControl: "釋放控制", done: "完成", skip: "略過",

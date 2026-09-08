@@ -99,26 +99,28 @@ fn translate_pointer(
 }
 
 fn translate_key(key: &str, modifiers: Option<&[String]>) -> TranslatedAction {
-    let key = map_key(key);
-    match modifiers {
-        Some(items) if !items.is_empty() => {
-            let mut keys: Vec<String> = items.iter().map(|item| map_key(item)).collect();
-            keys.push(key);
-            TranslatedAction::Cua {
-                tool: "hotkey",
-                payload: json!({
-                    "keys": keys,
-                    "scope": "desktop",
-                }),
-            }
+    // The public action DSL and mobile keyboard send chords as "ctrl+a".
+    // Cua requires separate keys passed to hotkey, not a literal press_key.
+    let mut keys: Vec<String> = modifiers
+        .unwrap_or_default()
+        .iter()
+        .map(|item| map_key(item))
+        .collect();
+    if key.contains('+') && key.split('+').all(|part| !part.is_empty()) {
+        keys.extend(key.split('+').map(map_key));
+    } else {
+        keys.push(map_key(key));
+    }
+    if keys.len() > 1 {
+        TranslatedAction::Cua {
+            tool: "hotkey",
+            payload: json!({ "keys": keys, "scope": "desktop" }),
         }
-        _ => TranslatedAction::Cua {
+    } else {
+        TranslatedAction::Cua {
             tool: "press_key",
-            payload: json!({
-                "key": key,
-                "scope": "desktop",
-            }),
-        },
+            payload: json!({ "key": keys[0], "scope": "desktop" }),
+        }
     }
 }
 
@@ -137,6 +139,26 @@ fn map_key(key: &str) -> String {
 mod tests {
     use super::*;
     use lazyboy_contracts::RefVerb;
+
+    #[test]
+    fn inline_shortcuts_use_hotkey_and_literal_plus_stays_a_key() {
+        for (key, expected) in [
+            ("ctrl+a", json!(["ctrl", "a"])),
+            ("alt+Left", json!(["alt", "left"])),
+            ("Control+Shift+Tab", json!(["ctrl", "shift", "tab"])),
+        ] {
+            let TranslatedAction::Cua { tool, payload } = translate_key(key, None) else {
+                panic!("expected Cua")
+            };
+            assert_eq!(tool, "hotkey");
+            assert_eq!(payload["keys"], expected);
+        }
+        let TranslatedAction::Cua { tool, payload } = translate_key("+", None) else {
+            panic!("expected Cua")
+        };
+        assert_eq!(tool, "press_key");
+        assert_eq!(payload["key"], "+");
+    }
 
     #[test]
     fn pixel_click_is_desktop_cua_click() {

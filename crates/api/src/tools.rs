@@ -186,7 +186,7 @@ pub fn tool_definitions(memory_enabled: bool) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "request_takeover".into(),
-            description: "Ask the user to take over the live screen for passwords, 2FA, CAPTCHA, or a login wall when no saved account fits. Never ask them to paste secrets in chat. Prefer use_saved_login when list_accounts has a matching site.".into(),
+            description: "Pause the task and ask the user to complete passwords, 2FA, CAPTCHA, or a login wall when no saved account fits. The shared screen already accepts their input; they press Done, continue when finished. Never ask them to paste secrets in chat. Prefer use_saved_login when list_accounts has a matching site.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{

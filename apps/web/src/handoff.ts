@@ -50,8 +50,8 @@ export function nextVeil(label: string | null, current: Veil): Veil {
   return current.leaving ? current : { label: current.label, leaving: true };
 }
 
-/** The lease is advisory inside the container, so the browser gate is what
- * actually moves the mouse: whoever holds control may send input right now. */
-export function viewOnlyFor(holder: "none" | "bot" | "user"): boolean {
-  return holder !== "user";
+/** Shared desktop input stays enabled while the agent works or waits for help.
+ * Older servers still use the exclusive holder gate. */
+export function viewOnlyFor(holder: "none" | "bot" | "user", sharedInput = false): boolean {
+  return !sharedInput && holder !== "user";
 }

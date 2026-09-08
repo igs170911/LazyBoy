@@ -382,7 +382,7 @@
         setStatus("Connecting to desktop…");
         window.parent.postMessage({ type: "lazyboy-desktop-lost" }, parentOrigin);
         rfb = new RFB(document.getElementById("screen"), url);
-        rfb.viewOnly = flag("view_only", true);
+        rfb.viewOnly = wantedViewOnly ?? flag("view_only", true);
         rfb.scaleViewport = true;
         rfb.qualityLevel = 6;
         rfb.compressionLevel = 2;
@@ -402,7 +402,11 @@
         });
         rfb.addEventListener("disconnect", (event) => {
           releaseDrag(); gesture = null;
-          applyViewOnly(true);
+          // Disable the disconnected instance without overwriting host intent.
+          rfb.viewOnly = true;
+          modifier = null;
+          if (shortcuts) shortcuts.hidden = true;
+          updatePointerControls();
           keyboard.blur(); resetKeyboard();
           window.parent.postMessage({ type: "lazyboy-desktop-lost" }, parentOrigin);
           const clean = event && event.detail && event.detail.clean;

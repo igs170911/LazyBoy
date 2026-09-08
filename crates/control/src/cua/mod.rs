@@ -172,9 +172,10 @@ impl ComputerController for CuaController {
         }
         let key = normalize_display(&ctx.display).to_string();
         let mut windows = self.windows(&ctx.display).await.unwrap_or_default();
-        let mut cache = self.browser.lock().await;
+        // The screen lock serializes this display. Never hold the shared cache
+        // lock across driver calls or waits on behalf of other displays.
+        let mut bind = self.browser.lock().await.remove(&key);
         for attempt in 0..2 {
-            let mut bind = cache.remove(&key);
             let had_bind = bind.is_some();
             match browser::run(
                 &self.client,
@@ -204,20 +205,13 @@ impl ComputerController for CuaController {
                                 | ControlError::TargetNotFound
                         ) =>
                 {
+                    bind = None;
                     windows = self.windows(&ctx.display).await.unwrap_or_default();
                 }
                 other => {
                     if let Some(mut current) = bind {
-                        current.page = match &other {
-                            Ok(page)
-                                if page.ok
-                                    && !matches!(request.action.as_str(), "probe" | "ensure") =>
-                            {
-                                Some(page.clone())
-                            }
-                            _ => None,
-                        };
-                        cache.insert(key, current);
+                        update_browser_page(&mut current, &request.action, &other);
+                        self.browser.lock().await.insert(key, current);
                     }
                     return map_browser_unavailable(other);
                 }
@@ -293,6 +287,22 @@ impl ComputerController for CuaController {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         Ok(RecordingResult { events })
     }
+}
+
+fn update_browser_page(
+    bind: &mut browser::BrowserBind,
+    action: &str,
+    result: &Result<CdpPage, ControlError>,
+) {
+    // These checks neither observe nor mutate the page. Keep the refs returned
+    // by the previous snapshot usable for the next click/type.
+    if matches!(action, "probe" | "ensure") && result.is_ok() {
+        return;
+    }
+    bind.page = match result {
+        Ok(page) if page.ok => Some(page.clone()),
+        _ => None,
+    };
 }
 
 impl CuaController {
@@ -736,6 +746,44 @@ fn observe_png_path(display: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_checks_preserve_refs_but_failed_actions_invalidate_them() {
+        let mut bind = browser::BrowserBind {
+            pid: 1,
+            window_id: 2,
+            target_id: "target".into(),
+            tab_id: "tab".into(),
+            page: Some(CdpPage {
+                ok: true,
+                title: "original snapshot".into(),
+                ..CdpPage::default()
+            }),
+        };
+        for action in ["probe", "ensure"] {
+            update_browser_page(
+                &mut bind,
+                action,
+                &Ok(CdpPage {
+                    ok: true,
+                    ..CdpPage::default()
+                }),
+            );
+            assert_eq!(bind.page.as_ref().unwrap().title, "original snapshot");
+        }
+        update_browser_page(&mut bind, "click", &Err(ControlError::StaleReference));
+        assert!(bind.page.is_none());
+        update_browser_page(
+            &mut bind,
+            "snapshot",
+            &Ok(CdpPage {
+                ok: true,
+                title: "fresh".into(),
+                ..CdpPage::default()
+            }),
+        );
+        assert_eq!(bind.page.as_ref().unwrap().title, "fresh");
+    }
 
     #[test]
     fn driver_release_reads_the_pinned_minor_series() {

@@ -648,7 +648,7 @@ async fn screen_url(
             state.db.get_screen(&computer.id, &id).await.ok().flatten()
         }
     };
-    let interactive = computer::user_has_screen_control(&computer, screen.as_ref(), &id);
+    let interactive = computer::user_can_interact(&computer, screen.as_ref(), &id);
     let _ = state
         .sandbox
         .connect_screen(
@@ -728,7 +728,7 @@ async fn input(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let screen = state.db.get_screen(&computer.id, &id).await.ok().flatten();
-    if !computer::user_has_screen_control(&computer, screen.as_ref(), &id) {
+    if !computer::user_can_interact(&computer, screen.as_ref(), &id) {
         return Err(StatusCode::CONFLICT);
     }
     let computer_ref = computer::computer_ref(&computer).ok_or(StatusCode::BAD_REQUEST)?;

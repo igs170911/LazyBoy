@@ -518,11 +518,15 @@ test('only a human moves the mouse, and the veil never holds it back',()=>{
   for(const holder of ['none','bot'])assert.equal(viewOnlyFor(holder),true,holder);
 });
 
+test('shared input stays interactive across agent ownership and pause states',()=>{
+  for(const holder of ['none','bot','user'])assert.equal(viewOnlyFor(holder,true),false,holder);
+});
+
 test('taking the screen flips the mouse on the click, not on the reply',()=>{
   const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
   const body=app.slice(app.indexOf('async function setControl('));
   const flip=body.indexOf('controlHolder:holder');
-  const gate=body.indexOf('pushViewOnly(viewOnlyFor(holder))');
+  const gate=body.indexOf('pushViewOnly(viewOnlyFor(holder,computer.sharedInput))');
   const post=body.indexOf('await api(`/api/computer/${botId}/${holder==="user"?"takeover":"release"}`');
   const readBack=body.indexOf('finally{');
   assert.ok(flip>0&&gate>0&&post>0&&readBack>0,'optimistic flip, gate, request, and read back all present');
@@ -530,15 +534,27 @@ test('taking the screen flips the mouse on the click, not on the reply',()=>{
   assert.ok(readBack>post,'the truth is read back after the request');
   assert.match(body.slice(readBack),/await refresh\(\)/);
   assert.match(body,/if\(!botId\|\|controlBusyRef\.current\)return/,'a double click cannot fight itself');
-  assert.match(app,/const listener=\(event:MessageEvent\)=>\{[\s\S]*?lazyboy-request-control[\s\S]*?void setControl\("user"\)/);
+  assert.match(app,/if\(computer\.sharedInput\)\{pushViewOnly\(!desktopInteractive\);return\}void setControl\("user"\)/);
   assert.match(app,/if\(expectedHolderRef\.current&&status\.controlHolder===expectedHolderRef\.current\)/,'agreement, not a timer, ends the handoff');
   assert.match(app,/onClick=\{onTakeOver\}/);
   assert.match(app,/onClick=\{onRelease\}/);
   assert.doesNotMatch(app,/action\(\(\)=>api\(`\/api\/computer\/[^`]*takeover/,'takeover no longer rides the global busy path');
   assert.equal((app.match(/\/api\/computer\/\$\{[^}]*\}\/(takeover|release)/g)||[]).length,0,'every handoff goes through setControl');
   assert.equal((app.match(/holder==="user"\?"takeover":"release"/g)||[]).length,1,'one request path, one owner of it');
-  assert.match(app,/void setControl\("user",active\.id\)/,'the call overlay hands over the same way');
-  assert.match(app,/await setControl\("user",id\)/,'the login screen boots, then takes the mouse without a second spinner');
+});
+
+test('shared CUA desktops hide takeover and keep the mouse live',()=>{
+  const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
+  assert.match(app,/sharedInput:true/,'the first paint already assumes shared input');
+  assert.match(app,/if\(!computer\.sharedInput\)await setControl\("user",id\)/,'opening the login screen must not pause a shared run');
+  assert.match(app,/if\(active&&!computer\.sharedInput\)void setControl\("user",active\.id\)/,'a call only takes exclusive control on older exclusive desktops');
+  assert.match(app,/computer\.sharedInput\?\(computer\.takeoverRequested\|\|computer\.controlHolder==="user"\?<button className="primary" disabled=\{busy\|\|pending\} onClick=\{onRelease\}>\{t\("doneContinue"\)\}<\/button>:null\)/);
+  assert.match(app,/computer\.sharedInput\?t\("sharedDesktop"\)/);
+  assert.match(app,/computer\.sharedInput\?t\("sharedNeedsUser"/);
+  assert.match(app,/takeover=\{computer\.takeoverRequested\|\|\(!computer\.sharedInput&&computer\.controlHolder==="user"\)\}/);
+  const vnc=fs.readFileSync('apps/web/vnc.html','utf8');
+  assert.match(vnc,/rfb\.viewOnly = true;/,'a dropped RFB is muted locally');
+  assert.doesNotMatch(vnc,/disconnect[\s\S]{0,400}applyViewOnly\(true\)/,'disconnect must not overwrite host intent');
 });
 
 test('the waiting veil covers the desktop the way it always did',()=>{
@@ -587,7 +603,7 @@ test('a desktop that is still starting is dialled again fast, a dropped session 
   assert.equal(scheduled.at(-1),1500,'a session that was really there is retried calmly');
 });
 
-test('a session dialed after a handoff starts with the mouse already handed over',()=>{
+for(const hostUpdatesDuringReconnect of [false,true])test(`reconnect preserves shared input (host update during reconnect: ${hostUpdatesDuringReconnect})`,()=>{
   const vnc=fs.readFileSync('apps/web/vnc.html','utf8');
   // Run the viewer rather than read it. The host hands the mouse over while the
   // viewer sits between two sessions: exactly the moment a fresh RFB used to
@@ -601,9 +617,11 @@ test('a session dialed after a handoff starts with the mouse already handed over
   const window={location:{pathname:'/vnc.html',protocol:'http:',host:'localhost',origin:'http://localhost',hash:''},parent,addEventListener(name,handler){if(name==='message')messages.push(handler);}};
   vm.runInNewContext(body,{window,document:{location:{href:'http://localhost/vnc.html'},getElementById:()=>element(),querySelector:()=>null},navigator:{clipboard:{}},RFB,setTimeout:(fn)=>{scheduled.push(fn);return scheduled.length},clearTimeout(){}});
   const fire=(name,event)=>instances.forEach(rfb=>(rfb._handlers[name]||[]).forEach(handler=>handler(event||{})));
-  fire('disconnect',{clean:false});
   assert.ok(messages.length,'the viewer listens for the host gate');
-  messages.forEach(handler=>handler({origin:'http://localhost',source:parent,data:{type:'lazyboy-view-only',viewOnly:false}}));
+  const allowInput=()=>messages.forEach(handler=>handler({origin:'http://localhost',source:parent,data:{type:'lazyboy-view-only',viewOnly:false}}));
+  allowInput();
+  fire('disconnect',{clean:false});
+  if(hostUpdatesDuringReconnect)allowInput();
   scheduled.at(-1)();
   fire('connect');
   assert.equal(instances.length,2,'the retry dialed a new session');

@@ -174,7 +174,8 @@ fn decode_stdout(
     let empty = Value::Null;
     let decoded = (!trimmed.is_empty())
         .then(|| parse_jsonish(trimmed))
-        .flatten();
+        .flatten()
+        .filter(Value::is_object);
     let error = if !success || trimmed.starts_with('\u{274c}') || decoded.is_none() {
         Some(classify(&combined))
     } else {
@@ -382,6 +383,11 @@ mod tests {
         let (value, error) = decode_stdout(r#"{"width":1280}"#, "", true, classify);
         assert!(error.is_none());
         assert_eq!(value["width"], 1280);
+
+        for malformed in ["null", "true", "42", "[]", r#""ok""#] {
+            let (_, error) = decode_stdout(malformed, "", true, classify);
+            assert!(error.is_some(), "non-object response accepted: {malformed}");
+        }
 
         // Prose with a zero exit code used to be reported as success.
         let (value, error) = decode_stdout("no window matched", "", true, classify);

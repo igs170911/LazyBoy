@@ -406,7 +406,7 @@ fn ref_kind(action: &serde_json::Map<String, Value>) -> String {
 
 fn coordinate(value: Option<&Value>, name: &'static str) -> Result<u32, ActionError> {
     let number = value.and_then(Value::as_f64).unwrap_or(f64::NAN).round();
-    if !number.is_finite() || number < 0.0 || number > 100_000.0 {
+    if !number.is_finite() || !(0.0..=100_000.0).contains(&number) {
         return Err(ActionError::BadCoordinate(name));
     }
     Ok(number as u32)
