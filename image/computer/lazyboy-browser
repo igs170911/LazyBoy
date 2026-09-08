@@ -16,7 +16,7 @@ else
 fi
 mkdir -p "$PROFILE"
 # The bot drives this same window over DevTools (port 9221 + display number,
-# see crates/control/src/cdp.rs). Every launch path (boot, panel launcher,
+# configured by this launcher). Every launch path (boot, panel launcher,
 # xdg-open, launch_app) must open it, otherwise the model cannot attach to the
 # browser the human is looking at and would have to restart it.
 DEVTOOLS_PORT=$((9221 + display))
@@ -54,6 +54,7 @@ exec /usr/bin/chromium \
   --disable-session-crashed-bubble \
   --hide-crash-restore-bubble \
   --disable-infobars \
+  --force-renderer-accessibility \
   --password-store=basic \
   --lang=zh-TW \
   --accept-lang=zh-TW,zh,en-US,en \

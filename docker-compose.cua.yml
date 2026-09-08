@@ -1,0 +1,9 @@
+# Optional separate Cua image tag; the base stack also uses Cua exclusively.
+# docker compose -f docker-compose.yml -f docker-compose.cua.yml up -d --build
+services:
+  computer:
+    image: lazyboy/computer:cua
+  supervisor:
+    environment:
+      LAZYBOY_COMPUTER_DRIVER: cua
+      LAZYBOY_COMPUTER_IMAGE: lazyboy/computer:cua

@@ -28,9 +28,13 @@
 .computer-part .preview .desktop-frame{display:block;aspect-ratio:16 / 10}
 .overlay-screen .overlay-desktop{position:relative;width:min(100%,1440px);height:100%}
 .overlay-screen .overlay-desktop>.desktop-frame,.overlay-screen .overlay-desktop>.empty-computer{width:100%;height:100%;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--main)}
-.computer-hud{position:absolute;top:10px;left:10px;z-index:3;display:grid;justify-items:center;gap:6px;padding:10px 12px 8px;border-radius:16px;background:rgba(10,10,12,.72);backdrop-filter:blur(8px);pointer-events:none;box-shadow:0 10px 30px rgba(0,0,0,.35)}
-.computer-hud .avatar.blobatar.thinking{animation:computer-hud-bob 1.6s ease-in-out infinite,avatar-rainbow-glow 1.8s linear infinite}
-.computer-hud-label{font-size:12px;letter-spacing:.02em;line-height:1.3;white-space:nowrap;background:linear-gradient(90deg,#7a8088 0%,#7a8088 28%,#fff 50%,#7a8088 72%,#7a8088 100%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:working-shimmer 1.35s linear infinite}
+/* The waiting veil sits over the remote pixels, not beside them: while the
+   desktop is booting, waking, or changing hands, the signal mascot breathes
+   under its amber orbit and the label shimmers. It never takes a click, so the
+   mouse is live the instant the veil lifts, and it fades rather than blinks. */
+.computer-hud{position:absolute;inset:0;z-index:3;display:grid;align-content:center;justify-items:center;gap:14px;padding:10px 12px 8px;border-radius:inherit;background:radial-gradient(ellipse at center,#142722e8,#101012ed);backdrop-filter:blur(8px);pointer-events:none;opacity:1;transition:opacity .22s ease}
+.computer-hud.is-leaving{opacity:0}
+.computer-hud-label{font-size:12px;letter-spacing:.02em;line-height:1.5;white-space:normal;text-align:center;max-width:90%;color:#c9ddd5}
 .empty-computer.is-waiting{min-height:100%;background:var(--inset)}
 .computer-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;flex-wrap:wrap}
 .computer-actions .restart-computer{font-size:12px;padding-inline:10px;color:var(--muted)}
@@ -47,12 +51,10 @@
 .control-bar{flex-wrap:wrap}
 .control-bar>.computer-actions{flex:1 1 180px}
 /* Independent monitor mascot, with mint halo and amber orbit. */
-.computer-hud{inset:0;align-content:center;border-radius:inherit;gap:14px;background:radial-gradient(ellipse at center,#142722e8,#101012ed);box-shadow:none}
 .computer-signal{position:relative;display:grid;place-items:center;width:64px;height:64px;border:1px solid #65dcb34d;border-radius:24px;animation:monitor-breathe 2.8s ease-in-out infinite}
 .computer-signal::before{content:"";position:absolute;inset:-8px;border:1px solid #65dcb326;border-top-color:#efbe72;border-radius:50%;animation:monitor-orbit 4s linear infinite}
 .computer-signal-face{display:flex;align-items:center;justify-content:center;gap:12px;width:46px;height:38px;border-radius:15px;background:#85dfbb;color:#143429;transform:rotate(-6deg)}
 .computer-signal-face i{width:5px;height:11px;border-radius:5px;background:currentColor;animation:monitor-blink 4.6s ease-in-out infinite}
-.computer-hud-label{color:#c9ddd5;background:none;animation:none;white-space:normal;text-align:center;max-width:90%;line-height:1.5}
 
 .clipboard-status{margin:0;min-height:1.4em;font-size:12px;line-height:1.4;color:var(--muted)}
 
@@ -68,3 +70,10 @@
 .computer-power-menu .computer-power-stop{color:var(--danger-soft)}
 .computer-power-menu small{display:block;padding:8px 10px 6px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.6}
 .computer-overlay .computer-power-menu{top:calc(100% + 8px);bottom:auto}
+
+/* The overlay tracks the visible viewport so the veil and the controls stay
+   above the keyboard; the veil itself belongs to the desktop box below. */
+.computer-overlay{top:var(--visible-top,0px);bottom:auto;height:var(--visible-height,100dvh)}
+.computer-overlay>header{flex-shrink:0}
+.overlay-error{position:static;transform:none;flex:none;margin:0 8px 8px}
+@media(max-width:700px){.overlay-screen{padding:4px}.computer-overlay>header{min-height:44px;gap:4px}.computer-overlay>header>div{gap:5px}.computer-overlay>header strong{font-size:12px}}

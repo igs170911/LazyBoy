@@ -1,12 +1,16 @@
 use async_trait::async_trait;
 use base64::Engine;
 use lazyboy_contracts::ComputerCapabilities;
-use lazyboy_contracts::{ActiveWindow, ComputerObservation, CursorPosition, SandboxKind};
+use lazyboy_contracts::{
+    ActiveWindow, ComputerObservation, CursorPosition, DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
+    SandboxKind,
+};
 use lazyboy_control::{
-    ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult, ComputerRef,
-    EnsureScreenRequest, EnsureScreenResult, FileEntry, ProvisionRequest, SandboxError,
-    SandboxProvider, ScreenSession, observation_from_png, observation_with_elements,
-    parse_ui_elements,
+    ActionRequest, ActionResult, AdapterContext, BrowserPage, BrowserRequest, CommandRequest,
+    CommandResult, ComputerRef, EnsureScreenRequest, EnsureScreenResult, FileEntry,
+    ProvisionRequest, RecordingRequest, RecordingResult, RecordingSession, SandboxError,
+    SandboxProvider, ScreenSession, image_dimensions, observation_from_png,
+    observation_with_elements, parse_ui_elements,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -36,20 +40,20 @@ impl DockerSandbox {
         if let Some(bot_id) = &context.bot_id {
             headers.insert("x-lazyboy-bot-id", bot_id.parse().unwrap());
         }
-        if let Some(display) = &context.display {
-            if let Ok(value) = display.parse() {
-                headers.insert("x-lazyboy-display", value);
-            }
+        if let Some(display) = &context.display
+            && let Ok(value) = display.parse()
+        {
+            headers.insert("x-lazyboy-display", value);
         }
-        if let Some(profile) = &context.profile_path {
-            if let Ok(value) = profile.parse() {
-                headers.insert("x-lazyboy-profile", value);
-            }
+        if let Some(profile) = &context.profile_path
+            && let Ok(value) = profile.parse()
+        {
+            headers.insert("x-lazyboy-profile", value);
         }
-        if let Some(slot) = context.screen_slot {
-            if let Ok(value) = slot.to_string().parse() {
-                headers.insert("x-lazyboy-screen-slot", value);
-            }
+        if let Some(slot) = context.screen_slot
+            && let Ok(value) = slot.to_string().parse()
+        {
+            headers.insert("x-lazyboy-screen-slot", value);
         }
         headers
     }
@@ -237,11 +241,18 @@ impl SandboxProvider for DockerSandbox {
             .send()
             .await
             .map_err(|error| SandboxError::message(error.to_string()))?;
+        let response = response
+            .error_for_status()
+            .map_err(|error| SandboxError::message(error.to_string()))?;
         let body: Value = response
             .json()
             .await
             .map_err(|error| SandboxError::message(error.to_string()))?;
         Ok(ActionResult {
+            clipboard_text: body
+                .get("clipboardText")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             completed: body.get("completed").and_then(Value::as_u64).unwrap_or(0) as usize,
             observation: if body.get("png_base64").is_some() {
                 Some(decode_observation(&body)?)
@@ -249,6 +260,93 @@ impl SandboxProvider for DockerSandbox {
                 None
             },
         })
+    }
+
+    async fn browser(
+        &self,
+        computer: &ComputerRef,
+        request: BrowserRequest,
+        context: &AdapterContext,
+    ) -> Result<BrowserPage, SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/browser", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        serde_json::from_value(body).map_err(|error| SandboxError::message(error.to_string()))
+    }
+
+    async fn start_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<RecordingSession, SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/recording/start", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        serde_json::from_value(body).map_err(|error| SandboxError::message(error.to_string()))
+    }
+
+    async fn stop_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/recording/stop", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(SandboxError::message(format!(
+                "stop recording failed: {}",
+                response.status()
+            )))
+        }
+    }
+
+    async fn collect_recording(
+        &self,
+        computer: &ComputerRef,
+        request: RecordingRequest,
+        context: &AdapterContext,
+    ) -> Result<RecordingResult, SandboxError> {
+        let response = self
+            .client
+            .post(self.url(&format!("/computers/{}/recording/collect", computer.id)))
+            .headers(self.headers(context))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| SandboxError::message(error.to_string()))?;
+        serde_json::from_value(body).map_err(|error| SandboxError::message(error.to_string()))
     }
 
     async fn connect_screen(
@@ -458,8 +556,45 @@ fn decode_observation(body: &Value) -> Result<ComputerObservation, SandboxError>
         .get("elements")
         .map(|value| parse_ui_elements(&value.to_string()))
         .unwrap_or_default();
-    Ok(observation_with_elements(
-        observation_from_png(png, 1280, 800, cursor, window),
+    // The control endpoint does not put the mode on the wire, so the frame
+    // itself decides: a desktop that is not 1280x800 must not be reported to
+    // the model as 1280x800.
+    let (width, height) =
+        image_dimensions(&png).unwrap_or((DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT));
+    let mut observation = observation_with_elements(
+        observation_from_png(png, width, height, cursor, window),
         elements,
-    ))
+    );
+    observation.native_observation_complete = body
+        .get("native_observation_complete")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(observation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_observation;
+    use lazyboy_contracts::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
+    use serde_json::json;
+
+    /// A 3x2 solid-red PNG: small enough to inline, real enough to decode.
+    const FRAME_3X2: &str = "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB\
+0gX7h/C5SAAAAABJRU5ErkJggg==";
+
+    #[test]
+    fn the_mode_is_read_from_the_frame() {
+        let observation = decode_observation(&json!({ "png_base64": FRAME_3X2 }))
+            .expect("a decodable frame makes an observation");
+        assert_eq!(observation.width, 3);
+        assert_eq!(observation.height, 2);
+    }
+
+    #[test]
+    fn an_undecodable_frame_falls_back_to_the_default_mode() {
+        let observation =
+            decode_observation(&json!({ "png_base64": "AAAAAAAAAAA=" })).expect("base64 decodes");
+        assert_eq!(observation.width, DEFAULT_SCREEN_WIDTH);
+        assert_eq!(observation.height, DEFAULT_SCREEN_HEIGHT);
+    }
 }

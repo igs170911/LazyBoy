@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LazyBoy Cua Smoke</title>
+  <style>
+    body { font-family: sans-serif; margin: 32px; }
+    #result { font-size: 20px; }
+  </style>
+</head>
+<body>
+  <h1>LazyBoy Cua Smoke</h1>
+  <p id="result">ready</p>
+  <p id="persistent"></p>
+  <p>
+    <button id="click" type="button">Smoke Click</button>
+  </p>
+  <p>
+    <input id="name" type="text" placeholder="type here" aria-label="Smoke Entry">
+    <button id="save" type="button">Smoke Save</button>
+  </p>
+  <script>
+    var retained = document.cookie.includes("cuaSmoke=retained");
+    document.getElementById("persistent").textContent = retained ? "session-retained" : "fresh-session";
+    if (retained) {
+      document.title = "LazyBoy Cua Smoke (session-retained)";
+    }
+    document.getElementById("click").onclick = function () {
+      document.getElementById("result").textContent = "clicked-ok";
+    };
+    document.getElementById("save").onclick = function () {
+      var value = document.getElementById("name").value;
+      document.cookie = "cuaSmoke=retained; Max-Age=86400; SameSite=Lax; path=/";
+      document.getElementById("result").textContent = "typed:" + value;
+    };
+  </script>
+</body>
+</html>

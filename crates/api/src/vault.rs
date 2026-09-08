@@ -4,7 +4,7 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{get, patch};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use rand::RngCore;
@@ -161,14 +161,18 @@ pub async fn list_on(
     .map_err(|error| error.to_string())
 }
 
-pub async fn get_secret(
-    state: &AppState,
-    actor: &Actor,
-    bot_id: &str,
-    account_id: &str,
-) -> Result<Option<(VaultAccount, String, String)>, String> {
-    get_secret_on(state.pool(), actor, bot_id, account_id).await
-}
+/// `get_secret_on` projection: vault columns plus the encrypted password.
+type SecretRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    String,
+);
 
 pub async fn get_secret_on(
     pool: &sqlx::PgPool,
@@ -176,8 +180,7 @@ pub async fn get_secret_on(
     bot_id: &str,
     account_id: &str,
 ) -> Result<Option<(VaultAccount, String, String)>, String> {
-    let row: Option<(String, String, String, String, String, String, DateTime<Utc>, DateTime<Utc>, String)> =
-        sqlx::query_as(
+    let row: Option<SecretRow> = sqlx::query_as(
             "SELECT id, bot_id, site, host, username, notes, created_at, updated_at, password_ciphertext
              FROM vault_accounts
              WHERE id=$1 AND bot_id=$2 AND space_id=$3 AND user_id=$4",
@@ -328,8 +331,14 @@ fn vault_key() -> Result<[u8; 32], String> {
     let material = std::env::var("LAZYBOY_VAULT_KEY")
         .ok()
         .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var("LAZYBOY_APP_TOKEN").ok().filter(|v| !v.is_empty()))
-        .ok_or_else(|| "set LAZYBOY_VAULT_KEY or LAZYBOY_APP_TOKEN to encrypt saved passwords".to_string())?;
+        .or_else(|| {
+            std::env::var("LAZYBOY_APP_TOKEN")
+                .ok()
+                .filter(|v| !v.is_empty())
+        })
+        .ok_or_else(|| {
+            "set LAZYBOY_VAULT_KEY or LAZYBOY_APP_TOKEN to encrypt saved passwords".to_string()
+        })?;
     let digest = Sha256::digest(material.as_bytes());
     let mut key = [0u8; 32];
     key.copy_from_slice(&digest);
@@ -368,6 +377,9 @@ mod tests {
     use super::{decrypt, encrypt, normalize_host};
 
     #[test]
+    // Rust 2024 marks `set_var` unsafe; this only seeds a test-only key and no
+    // other test in this binary reads it.
+    #[allow(unsafe_code)]
     fn round_trips_a_password() {
         unsafe { std::env::set_var("LAZYBOY_VAULT_KEY", "test-vault-key-for-unit-tests") };
         let packed = encrypt("s3cret!").unwrap();
@@ -377,7 +389,10 @@ mod tests {
 
     #[test]
     fn host_strips_urls() {
-        assert_eq!(normalize_host("https://mail.google.com/inbox", "Gmail"), "mail.google.com");
+        assert_eq!(
+            normalize_host("https://mail.google.com/inbox", "Gmail"),
+            "mail.google.com"
+        );
         assert_eq!(normalize_host("", "Gmail"), "gmail");
     }
 }

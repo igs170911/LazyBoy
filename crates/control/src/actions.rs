@@ -1,4 +1,3 @@
-use crate::is_browser_title;
 use lazyboy_contracts::{
     ComputerAction, PointerButton, PointerType, RefVerb, ScrollDirection, UiElement,
 };
@@ -33,9 +32,12 @@ pub enum ActionError {
 /// instead of failing the click.
 pub fn element_id(value: Option<&Value>) -> Option<u64> {
     match value? {
-        Value::Number(number) => number
-            .as_u64()
-            .or_else(|| number.as_f64().filter(|f| *f >= 0.0).map(|f| f.round() as u64)),
+        Value::Number(number) => number.as_u64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|f| *f >= 0.0)
+                .map(|f| f.round() as u64)
+        }),
         Value::String(text) => text
             .trim()
             .trim_start_matches(['#', '['])
@@ -122,62 +124,6 @@ pub fn should_block_stale_click(miss_streak: u32, last: Option<&str>, next: Opti
     miss_streak >= 2 && next.is_some() && next == last
 }
 
-/// When a CDP page snapshot is live, refuse pixel-clicking the Chromium window.
-pub fn browser_gui_block(actions: &Value, elements: &[UiElement]) -> Option<String> {
-    if !elements
-        .iter()
-        .any(|element| element.kind.as_deref() == Some("dom"))
-    {
-        return None;
-    }
-    let items = actions.as_array()?;
-    for raw in items {
-        let Some(action) = raw.as_object() else {
-            continue;
-        };
-        let kind = action
-            .get("kind")
-            .and_then(Value::as_str)
-            .or_else(|| action.get("type").and_then(Value::as_str))
-            .unwrap_or("");
-        if !matches!(kind, "click" | "move" | "down" | "up" | "hover" | "drag") {
-            continue;
-        }
-        if let Some(id) = element_id(action.get("element")) {
-            match elements.iter().find(|element| u64::from(element.id) == id) {
-                Some(element) if element.has_ref() => continue,
-                Some(element)
-                    if element.kind.as_deref() == Some("window")
-                        && is_browser_title(&element.title) =>
-                {
-                    return Some(browser_block_message(elements));
-                }
-                _ => continue,
-            }
-        } else {
-            return Some(browser_block_message(elements));
-        }
-    }
-    None
-}
-
-fn browser_block_message(elements: &[UiElement]) -> String {
-    let known: Vec<String> = elements
-        .iter()
-        .filter(|element| element.kind.as_deref() == Some("dom"))
-        .take(12)
-        .map(|element| format!("[{}] {}", element.id, element.title))
-        .collect();
-    format!(
-        "Chromium is in front: use the browser tool (snapshot / click element N) instead of computer_act pixel clicks. Known page elements: {}",
-        if known.is_empty() {
-            "call browser snapshot first".to_string()
-        } else {
-            known.join(", ")
-        }
-    )
-}
-
 pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, ActionError> {
     let Value::Array(items) = value else {
         return Err(ActionError::Empty);
@@ -200,22 +146,22 @@ pub fn parse_computer_actions(value: &Value) -> Result<Vec<ComputerAction>, Acti
             .unwrap_or_default();
         match kind {
             "click" | "move" | "down" | "up" => {
-                if kind == "click" {
-                    if let Some(target) = ref_target(action) {
-                        let pointer = ComputerAction::Ref {
-                            verb: RefVerb::Click,
-                            target,
-                            ref_kind: ref_kind(action),
-                            text: None,
-                        };
-                        let doubled = action.get("double").and_then(Value::as_bool) == Some(true);
-                        actions.push(pointer.clone());
-                        if doubled {
-                            actions.push(ComputerAction::Wait { ms: 70 });
-                            actions.push(pointer);
-                        }
-                        continue;
+                if kind == "click"
+                    && let Some(target) = ref_target(action)
+                {
+                    let pointer = ComputerAction::Ref {
+                        verb: RefVerb::Click,
+                        target,
+                        ref_kind: ref_kind(action),
+                        text: None,
+                    };
+                    let doubled = action.get("double").and_then(Value::as_bool) == Some(true);
+                    actions.push(pointer.clone());
+                    if doubled {
+                        actions.push(ComputerAction::Wait { ms: 70 });
+                        actions.push(pointer);
                     }
+                    continue;
                 }
                 let x = coordinate(action.get("x"), "x")?;
                 let y = coordinate(action.get("y"), "y")?;
@@ -403,7 +349,7 @@ fn ref_kind(action: &serde_json::Map<String, Value>) -> String {
 
 fn coordinate(value: Option<&Value>, name: &'static str) -> Result<u32, ActionError> {
     let number = value.and_then(Value::as_f64).unwrap_or(f64::NAN).round();
-    if !number.is_finite() || number < 0.0 || number > 100_000.0 {
+    if !number.is_finite() || !(0.0..=100_000.0).contains(&number) {
         return Err(ActionError::BadCoordinate(name));
     }
     Ok(number as u32)
@@ -558,7 +504,6 @@ mod tests {
             y: 20,
             w: 80,
             h: 24,
-            ..UiElement::default()
         }
     }
 
@@ -612,59 +557,12 @@ mod tests {
         assert!(actions[0].get("x").is_none());
         let parsed = parse_computer_actions(&actions).unwrap();
         match &parsed[0] {
-            ComputerAction::Ref {
-                ref_kind, verb, ..
-            } => {
+            ComputerAction::Ref { ref_kind, verb, .. } => {
                 assert_eq!(ref_kind, "dom");
                 assert_eq!(*verb, RefVerb::Click);
             }
             other => panic!("{other:?}"),
         }
-    }
-
-    #[test]
-    fn pixel_clicks_are_blocked_when_dom_is_live() {
-        let elements = vec![UiElement {
-            id: 1,
-            title: "Submit".into(),
-            selector: Some("[data-lazyboy=\"1\"]".into()),
-            kind: Some("dom".into()),
-            x: 10,
-            y: 20,
-            w: 80,
-            h: 24,
-            ..UiElement::default()
-        }];
-        let blocked = browser_gui_block(&json!([{"kind":"click","x":40,"y":80}]), &elements);
-        assert!(blocked.unwrap().contains("browser"));
-        assert!(
-            browser_gui_block(&json!([{"kind":"click","element":1}]), &elements).is_none()
-        );
-    }
-
-    #[test]
-    fn chromium_window_clicks_are_blocked_when_dom_is_live() {
-        let elements = vec![
-            UiElement {
-                id: 1,
-                title: "Submit".into(),
-                selector: Some("[data-lazyboy=\"1\"]".into()),
-                kind: Some("dom".into()),
-                ..UiElement::default()
-            },
-            UiElement {
-                id: 2,
-                title: "Chromium".into(),
-                kind: Some("window".into()),
-                x: 0,
-                y: 0,
-                w: 1280,
-                h: 800,
-                ..UiElement::default()
-            },
-        ];
-        let blocked = browser_gui_block(&json!([{"kind":"click","element":2}]), &elements);
-        assert!(blocked.unwrap().contains("browser"));
     }
 
     #[test]

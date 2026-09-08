@@ -111,6 +111,7 @@ npm run dev
 | [架構與流程](./docs/architecture.md) | 任務流程圖、系統架構、電腦生命週期狀態機 |
 | [互動流程圖](./docs/workflow.html) | 可縮放、搜尋的 HTML 圖表；下載後開啟 |
 | [部署與操作](./docs/operations.md) | 資源、環境變數、安全設定、網站驗證、sudo |
+| [AI 使用體驗](./docs/agent-experience.md) | 輪次政策、持久終端機、聊天即時推送 |
 | [開發指南](./docs/development.md) | 本機開發、檢查與測試、目錄結構 |
 | [設定範例](./.env.example) | 環境變數與預設值 |
 

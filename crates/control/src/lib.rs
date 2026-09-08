@@ -1,6 +1,8 @@
 mod a11y;
 mod actions;
-mod cdp;
+mod browser_page;
+mod controller;
+mod cua;
 mod lease;
 mod observe;
 mod overlay;
@@ -12,7 +14,9 @@ mod x11;
 
 pub use a11y::*;
 pub use actions::*;
-pub use cdp::*;
+pub use browser_page::*;
+pub use controller::*;
+pub use cua::{CuaClient, CuaController, TranslatedAction, translate_action};
 pub use lease::*;
 pub use observe::*;
 pub use overlay::*;

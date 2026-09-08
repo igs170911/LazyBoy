@@ -15,6 +15,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(crate::sessions::router())
         .merge(crate::memory::router())
+        .merge(crate::monitor::router())
         .merge(crate::rooms::router())
         .merge(crate::mcp::router())
         .merge(crate::workspace::router())
@@ -313,6 +314,11 @@ async fn update_bot(
             Json(json!({"message":"bot not found"})),
         ));
     }
+    // The saved setting remains authoritative if the desktop is disconnected;
+    // ensure/restore will apply it again before the next run.
+    if let Err(error) = computer::refresh_cursor_color(&state, &actor, &id).await {
+        tracing::warn!(bot_id = %id, %error, "could not refresh cursor color");
+    }
     Ok(Json(json!({"ok":true})))
 }
 
@@ -347,17 +353,16 @@ async fn delete_bot(
     if let Some(computer) = computer
         .as_ref()
         .filter(|row| parse_mode(&row.scope) == ComputerMode::Dedicated)
+        && let Some(computer_ref) = computer::computer_ref(computer)
     {
-        if let Some(computer_ref) = computer::computer_ref(computer) {
-            state
-                .sandbox
-                .destroy(
-                    &computer_ref,
-                    &computer::adapter_context(&actor, &id, "delete-bot"),
-                )
-                .await
-                .map_err(|error| bad_gateway(error.to_string()))?;
-        }
+        state
+            .sandbox
+            .destroy(
+                &computer_ref,
+                &computer::adapter_context(&actor, &id, "delete-bot"),
+            )
+            .await
+            .map_err(|error| bad_gateway(error.to_string()))?;
     }
 
     let mut tx = state.pool().begin().await.map_err(internal_error)?;
@@ -609,7 +614,9 @@ async fn stop(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = actor(&state).await.map_err(|status| (status, Json(json!({"message":"無法取得工作區"}))))?;
+    let actor = actor(&state)
+        .await
+        .map_err(|status| (status, Json(json!({"message":"無法取得工作區"}))))?;
     computer::stop(&state, &actor, &id)
         .await
         .map(|status| Json(serde_json::to_value(status).unwrap()))
@@ -646,7 +653,7 @@ async fn screen_url(
             state.db.get_screen(&computer.id, &id).await.ok().flatten()
         }
     };
-    let interactive = computer::user_has_screen_control(&computer, screen.as_ref(), &id);
+    let interactive = computer::user_can_interact(&computer, screen.as_ref(), &id);
     let _ = state
         .sandbox
         .connect_screen(
@@ -726,44 +733,19 @@ async fn input(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let screen = state.db.get_screen(&computer.id, &id).await.ok().flatten();
-    if !computer::user_has_screen_control(&computer, screen.as_ref(), &id) {
+    if !computer::user_can_interact(&computer, screen.as_ref(), &id) {
         return Err(StatusCode::CONFLICT);
     }
     let computer_ref = computer::computer_ref(&computer).ok_or(StatusCode::BAD_REQUEST)?;
-    if body.kind == "clipboard" || body.kind == "copy" {
-        let text = body.text.unwrap_or_default();
-        if text.len() > 1024 * 1024 {
-            return Err(StatusCode::PAYLOAD_TOO_LARGE);
-        }
-        let context =
-            computer::adapter_context_for(&actor, &id, "clipboard", screen.as_ref(), None);
-        let mut argv =
-            lazyboy_control::paste_command_on(context.display.as_deref().unwrap_or(":1"));
-        if body.kind == "copy" {
-            argv.push("copy".into());
-        }
-        let result = state
-            .sandbox
-            .execute(
-                &computer_ref,
-                lazyboy_control::CommandRequest {
-                    argv,
-                    cwd: None,
-                    timeout_ms: Some(10_000),
-                    stdin: Some(text),
-                },
-                &context,
-            )
-            .await
-            .map_err(|_| StatusCode::BAD_GATEWAY)?;
-        if result.code != 0 {
-            return Err(StatusCode::BAD_GATEWAY);
-        }
-        return Ok(Json(
-            json!({"ok":true,"text":if body.kind=="copy" {Some(result.stdout)} else {None}}),
-        ));
+    if body
+        .text
+        .as_ref()
+        .is_some_and(|text| text.len() > 1024 * 1024)
+    {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     let action = match body.kind.as_str() {
+        "copy" => lazyboy_contracts::ComputerAction::CopySelection,
         "key" => lazyboy_contracts::ComputerAction::Key {
             key: body.key.unwrap_or_default(),
             modifiers: None,
@@ -778,7 +760,7 @@ async fn input(
             button: Some(lazyboy_contracts::PointerButton::Left),
         },
     };
-    state
+    let result = state
         .sandbox
         .act(
             &computer_ref,
@@ -793,7 +775,7 @@ async fn input(
         )
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "ok": true, "text": result.clipboard_text })))
 }
 
 fn _mode(mode: ComputerMode) {

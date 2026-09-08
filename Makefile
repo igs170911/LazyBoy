@@ -8,12 +8,17 @@ COMPOSE        ?= docker compose
 COMPUTER_IMAGE ?= lazyboy/computer:local
 WEB_DIR        ?= apps/web
 DATA_DIR       ?= ./data
+BUILDX_BUILDER  ?= lazyboy
+# PUSH=1 publishes the manifest list instead of writing an OCI archive.
+MULTI_FLAGS ?=
+$(if $(filter 1,$(PUSH)),$(eval MULTI_FLAGS := --push))
 
 .PHONY: help env env-force \
         up logs ps health down purge \
-        computer postgres postgres-down \
+        computer computer-multi images-multi postgres postgres-down pg-collation \
+        cua-smoke \
         build build-api build-supervisor build-controld \
-        fmt clippy test clean \
+        fmt fmt-check clippy lint audit test clean \
         web \
         dev dev-supervisor dev-api
 
@@ -31,8 +36,12 @@ help: ## Show this help
 	@echo ""
 	@echo "  Individual pieces:"
 	@echo "    make computer       Build the heavy Debian desktop image (lazyboy/computer:local)"
+	@echo "    make computer-multi Cross-build the desktop image for amd64 + arm64 (PUSH=1 to publish)"
+	@echo "    make images-multi   Cross-build desktop + api + supervisor for amd64 + arm64"
+	@echo "    make cua-smoke      Run Cua Driver smoke test in a disposable desktop container"
 	@echo "    make postgres       Start only postgres (127.0.0.1:5434) and wait for ready"
 	@echo "    make postgres-down  Stop postgres"
+	@echo "    make pg-collation   Repair a Postgres collation version mismatch (see docs)"
 	@echo ""
 	@echo "  Local dev (postgres in Docker, Rust services on the host):"
 	@echo "    make dev            Prep .env + postgres + computer image, then print run steps"
@@ -43,8 +52,11 @@ help: ## Show this help
 	@echo "    make build          cargo build --release (whole workspace)"
 	@echo "    make build-api      cargo build --release -p lazyboy-api"
 	@echo "    make fmt            cargo fmt --all"
-	@echo "    make clippy         cargo clippy (deny warnings)"
-	@echo "    make test           cargo test --workspace"
+	@echo "    make fmt-check      Report files rustfmt would change (legacy drift exists)"
+	@echo "    make clippy         cargo clippy (deny warnings, reads clippy.toml)"
+	@echo "    make lint           The Rust gate: clippy with -D warnings"
+	@echo "    make audit          cargo deny: RustSec advisories, licenses, sources"
+	@echo "    make test           cargo test --workspace (DB tests need: make postgres)"
 	@echo "    make web            Build the frontend in $(WEB_DIR) (needs node/npm)"
 	@echo "    make clean          cargo clean"
 	@echo ""
@@ -87,7 +99,26 @@ purge: ## Stop containers and delete the postgres data volume
 # --- Individual pieces -----------------------------------------------------
 
 computer: ## Build the Debian desktop image used to spawn bot computers
-	docker build -f image/computer/Dockerfile -t $(COMPUTER_IMAGE) .
+	./scripts/build-image.sh --tag $(COMPUTER_IMAGE)
+
+# Cross-builds every supported CPU architecture into one manifest list. Needs a
+# docker-container builder + QEMU binfmt; both are bootstrapped by the script.
+# PUSH=1 publishes to a registry, otherwise an OCI archive is written.
+computer-multi: ## Cross-build the desktop image for all CPU architectures
+	./scripts/build-image.sh --file image/computer/Dockerfile --multi $(MULTI_FLAGS)
+
+# The api and supervisor images carry per-architecture binaries as well (ONNX
+# Runtime, node, the distroless libc), so they get the same treatment as the
+# desktop image instead of only ever existing for the build host.
+images-multi: ## Cross-build every shipped image for all CPU architectures
+	@for dockerfile in image/computer/Dockerfile image/supervisor/Dockerfile \
+		image/api/Dockerfile; do \
+	  echo "== $$dockerfile"; \
+	  ./scripts/build-image.sh --file "$$dockerfile" --multi $(MULTI_FLAGS) || exit 1; \
+	done
+
+cua-smoke: computer ## Run the Cua Driver smoke test inside a disposable desktop container
+	./scripts/cua-smoke-test.sh --docker --image $(COMPUTER_IMAGE)
 
 postgres: ## Start only postgres and wait until it is ready
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
@@ -96,6 +127,14 @@ postgres: ## Start only postgres and wait until it is ready
 
 postgres-down: ## Stop postgres
 	$(COMPOSE) down postgres
+
+# A pgvector image rebuilt on another glibc leaves every database recording the old
+# collation version; Postgres then refuses CREATE DATABASE and `cargo test` hangs on
+# PoolTimedOut. Stop the api first, then reindex + refresh each database in place.
+pg-collation: ## Repair a Postgres collation version mismatch after an image update
+	$(COMPOSE) exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lazyboy -d template1 -c "REINDEX DATABASE template1;" -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;"
+	$(COMPOSE) exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lazyboy -d postgres -c "REINDEX DATABASE postgres;" -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;"
+	$(COMPOSE) exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lazyboy -d lazyboy -c "REINDEX DATABASE lazyboy;" -c "ALTER DATABASE lazyboy REFRESH COLLATION VERSION;"
 
 # --- Rust / web ------------------------------------------------------------
 
@@ -114,8 +153,23 @@ build-controld: ## Release build of the controld binary
 fmt: ## Format all Rust code
 	cargo fmt --all
 
-clippy: ## Run clippy, denying warnings
-	cargo clippy --all-targets -- -D warnings
+fmt-check: ## Check formatting without touching files
+	cargo fmt --all --check
+
+# Lint policy lives in [workspace.lints] in the root Cargo.toml; the thresholds
+# (e.g. too-many-arguments-threshold) live in clippy.toml, which cargo-clippy
+# only reads from the directory it is started in - keep running this at the root.
+clippy: ## Run clippy over the workspace, denying warnings
+	cargo clippy --workspace --all-targets -- -D warnings
+
+lint: clippy ## The Rust quality gate used by CI
+
+# cargo-deny is a separate CLI: cargo install --locked cargo-deny
+audit: ## Supply-chain check (RustSec advisories, licenses, dependency sources)
+	@command -v cargo-deny >/dev/null 2>&1 || { \
+	  echo "cargo-deny is not installed: cargo install --locked cargo-deny"; exit 1; }
+	@echo "(advisories need the RustSec advisory DB, cloned on first run)"
+	cargo deny check
 
 test: ## Run the test suite
 	cargo test --workspace

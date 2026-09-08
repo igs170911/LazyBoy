@@ -12,9 +12,27 @@ members = [
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.98"
 version = "0.1.0"
 license = "Apache-2.0"
 publish = false
+
+# --- Lint policy -----------------------------------------------------------
+# A single place decides how the whole workspace is linted; every crate opts in
+# with `[lints] workspace = true`. `make lint` runs clippy with -D warnings, so a
+# new warning has to be fixed (or relaxed at the call site with a reason) before
+# it reaches main. Thresholds live in clippy.toml, which cargo-clippy only reads
+# from the directory it was started in - keep running it at the workspace root.
+[workspace.lints.rust]
+# Safety-relevant code (the vault, the docker socket) has to stay explicit.
+unsafe_code = "warn"
+unused_must_use = "deny"
+unused_crate_dependencies = "warn"
+
+[workspace.lints.clippy]
+# Debug leftovers and placeholder implementations must not reach a branch.
+dbg_macro = "warn"
+todo = "warn"
 
 [profile.release]
 lto = true
@@ -34,7 +52,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 rig-core = "0.42"
 async-trait = "0.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "fs", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "fs", "signal", "time", "sync"] }
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 tracing = "0.1"

@@ -4,9 +4,9 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use lazyboy_contracts::{ComputerObservation, SandboxKind};
 use lazyboy_control::{
-    ActionRequest, ActionResult, AdapterContext, CommandRequest, CommandResult, ComputerRef,
-    FileEntry, ProvisionRequest, SandboxError, SandboxProvider, ScreenSession,
-    observation_from_png,
+    ActionRequest, ActionResult, AdapterContext, BrowserPage, BrowserRequest, CommandRequest,
+    CommandResult, ComputerRef, FileEntry, ProvisionRequest, RecordingRequest, RecordingResult,
+    RecordingSession, SandboxError, SandboxProvider, ScreenSession, observation_from_png,
 };
 
 const EMPTY_PNG: &[u8] = &[
@@ -55,22 +55,22 @@ impl SandboxProvider for FakeSandbox {
         request: CommandRequest,
         _context: &AdapterContext,
     ) -> Result<CommandResult, SandboxError> {
-        if request.argv.get(0).map(String::as_str) == Some("mkdir") {
+        if request.argv.first().map(String::as_str) == Some("mkdir") {
             return Ok(CommandResult {
                 stdout: String::new(),
                 stderr: String::new(),
                 code: 0,
             });
         }
-        if request.argv.get(0).map(String::as_str) == Some("touch") {
-            if let Some(path) = request.argv.get(1) {
-                self.files
-                    .lock()
-                    .unwrap()
-                    .entry(computer.home_key.clone())
-                    .or_default()
-                    .insert(path.clone(), Vec::new());
-            }
+        if request.argv.first().map(String::as_str) == Some("touch")
+            && let Some(path) = request.argv.get(1)
+        {
+            self.files
+                .lock()
+                .unwrap()
+                .entry(computer.home_key.clone())
+                .or_default()
+                .insert(path.clone(), Vec::new());
         }
         Ok(CommandResult {
             stdout: request.argv.join(" "),
@@ -94,6 +94,7 @@ impl SandboxProvider for FakeSandbox {
         context: &AdapterContext,
     ) -> Result<ActionResult, SandboxError> {
         Ok(ActionResult {
+            clipboard_text: None,
             completed: request.actions.len(),
             observation: if request.observe {
                 Some(self.observe(computer, context).await?)
@@ -101,6 +102,50 @@ impl SandboxProvider for FakeSandbox {
                 None
             },
         })
+    }
+
+    async fn browser(
+        &self,
+        _computer: &ComputerRef,
+        _request: BrowserRequest,
+        _context: &AdapterContext,
+    ) -> Result<BrowserPage, SandboxError> {
+        Ok(BrowserPage {
+            ok: true,
+            url: "about:blank".into(),
+            title: "fake".into(),
+            ..BrowserPage::default()
+        })
+    }
+
+    async fn start_recording(
+        &self,
+        _computer: &ComputerRef,
+        request: RecordingRequest,
+        _context: &AdapterContext,
+    ) -> Result<RecordingSession, SandboxError> {
+        Ok(RecordingSession {
+            skill_id: request.skill_id,
+            output_dir: "/tmp/lazyboy/teach-fake".into(),
+        })
+    }
+
+    async fn stop_recording(
+        &self,
+        _computer: &ComputerRef,
+        _request: RecordingRequest,
+        _context: &AdapterContext,
+    ) -> Result<(), SandboxError> {
+        Ok(())
+    }
+
+    async fn collect_recording(
+        &self,
+        _computer: &ComputerRef,
+        _request: RecordingRequest,
+        _context: &AdapterContext,
+    ) -> Result<RecordingResult, SandboxError> {
+        Ok(RecordingResult { events: Vec::new() })
     }
 
     async fn connect_screen(

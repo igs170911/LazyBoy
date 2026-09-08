@@ -64,13 +64,21 @@ async fn members_for(state: &AppState, room_id: &str) -> Result<Vec<RoomMember>,
     Ok(rows.into_iter().map(member_from_row).collect())
 }
 
+/// `room_from_id` projection: id, name, last message time, preview, unread count.
+type RoomSummaryRow = (
+    String,
+    String,
+    Option<chrono::DateTime<chrono::Utc>>,
+    Option<String>,
+    i64,
+);
+
 async fn room_from_id(
     state: &AppState,
     actor: &Actor,
     id: &str,
 ) -> Result<Option<Room>, sqlx::Error> {
-    let row: Option<(String, String, Option<chrono::DateTime<chrono::Utc>>, Option<String>, i64)> =
-        sqlx::query_as(
+    let row: Option<RoomSummaryRow> = sqlx::query_as(
             "SELECT r.id, r.name,
                     (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.room_id=r.id),
                     (SELECT m.body FROM messages m JOIN threads t ON t.id=m.thread_id

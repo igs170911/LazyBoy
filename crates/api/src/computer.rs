@@ -3,13 +3,13 @@ use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
 use lazyboy_contracts::{
-    BrowserProfileMode, ComputerCapabilities, ComputerMode, ComputerState, ComputerStatus,
-    ControlHolder, DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
+    BrowserProfileMode, ComputerCapabilities, ComputerMode, ComputerStatus, ControlHolder,
+    DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH,
 };
 use lazyboy_control::{
     AdapterContext, CommandRequest, EnsureScreenRequest, ProvisionRequest, admit_gui,
     admit_new_screen, browser_profile_path, execution_blocks_user_takeover, profile_lock_key,
-    screen_layout, team_bot_workspace_directory, user_holds_control,
+    screen_layout, team_bot_workspace_directory,
 };
 use uuid::Uuid;
 
@@ -46,6 +46,7 @@ pub fn status_from(
         mode: parse_mode(&computer.scope),
         kind: parse_kind(&computer.kind),
         state: parse_state(&computer.state),
+        shared_input: true,
         control_holder,
         control_bot_id,
         takeover_requested: false,
@@ -108,6 +109,71 @@ pub fn adapter_context_for(
 pub struct BoundScreen {
     pub row: Option<ScreenRow>,
     pub gui_block: Option<String>,
+}
+
+/// Refresh presentation on an existing running screen without opening apps,
+/// changing the Cua session, or booting a stopped computer.
+pub async fn refresh_cursor_color(
+    state: &AppState,
+    actor: &Actor,
+    bot_id: &str,
+) -> Result<(), String> {
+    let Some(bot) = state
+        .db
+        .get_bot(actor, bot_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let Some(computer_id) = bot.computer_id else {
+        return Ok(());
+    };
+    let Some(computer) = state
+        .db
+        .get_computer(&computer_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    if computer.state != "running" {
+        return Ok(());
+    }
+    let Some(target) = computer_ref(&computer) else {
+        return Ok(());
+    };
+    let Some(screen) = state
+        .db
+        .get_screen(&computer_id, bot_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let result = state
+        .sandbox
+        .execute(
+            &target,
+            CommandRequest {
+                argv: vec![
+                    "/usr/local/bin/lazyboy-screen".into(),
+                    "color".into(),
+                    screen.slot.to_string(),
+                    bot.avatar_color,
+                ],
+                cwd: None,
+                timeout_ms: Some(5_000),
+                stdin: None,
+            },
+            &adapter_context_for(actor, bot_id, "cursor-color", Some(&screen), None),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if result.code != 0 {
+        return Err("cursor color refresh failed".into());
+    }
+    Ok(())
 }
 
 pub async fn ensure_bot_screen(
@@ -209,10 +275,17 @@ pub async fn ensure_bot_screen(
         }
     };
     let ctx = adapter_context_for(actor, bot_id, "screen", Some(&row), run_id);
+    let bot = state
+        .db
+        .get_bot(actor, bot_id)
+        .await
+        .map_err(|error| error.to_string())?;
     let request = EnsureScreenRequest {
         slot: row.slot as u32,
         profile_path: row.profile_path.clone(),
         bot_id: bot_id.to_string(),
+        bot_name: bot.as_ref().map(|bot| bot.name.clone()).unwrap_or_default(),
+        bot_color: bot.map(|bot| bot.avatar_color).unwrap_or_default(),
     };
     let mut last_error = None;
     for attempt in 0..8 {
@@ -262,6 +335,7 @@ async fn restore_computer_screens(
             continue;
         }
         let ctx = adapter_context_for(actor, &screen.bot_id, "screen", Some(&screen), None);
+        let bot = state.db.get_bot(actor, &screen.bot_id).await.ok().flatten();
         let _ = state
             .sandbox
             .ensure_screen(
@@ -270,6 +344,8 @@ async fn restore_computer_screens(
                     slot: screen.slot as u32,
                     profile_path: screen.profile_path.clone(),
                     bot_id: screen.bot_id.clone(),
+                    bot_name: bot.as_ref().map(|bot| bot.name.clone()).unwrap_or_default(),
+                    bot_color: bot.map(|bot| bot.avatar_color).unwrap_or_default(),
                 },
                 &ctx,
             )
@@ -910,7 +986,7 @@ pub async fn takeover(
             &thread_id,
             &run_id,
             bot_id,
-            "你已接手操作。完成後釋放控制權，我會從目前畫面繼續。",
+            "我已暫停等你操作。完成後按「完成，繼續」，我會從目前畫面接著做。",
         )
         .await;
     }
@@ -998,32 +1074,12 @@ pub async fn heartbeat(state: &AppState, actor: &Actor, bot_id: &str) -> Result<
     Ok(())
 }
 
-#[allow(dead_code)]
-pub fn user_has_control(computer: &ComputerRow, bot_id: &str) -> bool {
-    user_has_screen_control(computer, None, bot_id)
-}
-
-pub fn user_has_screen_control(
-    computer: &ComputerRow,
-    screen: Option<&ScreenRow>,
-    bot_id: &str,
-) -> bool {
-    if let Some(screen) = screen {
-        return user_holds_control(
-            parse_holder(&screen.control_holder),
-            Some(screen.bot_id.as_str()),
-            bot_id,
-            screen.control_lease_expires_at,
-            Utc::now(),
-        );
-    }
-    user_holds_control(
-        parse_holder(&computer.control_holder),
-        computer.control_bot_id.as_deref(),
-        bot_id,
-        computer.control_lease_expires_at,
-        Utc::now(),
-    )
+/// Viewing/input does not acquire the human pause lease. Agent execution and
+/// explicit requests for human assistance retain their own pause/resume flow.
+pub fn user_can_interact(computer: &ComputerRow, screen: Option<&ScreenRow>, bot_id: &str) -> bool {
+    computer.state == "running"
+        && computer.provider_ref.is_some()
+        && screen.is_some_and(|screen| screen.bot_id == bot_id && screen.computer_id == computer.id)
 }
 
 pub async fn idle_loop(state: AppState) {
@@ -1076,15 +1132,14 @@ async fn pause_idle_computers(state: &AppState) {
         if computer_has_active_work(state, &computer.id).await {
             continue;
         }
-        if let Some(computer_ref) = computer_ref(&computer) {
-            if state
+        if let Some(computer_ref) = computer_ref(&computer)
+            && state
                 .sandbox
                 .suspend(&computer_ref, &idle_adapter(&computer, "idle"))
                 .await
                 .is_err()
-            {
-                continue;
-            }
+        {
+            continue;
         }
         let _ = sqlx::query(
             "UPDATE computers SET state = 'suspended', updated_at = now()
@@ -1234,6 +1289,77 @@ struct ActiveRunRow {
     step: Option<String>,
 }
 
-pub fn _keep_state(state: ComputerState, holder: ControlHolder, mode: BrowserProfileMode) {
-    let _ = (state, holder, mode);
+#[cfg(test)]
+mod shared_input_tests {
+    use super::*;
+
+    fn desktop() -> (ComputerRow, ScreenRow) {
+        let computer = ComputerRow {
+            id: "computer".into(),
+            space_id: "space".into(),
+            user_id: "user".into(),
+            scope: "team".into(),
+            scope_key: "team:space".into(),
+            home_key: "home".into(),
+            home_revision: "1".into(),
+            kind: "docker".into(),
+            provider_ref: Some("container".into()),
+            state: "running".into(),
+            control_holder: "bot".into(),
+            control_lease_id: None,
+            control_lease_expires_at: None,
+            control_bot_id: Some("bot".into()),
+            control_run_id: None,
+            execution_run_id: Some("run".into()),
+            execution_bot_id: Some("bot".into()),
+            execution_lease_expires_at: None,
+            execution_fence: 1,
+            browser_profile_mode: "per-bot".into(),
+        };
+        let screen = ScreenRow {
+            id: "screen".into(),
+            computer_id: computer.id.clone(),
+            bot_id: "bot".into(),
+            slot: 1,
+            display: ":1".into(),
+            view_port: 6080,
+            profile_mode: "per-bot".into(),
+            profile_path: "/tmp/profile".into(),
+            control_holder: "bot".into(),
+            control_lease_id: None,
+            control_lease_expires_at: None,
+            execution_run_id: Some("run".into()),
+            execution_lease_expires_at: None,
+            execution_fence: 1,
+        };
+        (computer, screen)
+    }
+
+    #[test]
+    fn human_input_does_not_require_or_change_the_agent_lease() {
+        let (computer, mut screen) = desktop();
+        for holder in ["bot", "none", "user"] {
+            screen.control_holder = holder.into();
+            assert!(user_can_interact(&computer, Some(&screen), "bot"));
+            assert_eq!(screen.execution_run_id.as_deref(), Some("run"));
+            assert!(status_from("bot", &computer, Some(&screen), None).shared_input);
+        }
+    }
+
+    #[test]
+    fn shared_input_requires_the_bots_own_live_screen() {
+        let (mut computer, mut screen) = desktop();
+        assert!(!user_can_interact(&computer, None, "bot"));
+        assert!(!user_can_interact(&computer, Some(&screen), "other-bot"));
+        screen.computer_id = "other-computer".into();
+        assert!(!user_can_interact(&computer, Some(&screen), "bot"));
+        screen.computer_id = computer.id.clone();
+        for state in ["stopped", "booting", "suspended", "error"] {
+            computer.state = state.into();
+            assert!(!user_can_interact(&computer, Some(&screen), "bot"));
+        }
+        computer.state = "running".into();
+        computer.provider_ref = None;
+        assert!(!user_can_interact(&computer, Some(&screen), "bot"));
+    }
 }

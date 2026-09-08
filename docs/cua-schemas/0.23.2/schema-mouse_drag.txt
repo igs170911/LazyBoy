@@ -1,0 +1,52 @@
+name: mouse_drag
+
+description:
+Move a previously-held mouse button to a new point via background X11 delivery. Requires an active mouse_button_down state; does not release the button. Returns the updated held-button state.
+
+input_schema:
+{
+  "additionalProperties": false,
+  "properties": {
+    "cursor_id": {
+      "description": "Optional multi-cursor instance id. Default: 'default'.",
+      "type": "string"
+    },
+    "duration_ms": {
+      "description": "Total drag duration. Default: 500.",
+      "maximum": 10000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "from_zoom": {
+      "description": "Set true after a zoom call to auto-translate zoom-image pixel coordinates back to full-window space.",
+      "type": "boolean"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session. When both are present, session takes precedence over cursor_id.",
+      "type": "string"
+    },
+    "steps": {
+      "description": "Intermediate MotionNotify events. Default: 20.",
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "window_id": {
+      "type": "integer"
+    },
+    "x": {
+      "type": "number"
+    },
+    "y": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "x",
+    "y"
+  ],
+  "type": "object"
+}

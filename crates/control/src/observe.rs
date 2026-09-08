@@ -1,5 +1,7 @@
+use base64::Engine;
 use chrono::Utc;
 use lazyboy_contracts::{ActiveWindow, ComputerObservation, CursorPosition, UiElement};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 pub fn observation_from_png(
@@ -10,6 +12,7 @@ pub fn observation_from_png(
     active_window: Option<ActiveWindow>,
 ) -> ComputerObservation {
     ComputerObservation {
+        native_observation_complete: false,
         frame_id: hex::encode(Sha256::digest(&image)),
         captured_at: Utc::now().to_rfc3339(),
         mime_type: sniff_image_mime(&image).to_string(),
@@ -20,6 +23,39 @@ pub fn observation_from_png(
         active_window,
         elements: Vec::new(),
     }
+}
+
+/// Pixel size of a captured frame, or `None` when the bytes are not decodable.
+/// Capture inputs may use different codecs (imported frames may be JPEG
+/// from `xwd | convert`, the Cua driver writes PNG), so the dimensions have to
+/// come from the frame itself rather than from a configured constant.
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    use image::ImageDecoder;
+
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let decoder = reader.into_decoder().ok()?;
+    Some(decoder.dimensions())
+}
+
+pub fn observation_to_control_json(observation: &ComputerObservation) -> Value {
+    let mut body = json!({
+        "png_base64": base64::engine::general_purpose::STANDARD.encode(&observation.image),
+        "native_observation_complete": observation.native_observation_complete,
+    });
+    if let Some(cursor) = &observation.cursor {
+        body["cursor"] = json!({ "x": cursor.x, "y": cursor.y });
+    }
+    if let Some(window) = &observation.active_window {
+        body["activeWindow"] = json!({ "id": window.id, "title": window.title });
+    }
+    if !observation.elements.is_empty()
+        && let Ok(value) = serde_json::to_value(&observation.elements)
+    {
+        body["elements"] = value;
+    }
+    body
 }
 
 pub fn observation_with_elements(
@@ -62,7 +98,11 @@ const SIGNATURE_H: u32 = 18;
 pub fn frame_signature(image: &[u8]) -> Option<Vec<u8>> {
     let dynamic = image::load_from_memory(image).ok()?;
     let thumb = dynamic
-        .resize_exact(SIGNATURE_W, SIGNATURE_H, image::imageops::FilterType::Triangle)
+        .resize_exact(
+            SIGNATURE_W,
+            SIGNATURE_H,
+            image::imageops::FilterType::Triangle,
+        )
         .to_luma8();
     Some(thumb.into_raw())
 }
@@ -83,6 +123,33 @@ pub fn signatures_similar(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::codecs::jpeg::JpegEncoder;
+    use image::codecs::png::PngEncoder;
+    use image::{ExtendedColorType, ImageEncoder, Rgb, RgbImage};
+    use std::io::Cursor;
+
+    #[test]
+    fn dimensions_come_from_the_frame_for_both_codecs() {
+        let frame = RgbImage::from_pixel(96, 48, Rgb([10, 20, 30]));
+
+        let mut png = Cursor::new(Vec::new());
+        PngEncoder::new(&mut png)
+            .write_image(frame.as_raw(), 96, 48, ExtendedColorType::Rgb8)
+            .unwrap();
+        assert_eq!(image_dimensions(&png.into_inner()), Some((96, 48)));
+
+        // Imported captures can use JPEG, so a hardcoded size would drift the
+        // moment the Xvfb geometry changes.
+        let mut jpeg = Cursor::new(Vec::new());
+        JpegEncoder::new_with_quality(&mut jpeg, 60)
+            .encode(frame.as_raw(), 96, 48, ExtendedColorType::Rgb8)
+            .unwrap();
+        assert_eq!(image_dimensions(&jpeg.into_inner()), Some((96, 48)));
+
+        // A truncated capture must not invent a size.
+        assert_eq!(image_dimensions(&[0xFF, 0xD8, 0xFF]), None);
+        assert_eq!(image_dimensions(&[]), None);
+    }
 
     #[test]
     fn identical_bytes_share_a_frame_id() {
@@ -108,12 +175,20 @@ mod tests {
         let base = frame_signature(&png(|_, _| Rgb([240, 240, 240]))).unwrap();
         // A panel clock flipping digits touches a couple of pixels only.
         let clock = frame_signature(&png(|x, y| {
-            if x < 6 && y < 6 { Rgb([0, 0, 0]) } else { Rgb([240, 240, 240]) }
+            if x < 6 && y < 6 {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([240, 240, 240])
+            }
         }))
         .unwrap();
         // A dialog covering a quarter of the screen.
         let dialog = frame_signature(&png(|x, y| {
-            if x < 160 && y < 90 { Rgb([20, 20, 20]) } else { Rgb([240, 240, 240]) }
+            if x < 160 && y < 90 {
+                Rgb([20, 20, 20])
+            } else {
+                Rgb([240, 240, 240])
+            }
         }))
         .unwrap();
         assert!(signatures_similar(&base, &clock));

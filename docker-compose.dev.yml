@@ -1,5 +1,14 @@
 # Opt-in host access for local Rust development only.
+# The project `database` network is internal, and Docker silently ignores published
+# ports for containers attached only to internal networks. Postgres therefore also
+# joins this host bridge, so 127.0.0.1:5434 really listens for `cargo test`.
 services:
   postgres:
     ports:
       - "127.0.0.1:5434:5432"
+    networks:
+      - database
+      - dev_host
+networks:
+  dev_host:
+    name: lazyboy_dev_host

@@ -1,14 +1,8 @@
-use thiserror::Error;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenLease {
     pub owner_id: String,
     pub fence: u32,
 }
-
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-#[error("computer is busy")]
-pub struct ComputerBusyError;
 
 pub fn screen_lease_id(run_id: &str, fence: u32) -> String {
     format!("{run_id}:{fence}")
@@ -55,10 +49,6 @@ pub fn can_release_screen_lease(existing: Option<&str>, incoming: Option<&str>) 
             next.owner_id == current.owner_id && next.fence >= current.fence
         }
     }
-}
-
-pub fn next_fence(current: u32) -> u32 {
-    current.saturating_add(1)
 }
 
 #[cfg(test)]

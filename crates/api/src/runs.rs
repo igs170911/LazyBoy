@@ -1,4 +1,9 @@
-use lazyboy_harness::execution::{ExecutionMode, GoalOutcome, goal_request, goal_outcome, GOAL_INSTRUCTIONS, GOAL_CONTINUE};
+use lazyboy_harness::execution::{
+    ExecutionMode, GOAL_CONTINUE, GOAL_INSTRUCTIONS, GoalOutcome, MAX_NUDGES_GOAL,
+    MAX_NUDGES_PLAIN, NEEDS_INPUT_MARKER, StopReason, VERIFY_BEFORE_DONE, asks_for_input,
+    goal_outcome, goal_request, stop_reason,
+};
+use lazyboy_harness::policy::{ActionObserved, LoopGuard, RunPolicy, Verdict};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,9 +22,11 @@ use uuid::Uuid;
 use crate::computer::{self, adapter_context_for};
 use crate::db::{Actor, parse_mode};
 use crate::state::AppState;
-use crate::tools::{ToolCtx, dispatch, tool_definitions};
+use crate::tools::{ToolCtx, ToolOutcome, dispatch, tool_definitions};
 
 const SCREENSHOT_CAPTION: &str = "Desktop screenshot (1280x800) with yellow numbered marks. Click by those element ids. The live VNC view has no marks.";
+
+const TAKEOVER_RESUME_PROMPT: &str = "The user finished collaborating and released control. Continue the original task from the CURRENT screen. Do not restart from scratch. Element ids and page refs from before the handoff are invalid; use only the fresh observation below.";
 
 const SYSTEM_CHAT: &str = "You are this bot's assistant. This message is conversation — a greeting, small talk, a question you can answer from knowledge, planning, or explaining.
 
@@ -32,13 +39,15 @@ const SYSTEM: &str = "You are this bot's assistant. You have a Linux desktop you
 Reply in text — no tools — for greetings, small talk, questions you can answer from knowledge, planning, or explaining. Do not call computer_observe, computer_act, browser, launch_app, open_path, wait, list_files, or shell just to check the screen or because a desktop exists. A hello does not need a screenshot or a file listing.
 
 Use tools only when the user wants something done on the computer: open a site, click through a UI, run a command, read/write workspace files, or follow a taught skill. Route directly by task:
-1) Website, video, search, email, or anything in Chromium: use browser first. Navigate directly, then snapshot/click/type/press by element id. Do not use shell/curl or pixel clicks to inspect a web page.
+1) Website, video, search, email, or anything in Chromium: use browser first. Navigate directly, then snapshot/click/type/press by element id. Do not use shell/curl to inspect a web page. For canvas or controls the browser tool cannot operate, call computer_observe and use Cua computer_act coordinates from that fresh screenshot.
 2) Workspace files or commands: use list_files, read_file, write_file, or shell.
 3) Connected services: use an MCP tool when it directly matches the task.
 4) Opening a local file or non-browser app: use open_path or launch_app.
 5) Native GUI with no DOM (dialogs, file manager, XFCE): use computer_act by element id. Those ids are AT-SPI controls, not window boxes.
 
-When you ARE using the desktop: the human watches the same live screen. Only the latest screenshot you received is current; they may have interacted since. Call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
+The shell is a visible Cua-controlled terminal on the shared VNC screen. The same session keeps its directory, exports and background jobs. Results are screenshots, not hidden stdout: inspect the prompt to decide whether a command finished. A timeout does not stop the job. Omit command to inspect it again, use keys \"C-c\" to interrupt, and never type a second command while busy. File tools also work through this visible terminal; read_file supports start_line and lines, and you can scroll to inspect longer output. These computer tools require a vision model.
+
+When you ARE using the desktop: the human can interact with the same live screen while you work; this does not pause your task. Prefer browser/native element actions over moving the shared pointer. If the screen changes unexpectedly, observe again and continue from the current state; do not undo human changes or replay an uncertain click. Request human assistance only when the task needs it. Only the latest screenshot you received is current; they may have interacted since. Call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
 
 When you use the browser tool:
 - snapshot first; click {\"action\":\"click\",\"element\":N}; type {\"action\":\"type\",\"element\":N,\"text\":\"...\"}; open a URL with navigate.
@@ -51,9 +60,13 @@ When you use the browser tool:
 
 When a click changes nothing: do not repeat it blindly. Take a fresh snapshot, read the [disabled] tags and the page text, then act. Pages that need patience (training videos, quizzes, slow forms) are normal: keep working through them step by step and report progress in one short sentence when done.
 
+Explain your next concrete action briefly before tool calls, in the user's language. When a tool fails, explain what failed and how you will recover in your next update. Recover from temporary errors by observing current state and choosing a different action; never replay an uncertain mutation blindly. Before any necessary stop, state what is completed, what remains, the specific blocker, and the next action needed. Never silently stop or claim a failed tool succeeded.
+
 Waiting is a tool call, never a reply. Ending your turn with \"waiting for X\" stops the whole run; nobody resumes it. If something must finish first, call wait (or click, which waits) and continue.
 
 Multi-step tasks and taught skills: you are done only when the playbook's check passes (for example the course shows completed, the form shows a confirmation). Do not stop with a status sentence in the middle; keep calling tools until the check passes or you are truly blocked, then say exactly why. Never repeat an earlier reply word for word; describe the current screen.
+
+When you genuinely must stop and need the human — a decision only they can make, a credential you do not have, a file that is missing, or a result they must approve — first say what you already did and what the next step would be, then end that reply with a standalone [NEEDS_INPUT] line. The run pauses for their answer and resumes exactly where you stopped. Never use it when the task is simply finished.
 
 Never ask for passwords, codes, or tokens in chat. At a login wall: call list_accounts, then use_saved_login {accountId} when a saved account matches. For a simple Cloudflare connection-check checkbox, first take computer_observe and use connection_check once with coordinates from that screenshot. Check the returned page content before continuing; disappearance of the checkbox alone is not success. Never reload repeatedly or restart the browser to retry. For other CAPTCHA, 2FA, an unsuccessful connection check, or no matching saved login, call request_takeover with site and why so the human signs in on YOUR screen. Recurring work uses create_schedule (five-field cron, Asia/Taipei unless told otherwise).
 
@@ -131,16 +144,24 @@ pub async fn send(
             }));
         }
     }
-    // A message sent while a single-bot /goal is active is steering for that
-    // run. Reuse its id so it is delivered by the persistent loop rather than
-    // creating a duplicate queued run that would repeat the work afterwards.
-    let merged_goal_run: Option<String> = if room_id.is_none() {
+    // A message that continues an existing task belongs to that task: reuse its
+    // run id so the loop resumes from the saved harness state instead of
+    // starting over and fighting for the same desktop. That covers /goal
+    // steering and every run paused while waiting for an answer. A human who
+    // still holds the mouse is never interrupted by an incoming message.
+    let merged_run: Option<String> = if room_id.is_none() {
         sqlx::query_scalar(
-            "SELECT id FROM runs
-             WHERE bot_id=$1 AND thread_id=$2
-               AND status IN ('queued','leased','running','waiting_input','waiting_takeover')
-               AND btrim(prompt) ~ '^/goal($|[[:space:]])'
-             ORDER BY created_at ASC LIMIT 1",
+            "SELECT r.id FROM runs r
+             WHERE r.bot_id=$1 AND r.thread_id=$2
+               AND (
+                 (r.status IN ('queued','leased','running','waiting_input','waiting_takeover')
+                  AND btrim(r.prompt) ~ '^/goal($|[[:space:]])')
+                 OR r.status='waiting_input'
+                 OR (r.status='waiting_takeover' AND NOT EXISTS (
+                       SELECT 1 FROM computers c JOIN bots b ON b.computer_id=c.id
+                       WHERE b.id=r.bot_id AND c.control_holder='user'))
+               )
+             ORDER BY r.created_at ASC LIMIT 1",
         )
         .bind(bot_id)
         .bind(thread_id)
@@ -150,11 +171,20 @@ pub async fn send(
     } else {
         None
     };
-    let merged_goal = merged_goal_run.is_some();
-    let run_id = merged_goal_run.unwrap_or_else(|| Uuid::new_v4().to_string());
-    if merged_goal {
-        sqlx::query("UPDATE runs SET status='queued', retry_count=0, updated_at=now() WHERE id=$1 AND status='waiting_input'")
-            .bind(&run_id).execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    let merged = merged_run.is_some();
+    let run_id = merged_run.unwrap_or_else(|| Uuid::new_v4().to_string());
+    if merged {
+        // The answer itself arrives through the steering read; waking the run
+        // only makes it claimable again and retires the pending question.
+        sqlx::query(
+            "UPDATE runs SET status='queued', retry_count=0,
+                    checkpoint=checkpoint-'awaitResume', updated_at=now()
+             WHERE id=$1 AND status IN ('waiting_input','waiting_takeover')",
+        )
+        .bind(&run_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
     }
     let message_id = Uuid::new_v4().to_string();
     let seq: i32 = sqlx::query_scalar(
@@ -201,7 +231,7 @@ pub async fn send(
         member_ids.push(bot_id.to_string());
     }
     for (index, member_id) in member_ids.iter().enumerate() {
-        if merged_goal && index == 0 {
+        if merged && index == 0 {
             continue;
         }
         let member_run = if index == 0 {
@@ -216,7 +246,7 @@ pub async fn send(
         .bind(&member_run)
         .bind(&actor.space_id)
         .bind(member_id)
-        .bind(&thread_id)
+        .bind(thread_id)
         .bind(&actor.user_id)
         .bind(&stored_body)
         .bind(json!({"messageSeq":seq}))
@@ -241,7 +271,7 @@ pub async fn send(
     .execute(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
-    let queued_behind_active = if merged_goal {
+    let queued_behind_active = if merged {
         true
     } else {
         sqlx::query_scalar(
@@ -262,6 +292,11 @@ pub async fn send(
             .map_err(|error| error.to_string())?;
     }
     tx.commit().await.map_err(|error| error.to_string())?;
+    // The user message and its event were written in the transaction above
+    // rather than through `sessions::append_event`, so this is where the open
+    // chat windows get told to read it: every other tab sees the message without
+    // waiting for its next poll.
+    state.wakes.wake(thread_id);
     if let Err(error) =
         crate::attachments::stage_for_bots(state, actor, &member_ids, &decoded).await
     {
@@ -276,19 +311,50 @@ pub async fn send(
     }))
 }
 
+/// `worker_loop` claim projection: run id, bot id, thread id, prompt, user id, space id.
+type RetryCandidateRow = (String, String, String, String, String, String);
+
 pub async fn worker_loop(state: AppState) {
     let inflight = Arc::new(tokio::sync::Semaphore::new(16));
     let lease_owner = format!("api-{}", Uuid::new_v4());
+    // Without a knock the loop sits on its 200 ms timer before it can see a run
+    // that was queued a moment ago; going straight to the claim query is what
+    // makes the thinking indicator follow the message instead of the timer.
+    let mut wakes = state.wakes.subscribe();
     loop {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let _ = sqlx::query("UPDATE runs SET status='failed',error='Worker interrupted after tool execution; inspect current state before continuing.',completed_at=now(),lease_owner=NULL,lease_expires_at=NULL WHERE status IN ('leased','running') AND lease_expires_at<now() AND COALESCE((checkpoint->>'toolsStarted')::boolean,false)")
-            .execute(state.pool()).await;
+        tokio::select! {
+            _ = wakes.wait_any() => {}
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+        }
+        let interrupted: Vec<(String, String, String)> = sqlx::query_as(
+            "WITH doomed AS (
+                 UPDATE runs SET status='failed',error=$1,completed_at=now(),
+                     lease_owner=NULL, lease_expires_at=NULL
+                 WHERE status IN ('leased','running') AND lease_expires_at<now()
+                   AND COALESCE((checkpoint->>'toolsStarted')::boolean,false)
+                 RETURNING id, thread_id, bot_id
+             )
+             SELECT id, thread_id, bot_id FROM doomed LIMIT 50",
+        )
+        .bind(INTERRUPTED_ERROR)
+        .fetch_all(state.pool())
+        .await
+        .unwrap_or_default();
+        for (orphan_run, orphan_thread, orphan_bot) in interrupted {
+            report_run_failure(
+                &state,
+                &orphan_run,
+                &orphan_thread,
+                &orphan_bot,
+                INTERRUPTED_ERROR,
+            )
+            .await;
+        }
         let Ok(permit) = inflight.clone().try_acquire_owned() else {
             continue;
         };
-        let queued: Result<Option<(String, String, String, String, String, String)>, _> =
-            sqlx::query_as(
-                "WITH candidate AS (
+        let queued: Result<Option<RetryCandidateRow>, _> = sqlx::query_as(
+            "WITH candidate AS (
                SELECT r.id
                FROM runs r
                WHERE r.retry_count < r.max_retries
@@ -315,10 +381,10 @@ pub async fn worker_loop(state: AppState) {
                  lease_fence=lease_fence+1, retry_count=retry_count+1, updated_at=now()
              FROM candidate c WHERE r.id=c.id
              RETURNING r.id,r.bot_id,r.thread_id,r.prompt,r.user_id,r.space_id",
-            )
-            .bind(&lease_owner)
-            .fetch_optional(state.pool())
-            .await;
+        )
+        .bind(&lease_owner)
+        .fetch_optional(state.pool())
+        .await;
         let Ok(Some((run_id, bot_id, thread_id, prompt, user_id, space_id))) = queued else {
             drop(permit);
             continue;
@@ -351,14 +417,7 @@ pub async fn worker_loop(state: AppState) {
                     .ok()
                     .flatten();
                 if next_status.as_deref() == Some("failed") {
-                    let _ = append_bot_message(
-                        &state,
-                        &thread_id,
-                        &run_id,
-                        &bot_id,
-                        &format!("Run failed after retries: {error}"),
-                    )
-                    .await;
+                    report_run_failure(&state, &run_id, &thread_id, &bot_id, &error).await;
                     let _ = crate::sessions::append_event(
                         &state,
                         &thread_id,
@@ -412,6 +471,13 @@ async fn execute_run(
     }
     let _ = crate::sessions::append_event(state, thread_id, "run.started", json!({"runId":run_id}))
         .await;
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({"event": "started", "task": crate::monitor::snippet(prompt, 160)}),
+    )
+    .await;
 
     let bot = state
         .db
@@ -496,6 +562,16 @@ async fn execute_run(
         .execute(state.pool())
         .await;
     }
+    // The human answered a task that had paused to ask. Their message is an
+    // answer, not a new request, so the loop feeds it in before the next model
+    // turn instead of letting the run restart from scratch.
+    let await_resume = checkpoint.get("awaitResume").is_some();
+    if await_resume {
+        let _ = sqlx::query("UPDATE runs SET checkpoint = checkpoint - 'awaitResume' WHERE id=$1")
+            .bind(run_id)
+            .execute(state.pool())
+            .await;
+    }
     let history_end = if resume_after_takeover {
         i32::MAX
     } else {
@@ -554,16 +630,20 @@ async fn execute_run(
         None
     };
     let initial_prompt = if goal_mode {
-        format!("Execute this goal until it is verified complete:\n{}", goal_text)
+        format!(
+            "Execute this goal until it is verified complete:\n{}",
+            goal_text
+        )
     } else if let Some((skill, args)) = &file_skill {
-        format!("Run the /{} skill with these arguments: {}", skill.name, args)
+        format!(
+            "Run the /{} skill with these arguments: {}",
+            skill.name, args
+        )
     } else {
         prompt.to_string()
     };
     let mut first = if resume_after_takeover {
-        vec![UserContent::text(
-            "The user finished collaborating and released control. Continue the original task from the CURRENT screen. Do not restart from scratch.",
-        )]
+        vec![UserContent::text(TAKEOVER_RESUME_PROMPT)]
     } else {
         vec![UserContent::text(initial_prompt)]
     };
@@ -589,7 +669,11 @@ async fn execute_run(
     if !resume_after_takeover {
         // The user named a taught skill: hand the model the full playbook up
         // front so it does not have to guess or call use_skill first.
-        if let Some(skill) = if goal_mode || file_skill.is_some() { None } else { crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await } {
+        if let Some(skill) = if goal_mode || file_skill.is_some() {
+            None
+        } else {
+            crate::skills::skill_for_prompt(state.pool(), bot_id, prompt).await
+        } {
             first.push(UserContent::text(crate::skills::format_playbook_for_run(
                 &skill,
             )));
@@ -618,25 +702,37 @@ async fn execute_run(
         .any(|block| block.get("kind").and_then(Value::as_str) == Some("file"));
     // Greetings and small talk must not even *see* desktop tools: models
     // otherwise "check the screen" or `ls` the home on "hi" and boot Docker.
-    let chat_only =
-        !resume_after_takeover && !goal_mode && file_skill.is_none() && skill_check.is_none() && !workspace_file && is_plain_chat(prompt);
+    let chat_only = !resume_after_takeover
+        && !goal_mode
+        && file_skill.is_none()
+        && skill_check.is_none()
+        && !workspace_file
+        && is_plain_chat(prompt);
     if chat_only {
         // Memory is recalled separately and injected into the preamble below.
         // Do not expose even memory tools here: a plain greeting must be one
         // model call with no chance of accidentally invoking any capability.
         defs.clear();
         tracing::info!(run_id, "chat-only turn: all tools withheld");
+        crate::monitor::record(
+            state,
+            run_id,
+            "notice",
+            json!({"text": "這一輪是對白，工具先收起來（不會動到電腦）。"}),
+        )
+        .await;
     }
-    // Taught skills run long (a 24-page course is 24 clicks); plain chats stay
-    // bounded tighter so a confused model cannot burn budget for as long.
-    let execution_mode = if goal_mode {
-        ExecutionMode::Goal
-    } else if skill_check.is_some() && file_skill.is_none() {
-        ExecutionMode::Bounded(80)
-    } else if chat_only {
+    // Computer work keeps going until it verifies or explains a blocker.
+    // Plain chat stays short so a confused model cannot burn budget.
+    let goal_mode = goal_mode || !chat_only;
+    let execution_mode = if chat_only {
         ExecutionMode::Bounded(4)
     } else {
-        ExecutionMode::Bounded(40)
+        ExecutionMode::Goal
+    };
+    let turn_limit = match execution_mode {
+        ExecutionMode::Goal => None,
+        ExecutionMode::Bounded(limit) => Some(limit as i64),
     };
     let mut nudges: u32 = 0;
     let mut screenshots: u32 = 0;
@@ -655,22 +751,21 @@ async fn execute_run(
         }
     }
     let mut pending = Message::User { content: first };
-    if !resume_after_takeover {
-        if let (Some(saved_history), Some(saved_pending)) = (
+    if !resume_after_takeover
+        && let (Some(saved_history), Some(saved_pending)) = (
             checkpoint.get("harnessHistory"),
             checkpoint.get("harnessPending"),
-        ) {
-            if let (Ok(restored), Ok(mut next)) = (
-                serde_json::from_value::<Vec<Message>>(saved_history.clone()),
-                serde_json::from_value::<Message>(saved_pending.clone()),
-            ) {
-                history = restored;
-                if let Message::User { content } = &mut next {
-                    content.push(UserContent::text("Resumed after a completed tool batch. Do not repeat completed actions. Observe current browser/desktop before any new mutation; prior element references may be stale."));
-                }
-                pending = next;
-            }
+        )
+        && let (Ok(restored), Ok(mut next)) = (
+            serde_json::from_value::<Vec<Message>>(saved_history.clone()),
+            serde_json::from_value::<Message>(saved_pending.clone()),
+        )
+    {
+        history = restored;
+        if let Message::User { content } = &mut next {
+            content.push(UserContent::text("Resumed after a completed tool batch. Do not repeat completed actions. Observe current browser/desktop before any new mutation; prior element references may be stale."));
         }
+        pending = next;
     }
 
     let mut final_text = String::new();
@@ -683,8 +778,24 @@ async fn execute_run(
     // steering input. Keep the run alive and deliver each new message once
     // before the next model turn instead of waiting for a second run to win
     // the bot lease.
-    let mut steering_seq = checkpoint.get("steeringSeq").and_then(Value::as_i64).map(|seq| seq as i32).unwrap_or(current_seq);
+    let mut steering_seq = checkpoint
+        .get("steeringSeq")
+        .and_then(Value::as_i64)
+        .map(|seq| seq as i32)
+        .unwrap_or(current_seq);
     let mut used_gui = false;
+    let mut did_work = false;
+    // One verification demand per run: enough to catch "I'm done" that isn't,
+    // without trapping the model in an endless self-audit.
+    let mut verified = false;
+    // Round policy. A run gets no quota; it gets a watcher. `LoopGuard` looks
+    // for the shape of going in circles - the same action, the same failure, a
+    // long stretch with nothing new succeeding - and only the last-resort
+    // breakers use turns or wall clock. Wall clock is measured per attempt: a
+    // run that parked for three days waiting for a human starts fresh.
+    let run_policy = RunPolicy::from_env();
+    let mut guard = LoopGuard::with_watch(run_policy, turns);
+    let attempt_clock = std::time::Instant::now();
     let memory = if ctx.memory_enabled {
         match state
             .memory
@@ -693,6 +804,13 @@ async fn execute_run(
         {
             Ok(items) => state.memory.durable_block(&items),
             Err(error) => {
+                crate::monitor::record(
+                    state,
+                    run_id,
+                    "notice",
+                    json!({"text": format!("記憶讀取失敗，這輪不用記憶：{error}")}),
+                )
+                .await;
                 tracing::warn!("memory retrieval failed for run {run_id}: {error}");
                 String::new()
             }
@@ -757,23 +875,23 @@ async fn execute_run(
             preamble.push_str("\n\n");
             preamble.push_str(&file_skill_index);
         }
-        if let Ok(accounts) = crate::vault::list_on(state.pool(), actor, bot_id).await {
-            if !accounts.is_empty() {
-                let names = accounts
-                    .iter()
-                    .map(|item| format!("{} ({})", item.site, item.username))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                preamble.push_str(&format!(
+        if let Ok(accounts) = crate::vault::list_on(state.pool(), actor, bot_id).await
+            && !accounts.is_empty()
+        {
+            let names = accounts
+                .iter()
+                .map(|item| format!("{} ({})", item.site, item.username))
+                .collect::<Vec<_>>()
+                .join(", ");
+            preamble.push_str(&format!(
                     "\n\nSaved logins (passwords are not shown): {names}. At a login wall call use_saved_login with the matching accountId from list_accounts."
                 ));
-            }
         }
     }
 
     while execution_mode.allows_turn(turns) {
         turns = turns.saturating_add(1);
-        if goal_mode {
+        if goal_mode || (await_resume && !resume_after_takeover) {
             let steering: Vec<(i32, String)> = sqlx::query_as(
                 "SELECT seq, body FROM messages
                  WHERE thread_id=$1 AND role='user' AND seq>$2
@@ -792,10 +910,27 @@ async fn execute_run(
                     .filter(|body| !body.is_empty())
                     .collect::<Vec<_>>();
                 if !guidance.is_empty() {
-                    let text = format!(
-                        "The user added this guidance in the same goal thread. Incorporate it into the current goal and continue verifying the result:\n{}",
-                        guidance.join("\n")
-                    );
+                    let text = if goal_mode {
+                        format!(
+                            "The user added this guidance in the same goal thread. Incorporate it into the current goal and continue verifying the result:\n{}",
+                            guidance.join("\n")
+                        )
+                    } else {
+                        format!(
+                            "The human answered your question about the paused task. Continue the original work from where it stopped with tools: do not repeat finished steps and do not start over.\n{}",
+                            guidance.join("\n")
+                        )
+                    };
+                    crate::monitor::record(
+                        state,
+                        run_id,
+                        "notice",
+                        json!({
+                            "turn": turns,
+                            "text": format!("收到新指示：{}", crate::monitor::snippet(&guidance.join(" / "), 160)),
+                        }),
+                    )
+                    .await;
                     if let Message::User { content } = &mut pending {
                         content.push(UserContent::text(text));
                     }
@@ -816,8 +951,57 @@ async fn execute_run(
             )
             .await;
         }
+        // Watcher first: a checkpoint question belongs to the model turn that
+        // is about to happen, and a derailment or breaker parks the run before
+        // another model call is paid for.
+        match guard.on_turn(turns, attempt_clock.elapsed()) {
+            Verdict::Continue => {}
+            Verdict::Reflect(text) => {
+                tracing::info!(run_id, turn = turns, "round policy: coaching the run");
+                crate::monitor::record(
+                    state,
+                    run_id,
+                    "notice",
+                    json!({
+                        "turn": turns,
+                        "text": format!("系統檢查點：{}", crate::monitor::snippet(&text, 160)),
+                    }),
+                )
+                .await;
+                if let Message::User { content } = &mut pending {
+                    content.push(UserContent::text(text));
+                }
+            }
+            Verdict::Halt { reason, note } => {
+                let limit = match execution_mode {
+                    ExecutionMode::Bounded(limit) => limit,
+                    ExecutionMode::Goal => 0,
+                };
+                return pause_for_answer(
+                    state,
+                    bot_id,
+                    thread_id,
+                    run_id,
+                    lease_owner,
+                    &ctx,
+                    PauseRequest {
+                        reason,
+                        draft: &final_text,
+                        history: &history,
+                        turns,
+                        steering_seq,
+                        limit,
+                        note: Some(note),
+                        screenshots,
+                        screenshot_bytes,
+                        used_gui,
+                    },
+                )
+                .await;
+            }
+        }
         drop_history_screenshots(&mut history, &pending);
-        set_run_step(state, run_id, MODEL_STEP).await;
+        set_run_progress(state, run_id, MODEL_STEP, turns, turn_limit).await;
         let model_started = std::time::Instant::now();
         let content = tokio::select! {
             halt = wait_for_halt(state, run_id) => {
@@ -834,7 +1018,14 @@ async fn execute_run(
                 )
                 .await;
             }
-            result = complete_with_retry(&model, pending.clone(), &preamble, &history, &defs) => result
+            result = complete_with_retry(
+                &model,
+                pending.clone(),
+                &preamble,
+                &history,
+                &defs,
+                Trace { state, run_id, turn: turns },
+            ) => result
         }?;
         let assistant = Message::Assistant {
             id: None,
@@ -844,27 +1035,55 @@ async fn execute_run(
         history.push(assistant);
 
         let mut calls = Vec::new();
+        let mut turn_text = String::new();
         for item in &content {
             match item {
-                AssistantContent::Text(text) => final_text.push_str(&text.text),
+                AssistantContent::Text(text) => {
+                    final_text.push_str(&text.text);
+                    turn_text.push_str(&text.text);
+                }
                 AssistantContent::ToolCall(call) => calls.push(call.clone()),
                 _ => {}
             }
         }
+        let model_elapsed = model_started.elapsed().as_millis() as u64;
         tracing::info!(
             run_id,
             turn = turns,
-            elapsed_ms = model_started.elapsed().as_millis() as u64,
+            elapsed_ms = model_elapsed,
             tool_calls = calls.len(),
             "model turn"
         );
+        crate::monitor::record(
+            state,
+            run_id,
+            "model",
+            json!({
+                "turn": turns,
+                "elapsedMs": model_elapsed,
+                "toolCalls": calls.len(),
+                "text": crate::monitor::snippet(&turn_text, 200),
+            }),
+        )
+        .await;
         if calls.is_empty() {
             // A model that quits a playbook early, or parrots an earlier reply
             // instead of describing the current screen, gets pushed back to
-            // the tools a couple of times before we accept the text.
+            // the tools a few times before the text is accepted.
             let parroted = earlier_replies
                 .iter()
                 .any(|earlier| earlier == final_text.trim());
+            let declared_done = goal_mode
+                && matches!(
+                    goal_outcome(&final_text),
+                    GoalOutcome::Complete | GoalOutcome::NeedsInput
+                );
+            let nudge_limit = if goal_mode {
+                MAX_NUDGES_GOAL
+            } else {
+                MAX_NUDGES_PLAIN
+            };
+            let mut verify_chosen = false;
             let nudge = if goal_mode {
                 match goal_outcome(&final_text) {
                     GoalOutcome::Continue => Some(GOAL_CONTINUE.to_string()),
@@ -874,45 +1093,97 @@ async fn execute_run(
                 Some(
                     "Your reply repeats an earlier message word for word, so it cannot describe the current screen. Below is what the screen shows RIGHT NOW. Act on it with a tool call. Waiting is done by calling wait or by clicking the control (the click waits for it to enable), never by replying. Reply in text only once the task is finished or you are truly blocked (say why).".to_string(),
                 )
+            } else if let Some(check) = &skill_check {
+                Some(format!(
+                    "The run is not finished; your text reply ended nothing but your own turn. Check: {check}\nBelow is the current screen. If the next control is [disabled], click it anyway — the click waits up to 45s for it to enable — or call wait. Ids marked [below viewport] scroll automatically. Only reply in text when the check passes or you are truly blocked, and then say exactly what blocks you."
+                ))
+            } else if did_work && !verified && !asks_for_input(&final_text) {
+                // First stop attempt of a run that already moved something: make
+                // it prove the work is finished, or ask the human properly.
+                verify_chosen = true;
+                Some(VERIFY_BEFORE_DONE.to_string())
             } else {
-                skill_check.as_ref().map(|check| {
-                    format!(
-                        "The run is not finished; your text reply ended nothing but your own turn. Check: {check}\nBelow is the current screen. If the next control is [disabled], click it anyway — the click waits up to 45s for it to enable — or call wait. Ids marked [below viewport] scroll automatically. Only reply in text when the check passes or you are truly blocked, and then say exactly what blocks you."
-                    )
-                })
+                None
             };
-            match nudge {
-                Some(text) if goal_mode || (nudges < 6 && execution_mode.allows_turn(turns.saturating_add(2))) => {
-                    nudges = nudges.saturating_add(1);
-                    tracing::info!(
-                        run_id,
-                        turn = turns,
-                        parroted,
-                        "nudging model back to tools"
-                    );
-                    earlier_replies.push(final_text.trim().to_string());
-                    final_text.clear();
-                    let mut content = vec![UserContent::text(text)];
-                    if used_gui || skill_check.is_some() {
-                        prepare_run_computer(state, actor, bot_id, run_id, &ctx, true).await?;
-                    }
-                    if (used_gui || skill_check.is_some())
-                        && ctx.gui_block.lock().unwrap().is_none()
-                    {
-                        set_run_step(state, run_id, "computer_observe: 重新確認畫面").await;
-                        let outcome = dispatch(&ctx, "computer_observe", &json!({})).await;
-                        content.push(UserContent::text(outcome.text));
-                        if let Some(image) = outcome.image {
-                            screenshot_bytes += image.len() as u64;
-                            screenshots += 1;
-                            content.extend(screenshot_parts(image));
-                        }
-                    }
-                    pending = Message::User { content };
-                    continue;
+            let may_nudge =
+                nudges < nudge_limit && execution_mode.allows_turn(turns.saturating_add(2));
+            if let Some(text) = may_nudge.then_some(nudge).flatten() {
+                nudges = nudges.saturating_add(1);
+                verified |= verify_chosen;
+                tracing::info!(
+                    run_id,
+                    turn = turns,
+                    parroted,
+                    verify = verify_chosen,
+                    "nudging model back to tools"
+                );
+                crate::monitor::record(
+                    state,
+                    run_id,
+                    "notice",
+                    json!({
+                        "turn": turns,
+                        "text": if verify_chosen {
+                            format!("要求模型先證明做完了才准結束（第 {nudges} 次攔下）。")
+                        } else if parroted {
+                            format!("模型重複了舊的回答，叫它看現在畫面繼續做（第 {nudges} 次）。")
+                        } else {
+                            format!("模型想用一句話收尾，叫它用工具繼續（第 {nudges} 次）。")
+                        },
+                    }),
+                )
+                .await;
+                earlier_replies.push(final_text.trim().to_string());
+                final_text.clear();
+                let mut content = vec![UserContent::text(text)];
+                if used_gui || skill_check.is_some() {
+                    prepare_run_computer(state, actor, bot_id, run_id, &ctx, true).await?;
                 }
-                _ => break,
+                if (used_gui || skill_check.is_some()) && ctx.gui_block.lock().unwrap().is_none() {
+                    set_run_step(state, run_id, "computer_observe: 重新確認畫面").await;
+                    let outcome = dispatch(&ctx, "computer_observe", &json!({})).await;
+                    content.push(UserContent::text(outcome.text));
+                    if let Some(image) = outcome.image {
+                        screenshot_bytes += image.len() as u64;
+                        screenshots += 1;
+                        content.extend(screenshot_parts(image));
+                    }
+                }
+                pending = Message::User { content };
+                continue;
             }
+            // Nothing left to retry: report where the work stands and let the
+            // human decide instead of ending the task in silence.
+            let stalled = nudges >= nudge_limit && !declared_done;
+            if let Some(reason) = stop_reason(execution_mode, turns, &final_text, did_work, stalled)
+            {
+                let limit = match execution_mode {
+                    ExecutionMode::Bounded(limit) => limit,
+                    ExecutionMode::Goal => 0,
+                };
+                return pause_for_answer(
+                    state,
+                    bot_id,
+                    thread_id,
+                    run_id,
+                    lease_owner,
+                    &ctx,
+                    PauseRequest {
+                        reason,
+                        draft: &final_text,
+                        history: &history,
+                        turns,
+                        steering_seq,
+                        limit,
+                        note: None,
+                        screenshots,
+                        screenshot_bytes,
+                        used_gui,
+                    },
+                )
+                .await;
+            }
+            break;
         }
         final_text.clear();
         let mut results = Vec::new();
@@ -960,14 +1231,16 @@ async fn execute_run(
                     | "use_saved_login"
                     | "request_takeover"
             );
+            did_work = true;
             let step = describe_step(&name, &call.function.arguments);
-            set_run_step(state, run_id, &step).await;
+            set_run_progress(state, run_id, &step, turns, turn_limit).await;
             let fence=sqlx::query("UPDATE runs SET checkpoint=COALESCE(checkpoint,'{}'::jsonb)||jsonb_build_object('toolsStarted',true) WHERE id=$1 AND lease_owner=$2 AND status='running'")
                 .bind(run_id).bind(lease_owner).execute(state.pool()).await.map_err(|e| e.to_string())?;
             if fence.rows_affected() != 1 {
                 return Err("run lease lost before tool dispatch".into());
             }
             let tool_started = std::time::Instant::now();
+            let mut tool_timed_out = false;
             let outcome = tokio::select! {
                 halt = wait_for_halt(state, run_id) => {
                     return finish_halt(
@@ -988,7 +1261,17 @@ async fn execute_run(
                     dispatch(&ctx, &name, &call.function.arguments),
                 ) => match outcome {
                     Ok(outcome) => outcome,
-                    Err(_) => return Err(format!("tool {name} timed out; its effects are unknown. Inspect the current state before continuing")),
+                    // A slow tool is a normal turn, not a dead run: say the
+                    // effects are unknown and let the model re-observe.
+                    Err(_) => {
+                        tool_timed_out = true;
+                        ToolOutcome {
+                        text: format!("tool {name} timed out after 150 seconds. Its effects are unknown: observe the current screen or files before anything else, and never repeat a step that already worked."),
+                        image: None,
+                        pause: false,
+                        blocks: Vec::new(),
+                        }
+                    }
                 }
             };
             tracing::info!(
@@ -1001,6 +1284,72 @@ async fn execute_run(
                 pause = outcome.pause,
                 "tool call"
             );
+            let status = tool_status(tool_timed_out, outcome.pause, &outcome.text);
+            crate::monitor::record(
+                state,
+                run_id,
+                "tool",
+                json!({
+                    "turn": turns,
+                    "name": name.clone(),
+                    "step": step.clone(),
+                    "status": status,
+                    "elapsedMs": tool_started.elapsed().as_millis() as u64,
+                    "snippet": crate::monitor::snippet(&outcome.text, 200),
+                }),
+            )
+            .await;
+            match guard.on_action(&ActionObserved {
+                name: call.function.name.as_str(),
+                args: &call.function.arguments,
+                label: &step,
+                ok: status == "ok",
+                turn: turns,
+                changes_state: action_changes_state(&name, &call.function.arguments),
+            }) {
+                Verdict::Continue => {}
+                Verdict::Reflect(text) => {
+                    tracing::info!(run_id, turn = turns, step = %step, "round policy: coaching mid-turn");
+                    crate::monitor::record(
+                        state,
+                        run_id,
+                        "notice",
+                        json!({
+                            "turn": turns,
+                            "text": format!("系統提示：{}", crate::monitor::snippet(&text, 160)),
+                        }),
+                    )
+                    .await;
+                    results.push(UserContent::text(text));
+                }
+                Verdict::Halt { reason, note } => {
+                    let limit = match execution_mode {
+                        ExecutionMode::Bounded(limit) => limit,
+                        ExecutionMode::Goal => 0,
+                    };
+                    return pause_for_answer(
+                        state,
+                        bot_id,
+                        thread_id,
+                        run_id,
+                        lease_owner,
+                        &ctx,
+                        PauseRequest {
+                            reason,
+                            draft: &final_text,
+                            history: &history,
+                            turns,
+                            steering_seq,
+                            limit,
+                            note: Some(note),
+                            screenshots,
+                            screenshot_bytes,
+                            used_gui,
+                        },
+                    )
+                    .await;
+                }
+            }
             // xAI rejects images inside tool results. Attach a changed
             // screenshot as a following user image instead.
             if let Some(image) = outcome.image {
@@ -1068,7 +1417,16 @@ async fn execute_run(
             results.extend(screenshot_parts(png));
         }
         pending = Message::User { content: results };
-        save_harness_checkpoint(state, run_id, lease_owner, &history, &pending, turns, steering_seq).await?;
+        save_harness_checkpoint(
+            state,
+            run_id,
+            lease_owner,
+            &history,
+            &pending,
+            turns,
+            steering_seq,
+        )
+        .await?;
     }
 
     let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
@@ -1090,10 +1448,53 @@ async fn execute_run(
         )
         .await;
     }
+    // The turn budget ran out straight after a tool batch, so the model never
+    // got a turn to explain itself. Park the run with its state instead of
+    // delivering an empty answer that looks like a finished task.
+    if let Some(reason) = stop_reason(execution_mode, turns, "", did_work, false) {
+        let limit = match execution_mode {
+            ExecutionMode::Bounded(limit) => limit,
+            ExecutionMode::Goal => 0,
+        };
+        return pause_for_answer(
+            state,
+            bot_id,
+            thread_id,
+            run_id,
+            lease_owner,
+            &ctx,
+            PauseRequest {
+                reason,
+                draft: &final_text,
+                history: &history,
+                turns,
+                steering_seq,
+                limit,
+                note: None,
+                screenshots,
+                screenshot_bytes,
+                used_gui,
+            },
+        )
+        .await;
+    }
     let needs_input = goal_mode && goal_outcome(&final_text) == GoalOutcome::NeedsInput;
     if needs_input {
-        let next = Message::User { content: vec![UserContent::text("The goal was paused for required user input. Read the user's new information and continue from completed work.")] };
-        save_harness_checkpoint(state, run_id, lease_owner, &history, &next, turns, steering_seq).await?;
+        let next = Message::User {
+            content: vec![UserContent::text(
+                "The goal was paused for required user input. Read the user's new information and continue from completed work.",
+            )],
+        };
+        save_harness_checkpoint(
+            state,
+            run_id,
+            lease_owner,
+            &history,
+            &next,
+            turns,
+            steering_seq,
+        )
+        .await?;
     }
     let final_text = final_text
         .replace("[GOAL_COMPLETE]", "")
@@ -1116,13 +1517,28 @@ async fn execute_run(
     if completed.rows_affected() != 1 {
         return Err("run lease was lost before completion".into());
     }
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({
+            "event": if needs_input { "waiting_input" } else { "completed" },
+            "reason": if needs_input { Some(final_text.as_str()) } else { None },
+            "turns": turns,
+        }),
+    )
+    .await;
     let click_misses = *ctx.click_misses.lock().unwrap();
     let takeover = *ctx.takeover_requested.lock().unwrap();
     record_run_metrics(
         state,
         thread_id,
         run_id,
-        if needs_input { "run.paused" } else { "run.completed" },
+        if needs_input {
+            "run.paused"
+        } else {
+            "run.completed"
+        },
         turns,
         screenshots,
         screenshot_bytes,
@@ -1209,29 +1625,83 @@ fn retryable_run_error(error: &str) -> bool {
     !matches!(code, 400..=499 if !matches!(code, 408 | 409 | 425 | 429))
 }
 
+/// Where a helper that is not the run loop itself writes its diagnostics.
+#[derive(Clone, Copy)]
+struct Trace<'a> {
+    state: &'a AppState,
+    run_id: &'a str,
+    turn: u32,
+}
+
 async fn complete_with_retry(
     model: &DynModel,
     pending: Message,
     preamble: &str,
     history: &[Message],
     defs: &[ToolDefinition],
+    trace: Trace<'_>,
 ) -> Result<Vec<AssistantContent>, String> {
     let mut last = String::new();
     for attempt in 0..3 {
+        if attempt > 0 {
+            let failure = crate::monitor::classify_run_error(&last);
+            set_run_step(
+                trace.state,
+                trace.run_id,
+                &format!(
+                    "{} 正在自動重試模型（第 {}/3 次）；保留已完成的操作。",
+                    failure.headline,
+                    attempt + 1
+                ),
+            )
+            .await;
+        }
+        let started = std::time::Instant::now();
         let result = tokio::time::timeout(
-            Duration::from_secs(60),
+            Duration::from_secs(165),
             complete_once(model, pending.clone(), preamble, history, defs),
         )
         .await;
         match result {
             Ok(Ok(content)) => return Ok(content),
             Ok(Err(error)) => {
+                crate::monitor::record(
+                    trace.state,
+                    trace.run_id,
+                    "retry",
+                    json!({
+                        "turn": trace.turn,
+                        "attempt": attempt + 1,
+                        "error": error,
+                        "gaveUp": attempt == 2 || !retryable_run_error(&error),
+                    }),
+                )
+                .await;
                 if !retryable_run_error(&error) {
                     return Err(error);
                 }
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "model attempt failed: {error}"
+                );
                 last = error;
             }
-            Err(_) => last = "model request timed out after 60 seconds".into(),
+            Err(_) => {
+                let error = "model request timed out after 165 seconds";
+                crate::monitor::record(
+                    trace.state,
+                    trace.run_id,
+                    "retry",
+                    json!({"turn": trace.turn, "attempt": attempt + 1, "error": error, "gaveUp": attempt == 2}),
+                )
+                .await;
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    "model attempt exceeded its 165 second budget"
+                );
+                last = error.into();
+            }
         }
         if attempt < 2 {
             tokio::time::sleep(Duration::from_millis(500 * (1 << attempt))).await;
@@ -1256,9 +1726,11 @@ where
         .messages(history.to_vec())
         .tools(defs.to_vec())
         .build();
-    let response = tokio::time::timeout(Duration::from_secs(120), model.completion(request))
+    // One budget per attempt, kept just below the caller's, so the model's own
+    // timeout is what gets reported instead of a generic outer cancellation.
+    let response = tokio::time::timeout(Duration::from_secs(150), model.completion(request))
         .await
-        .map_err(|_| "AI 回應逾時（120 秒）".to_string())?
+        .map_err(|_| "AI 回應逾時（150 秒）".to_string())?
         .map_err(|error| error.to_string())?;
     Ok(response.choice.into_iter().collect())
 }
@@ -1313,6 +1785,43 @@ fn assistant_texts(history: &[Message]) -> Vec<String> {
         .collect()
 }
 
+/// A checkpoint that cannot be written freezes the run: progress stops and every
+/// later hiccup turns fatal. Drop the oldest turns and cap long tool dumps until
+/// the row fits again.
+fn shrink_checkpoint(history: &mut Vec<Message>, pending: &mut Message) {
+    const LIMIT: usize = 768 * 1024;
+    const MAX_PART: usize = 48 * 1024;
+    let cap_parts = |message: &mut Message| {
+        let Message::User { content } = message else {
+            return;
+        };
+        for part in content.iter_mut() {
+            let UserContent::Text(text) = part else {
+                continue;
+            };
+            if text.text.len() > MAX_PART {
+                let mut cut = MAX_PART;
+                while cut > 0 && !text.text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                text.text.truncate(cut);
+                text.text.push_str("\n…(truncated)");
+            }
+        }
+    };
+    cap_parts(pending);
+    history.iter_mut().for_each(cap_parts);
+    let fits = |turns: &[Message]| {
+        json!({"harnessHistory": turns, "harnessPending": pending})
+            .to_string()
+            .len()
+            <= LIMIT
+    };
+    while !fits(history) && history.len() > 1 {
+        history.remove(0);
+    }
+}
+
 async fn save_harness_checkpoint(
     state: &AppState,
     run_id: &str,
@@ -1332,9 +1841,15 @@ async fn save_harness_checkpoint(
             });
         }
     }
+    shrink_checkpoint(&mut history, &mut pending);
     let value = json!({"harnessHistory":history,"harnessPending":pending,"toolsStarted":false,"harnessTurns":turns,"steeringSeq":steering_seq});
-    // Large/unsupported checkpoints fail closed: keep the uncertain-effects flag.
+    // Only a checkpoint that still cannot fit after shrinking fails closed, and
+    // loudly: the run keeps its uncertain-effects flag instead of freezing.
     if value.to_string().len() > 1024 * 1024 {
+        tracing::error!(
+            run_id,
+            "harness checkpoint still exceeds 1 MB after shrinking"
+        );
         return Ok(());
     }
     let result=sqlx::query("UPDATE runs SET checkpoint=COALESCE(checkpoint,'{}'::jsonb)||$3,updated_at=now() WHERE id=$1 AND lease_owner=$2 AND status='running'")
@@ -1414,6 +1929,12 @@ pub(crate) async fn append_bot_message_with(
     body: &str,
     blocks: Value,
 ) -> Result<(), String> {
+    // A stop with nothing to say is a bug, not a message. An empty assistant
+    // bubble is exactly what made "finished" and "died mid-task" look alike.
+    let has_blocks = blocks.as_array().is_some_and(|items| !items.is_empty());
+    if body.trim().is_empty() && !has_blocks {
+        return Ok(());
+    }
     let mut tx = state
         .pool()
         .begin()
@@ -1481,7 +2002,7 @@ async fn wait_for_halt(state: &AppState, run_id: &str) -> RunHalt {
         if let Ok(Some(halt)) = run_status_halt(state, run_id).await {
             return halt;
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(750)).await;
     }
 }
 
@@ -1526,6 +2047,13 @@ async fn finish_halt(
             .bind(run_id)
             .execute(state.pool())
             .await;
+            crate::monitor::record(
+                state,
+                run_id,
+                "run",
+                json!({"event": "paused", "reason": "takeover", "turns": turns}),
+            )
+            .await;
             let click_misses = *ctx.click_misses.lock().unwrap();
             record_run_metrics(
                 state,
@@ -1543,6 +2071,157 @@ async fn finish_halt(
             Ok(())
         }
     }
+}
+
+/// Work that stopped before it was verified as finished. The run parks in
+/// `waiting_input` with a one-click question and keeps its harness state, so the
+/// human's next message resumes exactly where the tools left off.
+struct PauseRequest<'a> {
+    reason: StopReason,
+    draft: &'a str,
+    history: &'a [Message],
+    turns: u32,
+    steering_seq: i32,
+    limit: u32,
+    /// Concrete evidence from the round policy, shown instead of a generic
+    /// category when the run parked on a loop.
+    note: Option<String>,
+    screenshots: u32,
+    screenshot_bytes: u64,
+    used_gui: bool,
+}
+
+const PAUSED_PENDING: &str = "This run is paused for the human's answer. When their reply arrives, continue the work that has already started: observe the current screen before any new mutation and never repeat finished steps.";
+
+async fn pause_for_answer(
+    state: &AppState,
+    bot_id: &str,
+    thread_id: &str,
+    run_id: &str,
+    lease_owner: &str,
+    ctx: &ToolCtx,
+    req: PauseRequest<'_>,
+) -> Result<(), String> {
+    let draft = req.draft.replace(NEEDS_INPUT_MARKER, "").trim().to_string();
+    // The round policy arrives with concrete evidence ("the same click six
+    // times in a row"), which always beats a category name for the human.
+    let stall = req.note.clone().unwrap_or_else(|| match req.reason {
+        StopReason::BudgetExhausted => "已達本輪執行上限".to_string(),
+        StopReason::MidTaskText => {
+            "模型多次未能提供可執行的下一步，系統已要求它重新確認並繼續，但仍無法推進".to_string()
+        }
+        StopReason::LoopDetected => "重複同一個動作，任務沒有新的進展".to_string(),
+    });
+    let draft = if draft.is_empty() {
+        match req.reason {
+            StopReason::BudgetExhausted => format!(
+                "我在這個任務上用了 {} 輪，還沒有做到可以幫你確認完成的地步，先停在目前的畫面。要我繼續嗎？\n\n任務尚未確認完成。停止原因：{}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。",
+                req.turns, stall
+            ),
+            StopReason::MidTaskText => format!(
+                "模型多次未提供可執行的下一步，系統無法確認任務已完成。請補充下一步指示或接管確認現況後繼續。\n\n任務尚未確認完成。停止原因：{}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。",
+                stall
+            ),
+            StopReason::LoopDetected => format!(
+                "我在這個任務上用了 {} 輪，一直在同一個動作上打轉，先停在目前的畫面。要我換個做法繼續嗎？\n\n任務尚未確認完成。停止原因：{}。已保存操作進度；告訴我該怎麼做，或直接接管電腦。",
+                req.turns, stall
+            ),
+        }
+    } else if !asks_for_input(req.draft) {
+        // A model's optimistic draft must not hide a harness-detected stall.
+        format!(
+            "{draft}\n\n任務尚未確認完成。停止原因：{stall}。已保存操作進度；回覆下一步指示或接管確認現況後可繼續。"
+        )
+    } else {
+        draft
+    };
+    let next = Message::User {
+        content: vec![UserContent::text(PAUSED_PENDING)],
+    };
+    save_harness_checkpoint(
+        state,
+        run_id,
+        lease_owner,
+        req.history,
+        &next,
+        req.turns,
+        req.steering_seq,
+    )
+    .await?;
+    let paused = sqlx::query(
+        "UPDATE runs
+            SET status='waiting_input', lease_owner=NULL, lease_expires_at=NULL, updated_at=now(),
+                checkpoint=COALESCE(checkpoint,'{}'::jsonb)||jsonb_build_object('awaitResume',
+                    jsonb_build_object('reason',$3,'turns',$4,'limit',$5))
+         WHERE id=$1 AND lease_owner=$2 AND status='running'",
+    )
+    .bind(run_id)
+    .bind(lease_owner)
+    .bind(req.reason.as_str())
+    .bind(req.turns as i64)
+    .bind(req.limit as i64)
+    .execute(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    if paused.rows_affected() != 1 {
+        return Err("run lease was lost before pausing".into());
+    }
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({
+            "event": "paused",
+            "reason": draft,
+            "turns": req.turns,
+            "limit": req.limit,
+        }),
+    )
+    .await;
+    append_bot_message_with(
+        state,
+        thread_id,
+        run_id,
+        bot_id,
+        &draft,
+        json!([{
+            "kind": "resume",
+            "reason": req.reason.as_str(),
+            "turns": req.turns,
+            "limit": req.limit,
+        }]),
+    )
+    .await?;
+    let click_misses = *ctx.click_misses.lock().unwrap();
+    record_run_metrics(
+        state,
+        thread_id,
+        run_id,
+        "run.paused",
+        req.turns,
+        req.screenshots,
+        req.screenshot_bytes,
+        click_misses,
+        req.used_gui,
+        false,
+    )
+    .await;
+    computer::release_screen_execution(state, run_id).await?;
+    sqlx::query(
+        "UPDATE computers SET execution_bot_id = NULL, execution_run_id = NULL, execution_lease_expires_at = NULL, updated_at = now()
+         WHERE execution_run_id = $1",
+    )
+    .bind(run_id)
+    .execute(state.pool())
+    .await
+    .map_err(|error| error.to_string())?;
+    tracing::info!(
+        run_id,
+        reason = req.reason.as_str(),
+        turns = req.turns,
+        "run paused for an answer"
+    );
+    Ok(())
 }
 
 async fn renew_lease(state: &AppState, run_id: &str, lease_owner: &str) -> Result<(), String> {
@@ -1897,6 +2576,93 @@ fn has_task_verb(normalized: &str) -> bool {
     VERBS.iter().any(|verb| normalized.contains(verb))
 }
 
+/// Plain doing-words that never show up in a greeting. `prompt_needs_desktop`
+/// cannot name every app, site, or file, so a request is also a task when it
+/// asks for an action to be performed on something.
+fn has_work_verb(normalized: &str) -> bool {
+    const VERBS: &[&str] = &[
+        "整理",
+        "彙整",
+        "彙總",
+        "存到",
+        "存進",
+        "存入",
+        "儲存",
+        "存檔",
+        "建立",
+        "新增",
+        "產生",
+        "產出",
+        "改名",
+        "重命名",
+        "移動",
+        "複製",
+        "刪除",
+        "刪掉",
+        "翻譯",
+        "摘要",
+        "總結",
+        "歸納",
+        "比對",
+        "比較",
+        "填入",
+        "填寫",
+        "提交",
+        "送出",
+        "歸檔",
+        "轉檔",
+        "轉換",
+        "壓縮",
+        "解凍",
+        "分割",
+        "合併",
+        "報名",
+        "預訂",
+        "預約",
+        "訂閱",
+        "退訂",
+        "追蹤",
+        "回覆",
+        "寄送",
+        "領取",
+        "打卡",
+        "簽到",
+        "紀錄",
+        "記錄",
+        "檢查",
+        "測試",
+        "執行",
+        "下載",
+        "上傳",
+        "安裝",
+        "更新",
+        "設定",
+        "organize",
+        "rename",
+        "move ",
+        "copy",
+        "delete",
+        "save",
+        "create",
+        "generate",
+        "download",
+        "upload",
+        "translate",
+        "summarize",
+        "submit",
+        "book",
+        "reserve",
+        "archive",
+        "convert",
+        "compare",
+        "send",
+        "reply",
+        "schedule",
+        "install",
+    ];
+    VERBS.iter().any(|verb| normalized.contains(verb))
+}
+
 fn is_greeting(normalized: &str) -> bool {
     const EXACT: &[&str] = &[
         "hi",
@@ -1989,7 +2755,7 @@ fn is_greeting(normalized: &str) -> bool {
         "🙂",
         "😀",
     ];
-    if EXACT.iter().any(|item| normalized == *item) {
+    if EXACT.contains(&normalized) {
         return true;
     }
     const PREFIXES: &[&str] = &["hi ", "hey ", "hello ", "嗨", "你好"];
@@ -2039,10 +2805,14 @@ fn is_plain_chat(prompt: &str) -> bool {
         return true;
     }
     let chars = normalized.chars().count();
-    if chars <= 24 && !has_task_verb(&normalized) {
+    // Withholding every tool is the most damaging mistake this function can
+    // make: the task silently degrades into a paragraph and looks like the run
+    // gave up. Only an obvious pleasantry counts as chat; anything with a work
+    // verb keeps its tools.
+    if chars <= 12 && !has_task_verb(&normalized) && !has_work_verb(&normalized) {
         return true;
     }
-    is_chat_intent(&normalized) && chars <= 48
+    is_chat_intent(&normalized) && chars <= 24 && !has_work_verb(&normalized)
 }
 
 fn tool_needs_sandbox(name: &str) -> bool {
@@ -2067,7 +2837,11 @@ fn tool_needs_sandbox(name: &str) -> bool {
 fn tool_needs_gui(name: &str) -> bool {
     matches!(
         name,
-        "computer_observe"
+        "shell"
+            | "list_files"
+            | "read_file"
+            | "write_file"
+            | "computer_observe"
             | "computer_act"
             | "browser"
             | "connection_check"
@@ -2228,7 +3002,24 @@ fn describe_step(name: &str, args: &Value) -> String {
             .trim()
             .to_string()
         }
-        "shell" => short(get("command").or(get("cmd")), 60),
+        "shell" => {
+            // The terminal does four different things; the feed says which.
+            let session = get("session").filter(|name| !name.trim().is_empty() && *name != "main");
+            let suffix = session.map(|name| format!(" ·{name}")).unwrap_or_default();
+            if args.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+                format!("重開終端機{suffix}")
+            } else if let Some(keys) = get("keys") {
+                format!("輸入 {}{suffix}", short(Some(keys), 20))
+            } else {
+                match get("command")
+                    .or(get("cmd"))
+                    .filter(|line| !line.trim().is_empty())
+                {
+                    Some(command) => format!("{}{suffix}", short(Some(command), 60)),
+                    None => format!("讀終端機{suffix}"),
+                }
+            }
+        }
         "wait" => format!(
             "{}s {}",
             args.get("seconds")
@@ -2254,6 +3045,131 @@ fn describe_step(name: &str, args: &Value) -> String {
         name.to_string()
     } else {
         format!("{name}: {detail}")
+    }
+}
+
+/// The error the claim sweep writes when a worker died holding a tool open.
+const INTERRUPTED_ERROR: &str =
+    "Worker interrupted after tool execution; inspect current state before continuing.";
+
+/// Step plus turn counter: what the bubble header reads out of the checkpoint.
+pub(crate) async fn set_run_progress(
+    state: &AppState,
+    run_id: &str,
+    step: &str,
+    turn: u32,
+    limit: Option<i64>,
+) {
+    let result = sqlx::query(
+        "UPDATE runs SET checkpoint = COALESCE(checkpoint, '{}'::jsonb)
+                || jsonb_build_object('step', $2::text, 'stepAt', now(),
+                                      'turn', $3::bigint, 'turnLimit', $4::bigint),
+                updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(step)
+    .bind(turn as i64)
+    .bind(limit)
+    .execute(state.pool())
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(run_id, "failed to record run progress: {error}");
+    }
+}
+
+/// Tell the human a run died, in their language, with the one next action. The
+/// raw error stays available through the run activity endpoint.
+async fn report_run_failure(
+    state: &AppState,
+    run_id: &str,
+    thread_id: &str,
+    bot_id: &str,
+    error: &str,
+) {
+    let progress: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
+        "SELECT checkpoint->>'step', (checkpoint->>'turn')::bigint FROM runs WHERE id=$1",
+    )
+    .bind(run_id)
+    .fetch_optional(state.pool())
+    .await
+    .unwrap_or(None);
+    let (last_step, turn) = progress.unwrap_or((None, None));
+    let failure = crate::monitor::classify_run_error(error);
+    let body = crate::monitor::failure_message(&failure, last_step.as_deref(), turn);
+    let _ = append_bot_message_with(
+        state,
+        thread_id,
+        run_id,
+        bot_id,
+        &body,
+        json!([{
+            "kind": "error",
+            "code": failure.code,
+            "retryable": failure.retryable,
+            "runId": run_id,
+            "turn": turn,
+            "step": last_step,
+        }]),
+    )
+    .await;
+    crate::monitor::record(
+        state,
+        run_id,
+        "run",
+        json!({"event": "failed", "error": error}),
+    )
+    .await;
+}
+
+/// Display-only reading of a tool result. Tools report failure in prose, so the
+/// trail marks the shapes it recognises rather than pretending to know more.
+fn tool_status(timed_out: bool, pause: bool, text: &str) -> &'static str {
+    if timed_out {
+        return "timed_out";
+    }
+    if pause {
+        return "paused";
+    }
+    const FAILURES: [&str; 14] = [
+        "error",
+        "failed",
+        "failure",
+        "unable to",
+        "cannot ",
+        "can't ",
+        "timed out",
+        "denied",
+        "no such",
+        "exception",
+        "not available",
+        "失敗",
+        "錯誤",
+        "無法",
+    ];
+    let head: String = text.to_lowercase().chars().take(160).collect();
+    if FAILURES.iter().any(|needle| head.contains(needle)) {
+        "error"
+    } else {
+        "ok"
+    }
+}
+
+/// Does this tool call change the world? The round policy only counts
+/// mutating actions, so polling the screen, waiting, or reading a file can
+/// never look like a derailment on its own.
+fn action_changes_state(name: &str, args: &Value) -> bool {
+    match name {
+        "computer_act" | "shell" | "write_file" | "launch_app" | "open_path"
+        | "create_schedule" | "cancel_schedule" | "remember" | "forget_memory"
+        | "use_saved_login" | "request_takeover" => true,
+        "browser" => matches!(
+            args.get("action").and_then(Value::as_str),
+            Some("click") | Some("type") | Some("navigate") | Some("press")
+        ),
+        // Observations, waits, reads, and connected-service calls (mcp_*) are
+        // allowed to repeat: they are how a run learns what changed.
+        _ => false,
     }
 }
 
@@ -2310,12 +3226,35 @@ async fn record_run_metrics(
 #[cfg(test)]
 mod tests {
     use super::{
-        RunHalt, SCREENSHOT_CAPTION, describe_step, drop_history_screenshots, halt_from_status,
-        history_window_start, is_plain_chat, retryable_run_error, screenshot_parts, tool_needs_gui,
-        tool_needs_sandbox,
+        RunHalt, SCREENSHOT_CAPTION, TAKEOVER_RESUME_PROMPT, describe_step,
+        drop_history_screenshots, halt_from_status, history_window_start, is_plain_chat,
+        retryable_run_error, screenshot_parts, tool_needs_gui, tool_needs_sandbox, tool_status,
     };
     use rig_core::completion::message::{Message, UserContent};
     use serde_json::json;
+
+    #[test]
+    fn takeover_resume_invalidates_pre_handoff_refs() {
+        assert!(
+            TAKEOVER_RESUME_PROMPT
+                .contains("Element ids and page refs from before the handoff are invalid")
+        );
+        assert!(TAKEOVER_RESUME_PROMPT.contains("fresh observation"));
+        assert!(tool_needs_gui("browser"));
+        assert!(tool_needs_gui("computer_observe"));
+    }
+
+    #[test]
+    fn the_trail_reads_a_tool_result_as_ok_error_timeout_or_pause() {
+        assert_eq!(tool_status(false, false, "clicked element #12"), "ok");
+        assert_eq!(
+            tool_status(false, false, "Error: selector not found"),
+            "error"
+        );
+        assert_eq!(tool_status(false, false, "操作失敗：視窗關閉"), "error");
+        assert_eq!(tool_status(true, false, "tool timed out"), "timed_out");
+        assert_eq!(tool_status(false, true, "需要人先登入"), "paused");
+    }
 
     #[test]
     fn chat_tools_do_not_need_the_desktop() {
@@ -2325,8 +3264,8 @@ mod tests {
         assert!(tool_needs_sandbox("shell"));
         assert!(tool_needs_gui("computer_observe"));
         assert!(tool_needs_gui("browser"));
-        assert!(!tool_needs_gui("shell"));
-        assert!(!tool_needs_gui("list_files"));
+        assert!(tool_needs_gui("shell"));
+        assert!(tool_needs_gui("list_files"));
     }
 
     #[test]
@@ -2384,6 +3323,26 @@ mod tests {
     }
 
     #[test]
+    fn a_work_verb_outranks_a_short_prompt() {
+        // The old length rule silently stripped every tool from a short
+        // imperative; that is the "it stopped halfway" bug in its purest form.
+        for prompt in [
+            "把這張圖壓縮到 800px",
+            "把報價整理成表格",
+            "翻譯這段",
+            "幫我把檔案改名",
+            "幫我把这份報告存成 pdf",
+            "rename the screenshots",
+            "submit the form",
+        ] {
+            assert!(!is_plain_chat(prompt), "{prompt} must keep its tools");
+        }
+        for prompt in ["你好", "YouTube 是什麼？", "今天天氣如何", "寫一首詩"] {
+            assert!(is_plain_chat(prompt), "{prompt} should stay in chat");
+        }
+    }
+
+    #[test]
     fn step_labels_summarize_tool_arguments() {
         assert_eq!(
             describe_step("computer_observe", &json!({})),
@@ -2403,6 +3362,19 @@ mod tests {
         assert_eq!(
             describe_step("shell", &json!({"command":"ls\n-la"})),
             "shell: ls -la"
+        );
+        assert_eq!(describe_step("shell", &json!({})), "shell: 讀終端機");
+        assert_eq!(
+            describe_step("shell", &json!({"keys":"C-c","session":"build"})),
+            "shell: 輸入 C-c ·build"
+        );
+        assert_eq!(
+            describe_step("shell", &json!({"command":"make","session":"main"})),
+            "shell: make"
+        );
+        assert_eq!(
+            describe_step("shell", &json!({"reset":true,"session":"build"})),
+            "shell: 重開終端機 ·build"
         );
         assert_eq!(
             describe_step("mcp_search", &json!({"query":"x"})),

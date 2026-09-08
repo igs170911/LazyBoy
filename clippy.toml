@@ -1,0 +1,9 @@
+# Clippy configuration for the LazyBoy workspace.
+#
+# cargo-clippy looks for this file next to the working directory it was started
+# in, so always run clippy from the workspace root (`make clippy`).
+#
+# Handlers and run/vault/voice helpers legitimately thread 8-10 parameters
+# (state + actor + ids). The default of 7 is too tight for this codebase, so we
+# keep the guard for genuinely oversized signatures instead of disabling it.
+too-many-arguments-threshold = 10

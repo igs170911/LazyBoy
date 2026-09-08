@@ -150,7 +150,7 @@ fn draw_badge(img: &mut RgbImage, x: u32, y: u32, id: u32) {
         2,
     );
     for (i, ch) in label.bytes().enumerate() {
-        if !(b'0'..=b'9').contains(&ch) {
+        if !ch.is_ascii_digit() {
             continue;
         }
         let dx = bx + pad + i as u32 * digit_w;

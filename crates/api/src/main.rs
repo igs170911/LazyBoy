@@ -6,6 +6,7 @@ mod file_skills;
 mod mcp;
 mod mcp_catalog;
 mod memory;
+mod monitor;
 mod retention;
 mod rooms;
 mod routes;
@@ -56,7 +57,9 @@ async fn main() {
     });
 
     let retention_state = state.clone();
-    tokio::spawn(async move { retention::retention_loop(retention_state).await; });
+    tokio::spawn(async move {
+        retention::retention_loop(retention_state).await;
+    });
 
     let worker_state = state.clone();
     tokio::spawn(async move {

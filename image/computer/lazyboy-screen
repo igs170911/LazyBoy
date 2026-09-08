@@ -103,7 +103,7 @@ start_xvfb() {
     return 0
   fi
   rm -f "/tmp/.X${number}-lock" "/tmp/.X11-unix/X${number}"
-  Xvfb "$display" -screen 0 1280x800x24 -ac +extension RANDR +render -noreset >>"${log}-xvfb.log" 2>&1 &
+  Xvfb "$display" -screen 0 1280x800x24 -ac +extension RANDR +render -noreset >>"${log}-xvfb.log" 2>&1 9>&- &
   echo $! > "${log}-xvfb.pid"
   wait_display "$display"
 }
@@ -141,11 +141,11 @@ start_atspi() {
     fi
   done
   if [[ -n "$launcher" ]]; then
-    DISPLAY="$display" "$launcher" --launch-immediately >>"${log}-atspi-bus.log" 2>&1 &
+    DISPLAY="$display" "$launcher" --launch-immediately >>"${log}-atspi-bus.log" 2>&1 9>&- &
     echo $! >"${log}-atspi-bus.pid"
   fi
   if [[ -n "$registry" ]]; then
-    DISPLAY="$display" "$registry" >>"${log}-atspi-registry.log" 2>&1 &
+    DISPLAY="$display" "$registry" >>"${log}-atspi-registry.log" 2>&1 9>&- &
     echo $! >"${log}-atspi-registry.pid"
   fi
   sleep 0.2
@@ -175,12 +175,12 @@ start_desktop() {
     xfconfd --daemon >/dev/null 2>&1 || true
   fi
   if command -v xfwm4 >/dev/null 2>&1; then
-    xfwm4 --compositor=off --display="$display" --sm-client-disable >>"${log}-wm.log" 2>&1 &
+    xfwm4 --compositor=off --display="$display" --sm-client-disable >>"${log}-wm.log" 2>&1 9>&- &
     echo $! >"${log}-wm.pid"
     sleep 0.3
-    xfdesktop --disable-wm-check --sm-client-disable >>"${log}-desktop.log" 2>&1 &
+    xfdesktop --disable-wm-check --sm-client-disable >>"${log}-desktop.log" 2>&1 9>&- &
     echo $! >"${log}-desktop.pid"
-    xfce4-panel --disable-wm-check --sm-client-disable >>"${log}-panel.log" 2>&1 &
+    xfce4-panel --disable-wm-check --sm-client-disable >>"${log}-panel.log" 2>&1 9>&- &
     echo $! >"${log}-panel.pid"
   else
     echo "XFCE is missing" >&2
@@ -196,7 +196,7 @@ start_vnc() {
   local log="$4"
   if ! port_open "$vnc_port"; then
     x11vnc -display "$display" -forever -shared -nopw -listen 127.0.0.1 -rfbport "$vnc_port" \
-      -xkb -repeat -cursor arrow -noxdamage -ncache 0 >>"${log}-x11vnc.log" 2>&1 &
+      -xkb -repeat -cursor arrow -noxdamage -ncache 0 >>"${log}-x11vnc.log" 2>&1 9>&- &
   fi
   if ! port_open "$view_port"; then
     local novnc=/usr/share/novnc
@@ -205,10 +205,61 @@ start_vnc() {
       return 1
     fi
     websockify --heartbeat=30 --web="$novnc" "0.0.0.0:${view_port}" "127.0.0.1:${vnc_port}" \
-      >>"${log}-novnc.log" 2>&1 &
+      >>"${log}-novnc.log" 2>&1 9>&- &
   fi
   wait_port "$vnc_port"
   wait_port "$view_port"
+}
+
+start_cua_driver() {
+  local display="$1"
+  local log="$2"
+  local number="${display#:}"
+  if ! command -v cua-driver >/dev/null 2>&1; then
+    echo "Cua backend selected but cua-driver is not installed" >&2
+    return 1
+  fi
+  local sock="$ROOT/cua-${number}.sock"
+  if [[ "$number" == "1" ]]; then sock="$ROOT/cua.sock"; fi
+  if alive_pidfile "${log}-cua.pid"; then
+    if [[ -S "$sock" ]]; then return 0; fi
+    echo "Cua process exists but its display socket is missing" >&2
+    return 1
+  fi
+  export CUA_DRIVER_RS_HOME="$ROOT/cua-home-${number}"
+  export LAZYBOY_CURSOR_COLOR_FILE="$ROOT/screen-${number}.agent-color"
+  if [[ -s "$ROOT/screen-${number}.dbus" ]]; then
+    export DBUS_SESSION_BUS_ADDRESS="$(cat "$ROOT/screen-${number}.dbus")"
+  fi
+  if [[ -s "$ROOT/screen-${number}.runtime" ]]; then
+    export XDG_RUNTIME_DIR="$(cat "$ROOT/screen-${number}.runtime")"
+  fi
+  mkdir -p "$CUA_DRIVER_RS_HOME"
+  cua-driver telemetry disable >>"${log}-cua.log" 2>&1 || true
+  rm -f "$sock"
+  DISPLAY="$display" cua-driver serve \
+    --grant existing-profile \
+    --socket "$sock" \
+    --pid-file "${log}-cua.pid" \
+    >>"${log}-cua.log" 2>&1 9>&- &
+  local bg=$!
+  # serve does not persist --pid-file in the pinned driver release.
+  printf '%s\n' "$bg" > "${log}-cua.pid"
+  local n
+  for n in $(seq 1 50); do
+    if [[ -S "$sock" ]]; then
+      return 0
+    fi
+    if ! kill -0 "$bg" 2>/dev/null; then
+      echo "cua-driver serve exited" >&2
+      cat "${log}-cua.log" >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "cua-driver socket was not ready" >&2
+  cat "${log}-cua.log" >&2 || true
+  return 1
 }
 
 start_xterm() {
@@ -217,7 +268,7 @@ start_xterm() {
   if alive_pidfile "${log}-xterm.pid"; then
     return 0
   fi
-  DISPLAY="$display" SHELL=/bin/zsh lazyboy-terminal >>"${log}-xterm.log" 2>&1 &
+  DISPLAY="$display" SHELL=/bin/zsh lazyboy-terminal >>"${log}-xterm.log" 2>&1 9>&- &
   echo $! > "${log}-xterm.pid"
 }
 
@@ -235,18 +286,48 @@ start_browser() {
   fi
   rm -f "$profile/SingletonLock" "$profile/SingletonCookie" "$profile/SingletonSocket"
   DISPLAY="$display" HOME="$HOME" LAZYBOY_BROWSER_PROFILE="$profile" \
-    lazyboy-browser https://duckduckgo.com >>"${log}-browser.log" 2>&1 &
+    lazyboy-browser https://duckduckgo.com >>"${log}-browser.log" 2>&1 9>&- &
   echo $! > "${log}-browser.pid"
+}
+
+# Cosmetic update only: saving a color must not boot or focus a desktop.
+set_agent_color() {
+  local slot="$1" color="$2"
+  if ! [[ "$slot" =~ ^[0-9]+$ ]] || (( slot < 0 || slot >= LIMIT )); then
+    echo "invalid screen slot" >&2
+    return 1
+  fi
+  if ! [[ "$color" =~ ^#[[:xdigit:]]{6}$ ]]; then
+    echo "invalid agent color: expected #RRGGBB" >&2
+    return 1
+  fi
+  local number=$((slot + 1)) color_file
+  color_file="$(mktemp "$ROOT/screen-${number}.agent-color.XXXXXX")"
+  printf '%s' "$color" > "$color_file"
+  mv -f "$color_file" "$ROOT/screen-${number}.agent-color"
 }
 
 ensure_slot() {
   local slot="$1"
   local profile="${2:-}"
+  local agent_name="${3:-}"
+  local agent_color="${4:-}"
   if ! [[ "$slot" =~ ^[0-9]+$ ]] || (( slot < 0 || slot >= LIMIT )); then
     echo "invalid screen slot" >&2
     return 1
   fi
   local number=$((slot + 1))
+  if [[ -n "$agent_color" ]]; then
+    set_agent_color "$slot" "$agent_color" || return 1
+  fi
+  # Cua renders the public session label beside its synthetic cursor. Keep
+  # the label per display; an atomic replace avoids partial names during calls.
+  if [[ -n "$agent_name" ]]; then
+    local name_file
+    name_file="$(mktemp "$ROOT/screen-${number}.agent-name.XXXXXX")"
+    printf '%s' "$agent_name" > "$name_file"
+    mv -f "$name_file" "$ROOT/screen-${number}.agent-name"
+  fi
   local display=":${number}"
   local vnc_port=$((5900 + slot))
   local view_port=$((6080 + slot))
@@ -259,7 +340,8 @@ ensure_slot() {
   if [[ -n "$profile" ]]; then
     printf '%s\n' "$profile" >"$ROOT/screen-${number}.profile"
   fi
-  if xdpyinfo -display "$display" >/dev/null 2>&1 && port_open "$vnc_port" && port_open "$view_port"; then
+  if xdpyinfo -display "$display" >/dev/null 2>&1 9>&- && port_open "$vnc_port" && port_open "$view_port"; then
+    start_cua_driver "$display" "$log" || return 1
     if [[ -n "$profile" ]]; then
       start_browser "$display" "$profile" "$log"
     fi
@@ -272,7 +354,8 @@ ensure_slot() {
       echo "screen ${slot} is busy starting" >&2
       exit 1
     }
-    if xdpyinfo -display "$display" >/dev/null 2>&1 && port_open "$vnc_port" && port_open "$view_port"; then
+    if xdpyinfo -display "$display" >/dev/null 2>&1 9>&- && port_open "$vnc_port" && port_open "$view_port"; then
+      start_cua_driver "$display" "$log" || exit 1
       if [[ -n "$profile" ]]; then
         start_browser "$display" "$profile" "$log"
       fi
@@ -286,8 +369,9 @@ ensure_slot() {
       exit 1
     }
     start_desktop "$display" "$xfce_home" "$log"
-    start_xterm "$display" "$log"
     start_vnc "$display" "$vnc_port" "$view_port" "$log" || exit 1
+    start_cua_driver "$display" "$log" || exit 1
+    start_xterm "$display" "$log"
     if [[ -n "$profile" ]]; then
       start_browser "$display" "$profile" "$log"
     fi
@@ -309,14 +393,17 @@ boot_primary() {
 }
 
 case "$cmd" in
+  color)
+    set_agent_color "${1:-}" "${2:-}"
+    ;;
   boot-primary)
     boot_primary
     ;;
   ensure)
-    ensure_slot "${1:-0}" "${2:-}"
+    ensure_slot "${1:-0}" "${2:-}" "${3:-}" "${4:-}"
     ;;
   *)
-    echo "usage: lazyboy-screen boot-primary|ensure <slot> [profile]" >&2
+    echo "usage: lazyboy-screen color <slot> <#RRGGBB> | boot-primary | ensure <slot> [profile] [agent-name] [agent-color]" >&2
     exit 2
     ;;
 esac

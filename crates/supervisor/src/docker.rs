@@ -9,13 +9,13 @@ use bollard::container::{
     StartContainerOptions, StopContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::models::{HostConfig, HostConfigLogConfig, PortBinding};
-use bollard::network::CreateNetworkOptions;
+use bollard::models::{EndpointSettings, HostConfig, HostConfigLogConfig, PortBinding};
+use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions};
 use futures_util::StreamExt;
 use lazyboy_control::{
-    ActionRequest, CommandRequest, CommandResult, EnsureScreenRequest, EnsureScreenResult, HOME,
-    ScreenTarget, TEAM_SCREEN_LIMIT, normalize_display, normalize_workspace_path,
-    pointer_state_command_on, screen_layout, screenshot_command_on, window_list_command_on,
+    ActionRequest, BrowserRequest, CommandRequest, CommandResult, EnsureScreenRequest,
+    EnsureScreenResult, HOME, RecordingRequest, ScreenTarget, TEAM_SCREEN_LIMIT, normalize_display,
+    normalize_workspace_path, screen_layout,
 };
 use tokio::time::{Duration, sleep};
 
@@ -34,20 +34,20 @@ pub struct Provisioned {
 }
 
 pub struct ObservePayload {
-    pub png: Vec<u8>,
     pub json: serde_json::Value,
 }
 
 impl ObservePayload {
     fn from_json(value: serde_json::Value) -> Result<Self, String> {
-        let encoded = value
+        // The screenshot travels inside `json` as base64; only its presence is
+        // checked here so a broken capture fails fast instead of returning an
+        // empty observation.
+        value
             .get("png_base64")
             .and_then(serde_json::Value::as_str)
+            .filter(|encoded| !encoded.is_empty())
             .ok_or_else(|| "missing png".to_string())?;
-        let png = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|error| error.to_string())?;
-        Ok(Self { png, json: value })
+        Ok(Self { json: value })
     }
 }
 
@@ -76,7 +76,7 @@ impl DockerHost {
             return Err("invalid home key".into());
         }
         let expected = PathBuf::from(&data_dir).join("homes").join(home_key);
-        if PathBuf::from(home_path) != expected {
+        if *home_path != expected {
             return Err("home path is outside managed homes".into());
         }
         // Work on the container-local path, not the host daemon's bind path.
@@ -187,7 +187,15 @@ impl DockerHost {
                 ),
                 format!(
                     "LAZYBOY_COMPUTER_SUDO={}",
-                    if computer_sudo_enabled() { "true" } else { "false" }
+                    if computer_sudo_enabled() {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                ),
+                format!(
+                    "LAZYBOY_COMPUTER_DRIVER={}",
+                    lazyboy_control::ComputerDriver::from_env().as_str()
                 ),
             ]),
             labels: Some(labels),
@@ -251,42 +259,6 @@ impl DockerHost {
         })
     }
 
-    pub async fn exec(&self, id: &str, request: CommandRequest) -> Result<CommandResult, String> {
-        let cwd = match request.cwd {
-            Some(cwd) if PathBuf::from(&cwd).is_absolute() => cwd,
-            Some(cwd) => {
-                let relative = normalize_workspace_path(&cwd).map_err(|error| error.to_string())?;
-                if relative.is_empty() {
-                    HOME.to_string()
-                } else {
-                    format!("{HOME}/{relative}")
-                }
-            }
-            None => HOME.to_string(),
-        };
-        let timeout_ms = request.timeout_ms.unwrap_or(30_000).clamp(100, 120_000);
-        let argv = if request.argv.is_empty() {
-            vec!["/bin/echo".into(), "ready".into()]
-        } else {
-            request.argv
-        };
-        let mut bounded = vec![
-            "timeout".into(),
-            "--signal=TERM".into(),
-            "--kill-after=2s".into(),
-            format!("{}s", timeout_ms as f64 / 1000.0),
-        ];
-        bounded.extend(argv);
-        self.exec_raw_cmd(
-            id,
-            &bounded,
-            Some(&cwd),
-            &ScreenTarget::default(),
-            request.stdin,
-        )
-        .await
-    }
-
     pub async fn exec_on(
         &self,
         id: &str,
@@ -322,100 +294,12 @@ impl DockerHost {
             .await
     }
 
-    pub async fn observe(&self, id: &str) -> Result<Vec<u8>, String> {
-        Ok(self
-            .observe_payload(id, &ScreenTarget::default())
-            .await?
-            .png)
-    }
-
     pub async fn observe_payload(
         &self,
         id: &str,
         target: &ScreenTarget,
     ) -> Result<ObservePayload, String> {
-        let mut body = if let Ok(value) = self.control_observe_json(id, target).await {
-            value
-        } else {
-            let (stdout, stderr, code) = self
-                .exec_raw(
-                    id,
-                    &screenshot_command_on(&target.display),
-                    None,
-                    target,
-                    None,
-                )
-                .await?;
-            if code != 0 {
-                return Err(String::from_utf8_lossy(&stderr).into_owned());
-            }
-            let mut body = serde_json::json!({
-                "png_base64": base64::engine::general_purpose::STANDARD.encode(&stdout)
-            });
-            if let Ok(meta) = self.pointer_state(id, target).await {
-                if let serde_json::Value::Object(map) = meta {
-                    if let Some(obj) = body.as_object_mut() {
-                        if let (Some(x), Some(y)) = (map.get("x"), map.get("y")) {
-                            obj.insert("cursor".into(), serde_json::json!({ "x": x, "y": y }));
-                        }
-                        if map
-                            .get("id")
-                            .and_then(serde_json::Value::as_str)
-                            .is_some_and(|id| !id.is_empty())
-                        {
-                            obj.insert(
-                                "activeWindow".into(),
-                                serde_json::json!({ "id": map.get("id"), "title": map.get("title") }),
-                            );
-                        }
-                    }
-                }
-            }
-            body
-        };
-        self.attach_window_elements(id, target, &mut body).await;
-        ObservePayload::from_json(body)
-    }
-
-    async fn attach_window_elements(
-        &self,
-        id: &str,
-        target: &ScreenTarget,
-        body: &mut serde_json::Value,
-    ) {
-        if body
-            .get("elements")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-        {
-            return;
-        }
-        let Ok(result) = self
-            .exec_argv(id, &window_list_command_on(&target.display), None, target)
-            .await
-        else {
-            return;
-        };
-        if result.code != 0 {
-            return;
-        }
-        if let Ok(elements) = serde_json::from_str::<serde_json::Value>(&result.stdout) {
-            body["elements"] = elements;
-        }
-    }
-
-    async fn pointer_state(
-        &self,
-        id: &str,
-        target: &ScreenTarget,
-    ) -> Result<serde_json::Value, String> {
-        let result = self
-            .exec_argv(id, &pointer_state_command_on(&target.display), None, target)
-            .await?;
-        if result.code != 0 {
-            return Err(result.stderr);
-        }
-        serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
+        ObservePayload::from_json(self.control_observe_json(id, target).await?)
     }
 
     pub async fn act(&self, id: &str, request: ActionRequest) -> Result<serde_json::Value, String> {
@@ -426,6 +310,25 @@ impl DockerHost {
         );
         // A transport failure may follow a successful click. Never replay mutations.
         self.control_act(id, &request, &target).await
+    }
+
+    pub async fn browser(
+        &self,
+        id: &str,
+        request: BrowserRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        self.control_browser(id, &request, target).await
+    }
+
+    pub async fn recording(
+        &self,
+        id: &str,
+        action: &str,
+        request: RecordingRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        self.control_recording(id, action, &request, target).await
     }
 
     pub async fn screen_url(&self, id: &str, interactive: bool) -> Result<String, String> {
@@ -439,11 +342,75 @@ impl DockerHost {
         interactive: bool,
     ) -> Result<String, String> {
         let layout = screen_layout(slot).map_err(|error| error.to_string())?;
+        if let Some(network) = screen_network() {
+            match self.screen_container_name(id, &network).await {
+                Ok(name) => {
+                    let authority = format!("{name}:{}", layout.view_port);
+                    return Ok(view_url(&authority, interactive));
+                }
+                Err(error) => tracing::warn!(
+                    "screen network {network} unusable for {id}: {error}; using host ports"
+                ),
+            }
+        }
         let port = self.published_host_port(id, layout.view_port).await?;
-        let view = if interactive { "false" } else { "true" };
-        Ok(format!(
-            "http://127.0.0.1:{port}/vnc_lite.html?resize=scale&view_only={view}"
-        ))
+        Ok(view_url(&format!("127.0.0.1:{port}"), interactive))
+    }
+
+    /// Resolves the computer's container name and joins it to the shared screen
+    /// network on demand, so computers started before that network existed keep
+    /// working without reprovisioning.
+    async fn screen_container_name(&self, id: &str, network: &str) -> Result<String, String> {
+        for _ in 0..20 {
+            let info = self
+                .docker
+                .inspect_container(id, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            if info.state.as_ref().and_then(|state| state.running) == Some(true) {
+                let name = info.name.unwrap_or_default().trim_matches('/').to_string();
+                if name.is_empty() {
+                    return Err("computer container has no name".into());
+                }
+                let attached = info
+                    .network_settings
+                    .as_ref()
+                    .and_then(|settings| settings.networks.as_ref())
+                    .is_some_and(|networks| networks.contains_key(network));
+                if !attached {
+                    self.attach_screen_network(&name, network).await?;
+                }
+                return Ok(name);
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        Err("computer is not running".into())
+    }
+
+    async fn attach_screen_network(&self, name: &str, network: &str) -> Result<(), String> {
+        // Refuse a missing network before connect: Docker can otherwise retain
+        // a broken attachment that prevents the container's next restart.
+        self.docker
+            .inspect_network::<String>(network, None)
+            .await
+            .map_err(|error| format!("screen network {network} is unavailable: {error}"))?;
+        let result = self
+            .docker
+            .connect_network(
+                network,
+                ConnectNetworkOptions {
+                    container: name.to_string(),
+                    endpoint_config: EndpointSettings::default(),
+                },
+            )
+            .await;
+        if let Err(error) = result {
+            let text = error.to_string();
+            if !text.to_lowercase().contains("already") {
+                return Err(format!("attach {name} to screen network {network}: {text}"));
+            }
+        }
+        Ok(())
     }
 
     async fn published_host_port(&self, id: &str, view_port: u16) -> Result<String, String> {
@@ -482,9 +449,11 @@ impl DockerHost {
     ) -> Result<EnsureScreenResult, String> {
         let layout = screen_layout(request.slot).map_err(|error| error.to_string())?;
         let script = format!(
-            "lazyboy-screen ensure {} {}",
+            "lazyboy-screen ensure {} {} {} {}",
             request.slot,
-            shell_single_quote(&request.profile_path)
+            shell_single_quote(&request.profile_path),
+            shell_single_quote(&request.bot_name),
+            shell_single_quote(&request.bot_color)
         );
         let result = self
             .exec_argv(
@@ -984,6 +953,87 @@ PY"#,
         }
         serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
     }
+
+    async fn control_browser(
+        &self,
+        id: &str,
+        request: &BrowserRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        let payload = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        let token = self.container_control_token(id).await?;
+        let timeout = if request.action == "click" {
+            "140"
+        } else {
+            "30"
+        };
+        let mut argv = vec![
+            "curl".into(),
+            "-fsS".into(),
+            "--max-time".into(),
+            timeout.into(),
+            "-H".into(),
+            format!("Authorization: Bearer {token}"),
+            "-H".into(),
+            format!("x-lazyboy-display: {}", target.display),
+            "-H".into(),
+            "content-type: application/json".into(),
+        ];
+        if let Some(profile) = &target.profile_path {
+            argv.extend(["-H".into(), format!("x-lazyboy-profile: {profile}")]);
+        }
+        argv.extend([
+            "--data-binary".into(),
+            "@-".into(),
+            "http://127.0.0.1:7070/browser".into(),
+        ]);
+        let result = self
+            .exec_raw_cmd(id, &argv, None, target, Some(payload))
+            .await?;
+        if result.code != 0 {
+            return Err(result.stderr);
+        }
+        serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
+    }
+
+    async fn control_recording(
+        &self,
+        id: &str,
+        action: &str,
+        request: &RecordingRequest,
+        target: &ScreenTarget,
+    ) -> Result<serde_json::Value, String> {
+        let payload = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        let token = self.container_control_token(id).await?;
+        let timeout = if action == "collect" { "30" } else { "20" };
+        let mut argv = vec![
+            "curl".into(),
+            "-fsS".into(),
+            "--max-time".into(),
+            timeout.into(),
+            "-H".into(),
+            format!("Authorization: Bearer {token}"),
+            "-H".into(),
+            format!("x-lazyboy-display: {}", target.display),
+            "-H".into(),
+            "content-type: application/json".into(),
+        ];
+        if let Some(profile) = &target.profile_path {
+            argv.extend(["-H".into(), format!("x-lazyboy-profile: {profile}")]);
+        }
+        argv.extend([
+            "--data-binary".into(),
+            "@-".into(),
+            format!("http://127.0.0.1:7070/recording/{action}"),
+        ]);
+        let result = self
+            .exec_raw_cmd(id, &argv, None, target, Some(payload))
+            .await?;
+        if result.code != 0 {
+            return Err(result.stderr);
+        }
+        serde_json::from_str(&result.stdout).map_err(|error| error.to_string())
+    }
 }
 
 fn image_ids_match(wanted: &str, have: &str) -> bool {
@@ -1031,7 +1081,10 @@ fn computer_pids_limit() -> i64 {
 }
 
 fn computer_sudo_enabled() -> bool {
-    matches!(std::env::var("LAZYBOY_COMPUTER_SUDO").as_deref(), Ok("1" | "true" | "yes"))
+    matches!(
+        std::env::var("LAZYBOY_COMPUTER_SUDO").as_deref(),
+        Ok("1" | "true" | "yes")
+    )
 }
 
 /// LXCFS supplies cgroup-aware /proc views so tools such as htop and free
@@ -1071,6 +1124,21 @@ fn network_name(home_key: &str) -> String {
     format!("lbnet-{}", container_name(home_key))
 }
 
+/// `LAZYBOY_SCREEN_NETWORK` places the API and the computer containers on one
+/// shared Docker network. Without it the desktop proxy must reach published host
+/// ports, which bind the host loopback and are unreachable from another container.
+fn screen_network() -> Option<String> {
+    std::env::var("LAZYBOY_SCREEN_NETWORK")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn view_url(authority: &str, interactive: bool) -> String {
+    let view = if interactive { "false" } else { "true" };
+    format!("http://{authority}/vnc_lite.html?resize=scale&view_only={view}")
+}
+
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'"'"'"#))
 }
@@ -1095,5 +1163,22 @@ mod credential_tests {
         assert_ne!(a, master);
         assert_ne!(a, b);
         assert_eq!(a, scoped_control_token(master, "a"));
+    }
+}
+
+#[cfg(test)]
+mod screen_url_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_urls_keep_authority_and_view_mode() {
+        assert_eq!(
+            view_url("lb-team-local-space:6080", false),
+            "http://lb-team-local-space:6080/vnc_lite.html?resize=scale&view_only=true"
+        );
+        assert_eq!(
+            view_url("127.0.0.1:32905", true),
+            "http://127.0.0.1:32905/vnc_lite.html?resize=scale&view_only=false"
+        );
     }
 }

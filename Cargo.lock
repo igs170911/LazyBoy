@@ -1889,7 +1889,6 @@ name = "lazyboy-api"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
- "async-trait",
  "axum",
  "base64 0.22.1",
  "cap-std",
@@ -1900,9 +1899,7 @@ dependencies = [
  "fastembed",
  "futures-util",
  "hex",
- "hmac",
  "http",
- "http-body-util",
  "lazyboy-contracts",
  "lazyboy-control",
  "lazyboy-harness",
@@ -1915,7 +1912,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
- "thiserror",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tower-http",
@@ -1940,6 +1936,7 @@ name = "lazyboy-control"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "hex",
  "image",
@@ -1948,6 +1945,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1955,12 +1954,8 @@ name = "lazyboy-controld"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
- "lazyboy-contracts",
  "lazyboy-control",
- "serde",
  "serde_json",
- "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1979,7 +1974,6 @@ dependencies = [
  "rig-core",
  "rustls",
  "rustls-native-certs",
- "serde",
  "serde_json",
  "thiserror",
  "tokio",
@@ -1992,39 +1986,30 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "chrono",
- "hex",
  "lazyboy-contracts",
  "lazyboy-control",
  "reqwest 0.12.28",
- "serde",
  "serde_json",
- "sha2",
- "tokio",
 ]
 
 [[package]]
 name = "lazyboy-supervisor"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "axum",
  "base64 0.22.1",
  "bollard",
  "futures-util",
  "hex",
  "hmac",
- "lazyboy-contracts",
  "lazyboy-control",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
- "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

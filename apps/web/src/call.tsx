@@ -175,7 +175,7 @@ export function CallOverlay({
           <button type="button" className="call-hangup" onClick={hangUp}>{t("hangUp")}</button>
         </div>
         {showTakeover ? (
-          <button type="button" className="primary call-takeover" onClick={onTakeOver}>{t("takeOverNow")}</button>
+          <button type="button" className="primary call-takeover" onClick={onTakeOver}>{t("loginOpenScreen")}</button>
         ) : null}
         <p className="call-hint">{t("callShortcuts")}</p>
       </div>

@@ -570,7 +570,7 @@ async fn create_server(
             internal(error.to_string())
         }
     })?;
-    let mut row = load_row(state.pool(), &actor, &id)
+    let row = load_row(state.pool(), &actor, &id)
         .await
         .map_err(|error| internal(error.to_string()))?
         .ok_or_else(|| internal("missing row".into()))?;

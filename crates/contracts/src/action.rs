@@ -44,7 +44,7 @@ pub enum ComputerAction {
         #[serde(default)]
         button: Option<PointerButton>,
     },
-    /// Semantic target (DOM selector or AT-SPI path). Execute via CDP/a11y, not xdotool.
+    /// Snapshot-scoped semantic target resolved by Cua.
     Ref {
         verb: RefVerb,
         target: String,
@@ -53,6 +53,7 @@ pub enum ComputerAction {
         #[serde(default)]
         text: Option<String>,
     },
+    CopySelection,
     Clipboard {
         text: String,
     },
@@ -103,7 +104,7 @@ pub struct UiElement {
     pub y: u32,
     pub w: u32,
     pub h: u32,
-    /// CSS selector (DOM) or AT-SPI path (a11y). Native windows leave this empty.
+    /// Opaque Cua browser or native element reference. Windows leave this empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
     /// "dom" for page controls, "a11y" for AT-SPI widgets, "window" for native windows.
@@ -137,6 +138,9 @@ impl UiElement {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComputerObservation {
+    /// The controller already populated native semantics; skip duplicate enrichment.
+    #[serde(default)]
+    pub native_observation_complete: bool,
     pub frame_id: String,
     pub captured_at: String,
     pub mime_type: String,

@@ -45,7 +45,7 @@ impl AuthConfig {
     pub fn strong_enough_for_network(&self) -> bool {
         self.token
             .as_ref()
-            .map(|token| token.as_bytes().len() >= 32 && token != "dev-token")
+            .map(|token| token.len() >= 32 && token != "dev-token")
             .unwrap_or(false)
     }
 
@@ -83,14 +83,13 @@ impl AuthConfig {
         let key = hex::encode(Sha256::digest(value.as_bytes()));
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|_, expires| *expires > Instant::now());
-        if sessions.len() >= 4096 {
-            if let Some(oldest) = sessions
+        if sessions.len() >= 4096
+            && let Some(oldest) = sessions
                 .iter()
                 .min_by_key(|(_, t)| **t)
                 .map(|(k, _)| k.clone())
-            {
-                sessions.remove(&oldest);
-            }
+        {
+            sessions.remove(&oldest);
         }
         sessions.insert(key, Instant::now() + Duration::from_secs(604800));
         Some(format!(

@@ -2,6 +2,7 @@
 name = "lazyboy-api"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
@@ -14,23 +15,19 @@ axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 sqlx.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 tower-http.workspace = true
-async-trait = "0.1"
 rig-core.workspace = true
 base64.workspace = true
-hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true
 reqwest.workspace = true
 tokio-tungstenite.workspace = true
 futures-util = "0.3"
-http-body-util = "0.1"
 dotenvy = "0.15"
 fastembed = { version = "6.0.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-load-dynamic"] }
 rmcp = { version = "3.2", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
@@ -41,3 +38,6 @@ chrono-tz = "0.10"
 rand = "0.8"
 
 cap-std = "3"
+
+[lints]
+workspace = true

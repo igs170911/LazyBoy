@@ -1,4 +1,0 @@
-[begin] (桌面)
-  [exec] (終端機) {/usr/local/bin/lazyboy-terminal}
-  [exec] (瀏覽器) {/usr/local/bin/lazyboy-browser https://duckduckgo.com}
-[end]

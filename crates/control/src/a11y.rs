@@ -1,59 +1,5 @@
+use crate::is_browser_title;
 use lazyboy_contracts::UiElement;
-use serde_json::{Value, json};
-
-use crate::x11::{is_browser_title, parse_ui_elements};
-use crate::{PRIMARY_DISPLAY, normalize_display};
-
-const A11Y_PY: &str = include_str!("a11y.py");
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct A11yPage {
-    pub ok: bool,
-    pub error: Option<String>,
-    pub elements: Vec<UiElement>,
-}
-
-pub fn a11y_command_on(display: &str, request: &Value) -> Vec<String> {
-    let mut body = request.clone();
-    if let Some(object) = body.as_object_mut() {
-        object
-            .entry("display")
-            .or_insert_with(|| json!(normalize_display(display)));
-    }
-    vec![
-        "env".into(),
-        format!("DISPLAY={}", normalize_display(display)),
-        "python3".into(),
-        "-c".into(),
-        A11Y_PY.into(),
-        body.to_string(),
-    ]
-}
-
-pub fn a11y_command(request: &Value) -> Vec<String> {
-    a11y_command_on(PRIMARY_DISPLAY, request)
-}
-
-pub fn parse_a11y_page(raw: &str) -> A11yPage {
-    let value: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
-    let ok = value.get("ok").and_then(Value::as_bool) == Some(true);
-    A11yPage {
-        ok,
-        error: if ok {
-            None
-        } else {
-            value
-                .get("error")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| Some("atspi unavailable".into()))
-        },
-        elements: value
-            .get("elements")
-            .map(|items| parse_ui_elements(&items.to_string()))
-            .unwrap_or_default(),
-    }
-}
 
 /// Merge DOM (keep ids), then a11y, then native windows that are not already
 /// covered by a control tree. Chromium's whole window is dropped when the
@@ -130,29 +76,7 @@ mod tests {
             kind: Some("a11y".into()),
             selector: Some(format!("0/{id}")),
             role: Some("push button".into()),
-            ..UiElement::default()
         }
-    }
-
-    #[test]
-    fn command_injects_display_and_script() {
-        let argv = a11y_command_on(":2", &json!({"action": "snapshot"}));
-        assert!(argv.contains(&"DISPLAY=:2".into()));
-        assert!(argv.iter().any(|item| item.contains("python3")));
-        assert!(argv.last().unwrap().contains("\"display\":\":2\""));
-        assert!(argv.iter().any(|item| item.contains("Atspi") || item.contains("atspi")));
-    }
-
-    #[test]
-    fn parses_snapshot_elements() {
-        let page = parse_a11y_page(
-            r#"{"ok":true,"elements":[{"id":1,"title":"push button Open","role":"push button","kind":"a11y","selector":"0/2/1","x":10,"y":20,"w":80,"h":24}]}"#,
-        );
-        assert!(page.ok);
-        assert_eq!(page.elements.len(), 1);
-        assert_eq!(page.elements[0].kind.as_deref(), Some("a11y"));
-        assert_eq!(page.elements[0].selector.as_deref(), Some("0/2/1"));
-        assert_eq!(page.elements[0].role.as_deref(), Some("push button"));
     }
 
     #[test]
@@ -190,12 +114,5 @@ mod tests {
         let merged = merge_ui_elements(windows, &[], &[]);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].title, "Thunar");
-    }
-
-    #[test]
-    fn unavailable_tree_is_not_ok() {
-        let page = parse_a11y_page(r#"{"ok":false,"error":"atspi unavailable"}"#);
-        assert!(!page.ok);
-        assert_eq!(page.error.as_deref(), Some("atspi unavailable"));
     }
 }

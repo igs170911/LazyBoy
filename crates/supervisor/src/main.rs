@@ -8,8 +8,8 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use docker::DockerHost;
 use lazyboy_control::{
-    ActionRequest, CommandRequest, EnsureScreenRequest, HOME, ScreenTarget,
-    normalize_workspace_path,
+    ActionRequest, BrowserRequest, CommandRequest, EnsureScreenRequest, HOME, RecordingRequest,
+    ScreenTarget, normalize_workspace_path,
 };
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
@@ -77,6 +77,10 @@ async fn main() {
         .route("/computers/{id}/exec", post(exec))
         .route("/computers/{id}/observe", post(observe))
         .route("/computers/{id}/act", post(act))
+        .route("/computers/{id}/browser", post(browser))
+        .route("/computers/{id}/recording/start", post(recording_start))
+        .route("/computers/{id}/recording/stop", post(recording_stop))
+        .route("/computers/{id}/recording/collect", post(recording_collect))
         .route("/computers/{id}/screens", post(ensure_screen))
         .route("/computers/{id}/screen-mode", post(screen_mode))
         .route("/computers/{id}/files", get(list_files).post(write_file))
@@ -202,6 +206,99 @@ async fn act(
         tracing::error!("act: {error}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    Ok(Json(result))
+}
+
+async fn browser(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<BrowserRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_token(&headers, &app.token)?;
+    let mut body = body;
+    let target = screen_target(&headers);
+    if body.display.is_none() {
+        body.display = Some(target.display.clone());
+    }
+    if body.profile_path.is_none() {
+        body.profile_path = target.profile_path.clone();
+    }
+    let result = app
+        .docker
+        .browser(&id, body, &target)
+        .await
+        .map_err(|error| {
+            tracing::error!("browser: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(result))
+}
+
+fn with_screen_target(mut body: RecordingRequest, target: &ScreenTarget) -> RecordingRequest {
+    if body.display.is_none() {
+        body.display = Some(target.display.clone());
+    }
+    if body.profile_path.is_none() {
+        body.profile_path = target.profile_path.clone();
+    }
+    body
+}
+
+async fn recording_start(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<RecordingRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_token(&headers, &app.token)?;
+    let target = screen_target(&headers);
+    let result = app
+        .docker
+        .recording(&id, "start", with_screen_target(body, &target), &target)
+        .await
+        .map_err(|error| {
+            tracing::error!("recording start: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(result))
+}
+
+async fn recording_stop(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<RecordingRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_token(&headers, &app.token)?;
+    let target = screen_target(&headers);
+    let result = app
+        .docker
+        .recording(&id, "stop", with_screen_target(body, &target), &target)
+        .await
+        .map_err(|error| {
+            tracing::error!("recording stop: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(result))
+}
+
+async fn recording_collect(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<RecordingRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_token(&headers, &app.token)?;
+    let target = screen_target(&headers);
+    let result = app
+        .docker
+        .recording(&id, "collect", with_screen_target(body, &target), &target)
+        .await
+        .map_err(|error| {
+            tracing::error!("recording collect: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(result))
 }
 
@@ -387,10 +484,9 @@ async fn managed_boundary(
             .path()
             .strip_prefix("/computers/")
             .and_then(|p| p.split('/').next())
+            && app.docker.container_control_token(id).await.is_err()
         {
-            if app.docker.container_control_token(id).await.is_err() {
-                return StatusCode::NOT_FOUND.into_response();
-            }
+            return StatusCode::NOT_FOUND.into_response();
         }
     }
     next.run(req).await

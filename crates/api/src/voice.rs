@@ -15,7 +15,10 @@ use crate::voice_call;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/voice/settings", get(get_settings).patch(update_settings))
+        .route(
+            "/api/voice/settings",
+            get(get_settings).patch(update_settings),
+        )
         .route("/api/sessions/{id}/call", get(voice_call::call_ws))
 }
 
@@ -193,7 +196,9 @@ async fn update_settings(
     if model_id.is_empty() || voice_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    if catalog_voices(provider).iter().all(|(id, _)| *id != voice_id)
+    if catalog_voices(provider)
+        .iter()
+        .all(|(id, _)| *id != voice_id)
         && provider != VoiceProvider::Scripted
     {
         return Err(StatusCode::BAD_REQUEST);
@@ -210,7 +215,14 @@ async fn update_settings(
     };
     state
         .db
-        .update_voice_settings(&actor, input.enabled, provider.as_str(), model_id, voice_id, api_key)
+        .update_voice_settings(
+            &actor,
+            input.enabled,
+            provider.as_str(),
+            model_id,
+            voice_id,
+            api_key,
+        )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     get_settings(State(state)).await

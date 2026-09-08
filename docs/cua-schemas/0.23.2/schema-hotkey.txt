@@ -1,0 +1,125 @@
+name: hotkey
+
+description:
+Press a combination of keys simultaneously, e.g. ["ctrl","c"] for Copy. Sent via XSendEvent directly to the target pid; target does NOT need to be frontmost.
+
+input_schema:
+{
+  "additionalProperties": false,
+  "properties": {
+    "delivery_mode": {
+      "default": "background",
+      "description": "Input delivery mode. 'background' (default) never activates or raises the target window. On X11 it injects via XTEST / the XInput2 master pointer (no focus steal). On Wayland it goes through libei + xdg-desktop-portal, which injects to the compositor's input focus — Wayland's security model has no per-window background targeting, so a specific non-focused window cannot be aimed at; when no libei backend is available the tool returns a structured background_unavailable error. 'foreground' is the explicit escalation: activate the target (X11 _NET_ACTIVE_WINDOW; Wayland compositor activate), inject, then restore the prior active window — a brief focus swap unless the target was already active. Matches the macOS / Windows delivery_mode surface.",
+      "enum": [
+        "background",
+        "foreground"
+      ],
+      "type": "string"
+    },
+    "element_index": {
+      "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
+      "type": "integer"
+    },
+    "element_token": {
+      "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+      "type": "string"
+    },
+    "keys": {
+      "description": "Modifier(s) + one non-modifier key, e.g. [\"ctrl\",\"c\"].",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "type": "array"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "scope": {
+      "default": "window",
+      "enum": [
+        "window",
+        "desktop"
+      ],
+      "type": "string"
+    },
+    "session": {
+      "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
+      "pattern": "^s[0-9a-f]{8}$",
+      "type": "string"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "description": "Exact capture/input target selected independently for each action.\n\n`display_id=\"primary\"` is the portable desktop target in this release.\nPlatforms that cannot address another display reject it explicitly rather\nthan silently changing coordinate spaces.",
+          "oneOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "kind": {
+                  "const": "window",
+                  "type": "string"
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "pid",
+                "window_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": true,
+              "properties": {
+                "display_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "desktop",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "display_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "window_id": {
+      "type": "integer"
+    },
+    "x": {
+      "description": "Screenshot-pixel X — the element px action form: pixel-click there to focus, then send the combo (so e.g. Ctrl+V pastes into that field). Pass with y. Use for Chromium/Electron surfaces the background combo can't reach.",
+      "type": "number"
+    },
+    "y": {
+      "description": "Screenshot-pixel Y (see x).",
+      "type": "number"
+    }
+  },
+  "required": [
+    "keys"
+  ],
+  "type": "object"
+}

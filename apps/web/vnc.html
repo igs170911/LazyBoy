@@ -12,12 +12,28 @@
         background: #0f172a;
         overflow: hidden;
       }
-      #status {
-        display: none;
-      }
+      #status { flex:none; padding:6px 10px; color:#f8fafc; font:12px system-ui; }
+      #status[hidden] { display:none; }
       body { display:flex; flex-direction:column; }
       #screen { flex:1; min-height:0; height:auto; }
       #screen canvas { cursor: default; }
+      #trackpad { height:clamp(64px,18vh,150px); margin-top:6px; border:1px solid #64748b;
+        border-radius:10px; background:#111b2e; touch-action:none; user-select:none;
+        display:grid; place-items:center; color:#94a3b8; }
+      #trackpad[hidden] { display:none; }
+      #mobile-controls .shortcuts { margin-top:5px; }
+      #mobile-controls .shortcuts[hidden] { display:none; }
+      @media(orientation:landscape) {
+        body.touch-ui {
+          display:grid;
+          grid-template:"status status" auto "screen controls" 1fr / minmax(0,1fr) 210px;
+        }
+        body.touch-ui #status { grid-area:status; }
+        body.touch-ui #screen { grid-area:screen; width:auto; height:auto; min-width:0; }
+        body.touch-ui #mobile-controls { grid-area:controls; width:auto; box-sizing:border-box; overflow:auto; }
+        body.touch-ui #mobile-controls .buttons { flex-wrap:wrap; }
+        body.touch-ui #trackpad { height:80px; }
+      }
       #mobile-controls { display:none; flex:none; padding:6px 8px max(6px,env(safe-area-inset-bottom));
         background:#172033; color:#f8fafc; font:12px system-ui; border-top:1px solid #334155; }
       #mobile-controls .buttons { display:flex; gap:5px; overflow-x:auto; }
@@ -32,6 +48,7 @@
       #mobile-cursor::after { content:""; position:absolute; width:4px; height:4px; background:#fff;
         border-radius:50%; left:7px; top:7px; }
       @media(any-pointer:coarse) { #mobile-controls { display:block; } }
+      body.touch-ui #mobile-controls { display:block; }
       /* Keep a real editable element on screen for iOS/Android keyboards. */
       #mobile-keyboard { position:fixed; bottom:0; left:0; width:1px; height:1px;
         padding:0; border:0; opacity:.01; font-size:16px; pointer-events:none; }
@@ -56,6 +73,7 @@
       const statusEl = document.getElementById("status");
       const setStatus = (text) => {
         statusEl.textContent = text;
+        statusEl.hidden = !text;
       };
 
       const prefix = window.location.pathname.replace(/[^/]+$/, "");
@@ -67,6 +85,20 @@
 
       let rfb = null;
       let reconnectTimer = null;
+      // A desktop that has never answered on this page is still coming up, and
+      // x11vnc opens its port a heartbeat after the last attempt failed. Holding
+      // every retry at the calm cadence leaves up to half a second of veil on top
+      // of a desktop that is already there, so the first window of attempts comes
+      // back eager. Once a session has been seen the calm cadence returns: a
+      // genuinely dropped connection should not be hammered.
+      const CALM_RETRY_MS = 1500;
+      const EAGER_RETRY_MS = 350;
+      const EAGER_ATTEMPTS = 40;
+      let everConnected = false;
+      let eagerAttempts = 0;
+      const retryDelay = () => (!everConnected && eagerAttempts < EAGER_ATTEMPTS)
+        ? (eagerAttempts += 1, EAGER_RETRY_MS)
+        : CALM_RETRY_MS;
       const parentOrigin = window.location.origin;
       const keyboard = document.getElementById("mobile-keyboard");
       const sentinel = "\u200b";
@@ -78,7 +110,13 @@
       const modeButton = document.getElementById("pointer-mode");
       const dragButton = document.getElementById("pointer-drag");
       const pointerHelp = document.getElementById("pointer-help");
-      let trackpad = false;
+      const touchUi = window.matchMedia?.("(any-pointer:coarse)");
+      document.body?.classList?.toggle("touch-ui", Boolean(touchUi?.matches));
+      touchUi?.addEventListener?.("change", event => document.body?.classList?.toggle("touch-ui", event.matches));
+      let trackpad = Boolean(touchUi?.matches);
+      const pad = document.getElementById("trackpad");
+      const shortcuts = document.getElementById("keyboard-shortcuts");
+      let modifier = null;
       let dragging = false;
       let gesture = null;
       let pointer = { x: .5, y: .5 };
@@ -126,11 +164,12 @@
           buttons:0, preventDefault(){}, stopPropagation(){} });
       }
       function updatePointerControls() {
+        if (pad) pad.hidden = !trackpad;
         modeButton?.setAttribute?.("aria-pressed", String(trackpad));
         if (modeButton) modeButton.textContent = trackpad ? "觸控板" : "直接點選";
         if (pointerHelp) pointerHelp.textContent = trackpad
           ? "滑動移游標・輕點左鍵・雙指捲動／輕點右鍵・拖曳按完再按一次放開"
-          : "點畫面定位並開鍵盤・長按右鍵・精準操作可切換觸控板";
+          : "點畫面定位・按「鍵盤」輸入・精準操作可切換觸控板";
         for (const button of controls?.querySelectorAll?.("button[data-action]") || []) {
           button.disabled = !rfb || rfb.viewOnly;
         }
@@ -139,6 +178,7 @@
       function showKeyboard() {
         if (!rfb || rfb.viewOnly) return;
         rfb.focusOnClick = false;
+        if (shortcuts) shortcuts.hidden = false;
         keyboard.focus({ preventScroll: true });
         keyboard.setSelectionRange(keyboard.value.length, keyboard.value.length);
       }
@@ -152,6 +192,13 @@
         }
         if (!rfb || rfb.viewOnly) return;
         if (action === "keyboard") { releaseDrag(); showKeyboard(); return; }
+        if (action === "hide-keyboard") { keyboard.blur(); if (shortcuts) shortcuts.hidden = true; return; }
+        if (action === "modifier") {
+          modifier = modifier === button.dataset.key ? null : button.dataset.key;
+          for (const item of controls.querySelectorAll('[data-action="modifier"]')) item.setAttribute("aria-pressed", String(item.dataset.key === modifier));
+          return;
+        }
+        if (action === "key") { mobileKey(button.dataset.key); return; }
         if (action === "left") pointerClick(1);
         if (action === "right") pointerClick(4);
         if (action === "up") { releaseDrag(); scrollPointer(0, -100); }
@@ -170,7 +217,7 @@
           y:points.reduce((sum,p)=>sum+p.clientY,0)/points.length };
       }
       function startPointerTouch(event) {
-        if (!trackpad || !event.target.closest?.("#screen")) return false;
+        if (!trackpad || !event.target.closest?.("#trackpad")) return false;
         stopTouch(event);
         if (!rfb || rfb.viewOnly) {
           window.parent.postMessage({ type:"lazyboy-request-control" }, parentOrigin);
@@ -222,7 +269,9 @@
       }
       function mobileKey(key) {
         if (!rfb || rfb.viewOnly) return;
-        window.parent.postMessage({ type: "lazyboy-mobile-key", key }, parentOrigin);
+        window.parent.postMessage({ type: "lazyboy-mobile-key", key: modifier ? `${modifier}+${key}` : key }, parentOrigin);
+        modifier = null;
+        for (const item of controls?.querySelectorAll?.('[data-action="modifier"]') || []) item.setAttribute("aria-pressed", "false");
       }
       function commitKeyboard() {
         if (composing) return;
@@ -255,9 +304,17 @@
       });
       // Focus synchronously in the user's tap, before iOS loses activation.
       // VNC pixels cannot reveal whether the remote target is a text field.
+      function ignoreScreenTouch(event) {
+        if (!trackpad || !event.target.closest?.("#screen")) return false;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        touchStart = null;
+        return true;
+      }
       window.addEventListener("touchstart", event => {
         if (event.target === keyboard) return;
         if (startPointerTouch(event)) { touchStart = null; return; }
+        if (ignoreScreenTouch(event)) return;
         const point = event.touches[0];
         const rect = pointerGeometry();
         if (point && rect && event.target.closest?.("#screen")) {
@@ -270,6 +327,7 @@
       }, { passive: false, capture: true });
       window.addEventListener("touchmove", event => {
         if (movePointerTouch(event)) return;
+        if (ignoreScreenTouch(event)) return;
         const point = event.touches[0];
         if (touchStart && (!point || event.touches.length !== 1 ||
             Math.hypot(point.clientX - touchStart.x, point.clientY - touchStart.y) > 10)) touchStart = null;
@@ -277,11 +335,11 @@
       window.addEventListener("touchcancel", () => { touchStart = null; gesture = null; releaseDrag(); }, true);
       window.addEventListener("touchend", event => {
         if (endPointerTouch(event)) return;
+        if (ignoreScreenTouch(event)) return;
         const tapped = touchStart && event.touches.length === 0;
         touchStart = null;
         if (!tapped || !rfb || rfb.viewOnly) return;
-        keyboard.focus({ preventScroll: true });
-        keyboard.setSelectionRange(keyboard.value.length, keyboard.value.length);
+        // Direct taps position the pointer; the keyboard opens only on request.
       }, { passive: false, capture: true });
 
       function pasteIntoDesktop(text) {
@@ -303,39 +361,58 @@
         }
       }
 
+      // The host flips this gate whenever control changes hands, including
+      // while the frame is still dialling or between retries. Keep the last
+      // thing it asked for and hand it to every new RFB, so a handoff never
+      // depends on which side of a reconnect the message happened to land.
+      let wantedViewOnly = null;
       function applyViewOnly(value) {
+        wantedViewOnly = Boolean(value);
         if (!rfb) return;
-        if (value) { releaseDrag(); gesture = null; }
-        rfb.viewOnly = Boolean(value);
+        if (wantedViewOnly) { releaseDrag(); gesture = null; modifier = null; if (shortcuts) shortcuts.hidden = true; }
+        rfb.viewOnly = wantedViewOnly;
         updatePointerControls();
         if (rfb.viewOnly) { keyboard.blur(); resetKeyboard(); }
+        // Taking over has to be usable, not just painted: focus so the very
+        // first keystroke after the veil lands on the desktop.
+        else { try { rfb.focus(); } catch (_) {} }
       }
 
       function connect() {
         setStatus("Connecting to desktop…");
         window.parent.postMessage({ type: "lazyboy-desktop-lost" }, parentOrigin);
         rfb = new RFB(document.getElementById("screen"), url);
-        rfb.viewOnly = flag("view_only", true);
+        rfb.viewOnly = wantedViewOnly ?? flag("view_only", true);
         rfb.scaleViewport = true;
+        rfb.qualityLevel = 6;
+        rfb.compressionLevel = 2;
         rfb.clipViewport = false;
         rfb.background = "#0f172a";
         pinTaskbar();
         updatePointerControls();
         rfb.addEventListener("connect", () => {
+          everConnected = true;
+          eagerAttempts = 0;
+          setStatus("");
           pinTaskbar();
           updatePointerControls();
           try { rfb.focus(); } catch (_) {}
+          if (wantedViewOnly !== null) applyViewOnly(wantedViewOnly);
           window.parent.postMessage({ type: "lazyboy-desktop-ready" }, parentOrigin);
         });
         rfb.addEventListener("disconnect", (event) => {
           releaseDrag(); gesture = null;
-          applyViewOnly(true);
+          // Disable the disconnected instance without overwriting host intent.
+          rfb.viewOnly = true;
+          modifier = null;
+          if (shortcuts) shortcuts.hidden = true;
+          updatePointerControls();
           keyboard.blur(); resetKeyboard();
           window.parent.postMessage({ type: "lazyboy-desktop-lost" }, parentOrigin);
           const clean = event && event.detail && event.detail.clean;
           setStatus(clean ? "Disconnected — retrying" : "Desktop connection lost — retrying");
           if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connect, 1500);
+          reconnectTimer = setTimeout(connect, retryDelay());
         });
         rfb.addEventListener("clipboard", (event) => {
           const text = event && event.detail ? event.detail.text : "";
@@ -416,6 +493,18 @@
         <button data-action="down" aria-label="向下捲動">↓</button>
         <button data-action="keyboard">鍵盤</button>
       </div>
+      <div class="buttons shortcuts" id="keyboard-shortcuts" hidden>
+        <button data-action="modifier" data-key="ctrl" aria-pressed="false">Ctrl</button>
+        <button data-action="modifier" data-key="alt" aria-pressed="false">Alt</button>
+        <button data-action="key" data-key="a">A</button><button data-action="key" data-key="c">C</button>
+        <button data-action="key" data-key="v">V</button><button data-action="key" data-key="z">Z</button>
+        <button data-action="key" data-key="Tab">Tab</button><button data-action="key" data-key="Escape">Esc</button>
+        <button data-action="key" data-key="Left">←</button><button data-action="key" data-key="Right">→</button>
+        <button data-action="key" data-key="Up">↑</button><button data-action="key" data-key="Down">↓</button>
+        <button data-action="key" data-key="Return">Enter</button><button data-action="key" data-key="BackSpace">⌫</button>
+        <button data-action="hide-keyboard">收起鍵盤</button>
+      </div>
+      <div id="trackpad" role="group" aria-label="獨立觸控板" hidden>在這裡滑動控制滑鼠</div>
       <p id="pointer-help"></p>
     </nav>
     <textarea id="mobile-keyboard" aria-label="Remote desktop keyboard" tabindex="-1"

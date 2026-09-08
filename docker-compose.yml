@@ -51,10 +51,12 @@ services:
       LAZYBOY_COMPUTER_MEMORY_MB: ${LAZYBOY_COMPUTER_MEMORY_MB:-2048}
       LAZYBOY_COMPUTER_PIDS: ${LAZYBOY_COMPUTER_PIDS:-2048}
       LAZYBOY_COMPUTER_SUDO: ${LAZYBOY_COMPUTER_SUDO:-false}
+      LAZYBOY_COMPUTER_DRIVER: cua
       LAZYBOY_LXCFS_ROOT: /var/lib/lxcfs
       SUPERVISOR_BIND: 0.0.0.0:7091
       DATA_DIR: /data
       HOST_DATA_DIR: ${LAZYBOY_HOST_DATA_DIR:-${PWD}/data}
+      LAZYBOY_SCREEN_NETWORK: ${LAZYBOY_SCREEN_NETWORK:-lazyboy_screen}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/data
@@ -68,7 +70,7 @@ services:
   api:
     restart: unless-stopped
     init: true
-    networks: [database, control, egress]
+    networks: [database, control, egress, screen]
     logging: *bounded-logs
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -100,6 +102,11 @@ services:
       LAZYBOY_RECORDING_RETENTION_DAYS: ${LAZYBOY_RECORDING_RETENTION_DAYS:-30}
       LAZYBOY_MEMORY_HISTORY_RETENTION_DAYS: ${LAZYBOY_MEMORY_HISTORY_RETENTION_DAYS:-90}
       LAZYBOY_DB_WARN_MB: ${LAZYBOY_DB_WARN_MB:-1024}
+      LAZYBOY_RUN_SOFT_TURNS: ${LAZYBOY_RUN_SOFT_TURNS:-60}
+      LAZYBOY_RUN_SOFT_EVERY: ${LAZYBOY_RUN_SOFT_EVERY:-120}
+      LAZYBOY_RUN_CAP_TURNS: ${LAZYBOY_RUN_CAP_TURNS:-1000}
+      LAZYBOY_RUN_SOFT_MINUTES: ${LAZYBOY_RUN_SOFT_MINUTES:-75}
+      LAZYBOY_RUN_HARD_MINUTES: ${LAZYBOY_RUN_HARD_MINUTES:-240}
       LAZYBOY_WEB_DIR: /web
       LAZYBOY_SCREEN_UPSTREAM: host.docker.internal
       ORT_DYLIB_PATH: /usr/local/lib/libonnxruntime.so
@@ -124,3 +131,7 @@ networks:
   control:
     internal: true
   egress: {}
+  # API ↔ 電腦 noVNC 專用。桌面代理因此不必繞經只綁主機 loopback 的發布埠。
+  screen:
+    name: ${LAZYBOY_SCREEN_NETWORK:-lazyboy_screen}
+    internal: true
