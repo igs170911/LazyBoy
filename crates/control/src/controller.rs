@@ -53,7 +53,11 @@ pub enum ControlError {
     StaleReference,
     #[error("permission denied")]
     PermissionDenied,
-    #[error("computer action timed out")]
+    /// Fail closed, in the same words the tool-layer timeout uses
+    /// (`runs.rs`): the caller must not read a timeout as "nothing happened".
+    #[error(
+        "computer action timed out. Its effects are unknown: it may already have been applied. Observe the current screen before anything else, and never repeat a step that already worked."
+    )]
     Timeout,
     #[error("unsupported computer action")]
     Unsupported,

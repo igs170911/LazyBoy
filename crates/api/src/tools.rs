@@ -4,10 +4,11 @@ use lazyboy_contracts::{
     ComputerAction, ComputerMode, ComputerObservation, PointerType, UiElement,
 };
 use lazyboy_control::{
-    ActionError, ActionRequest, AdapterContext, BrowserPage, BrowserRequest, ComputerRef,
-    SandboxProvider, apply_element_targets, click_fingerprint, element_id, format_ui_elements,
-    frames_match, merge_ui_elements, overlay_elements, parse_computer_actions,
-    resolve_bot_workspace_cwd, resolve_bot_workspace_path, should_block_stale_click,
+    ActionDecision, ActionError, ActionRequest, ActionVerdict, AdapterContext, BrowserPage,
+    BrowserRequest, ComputerRef, SandboxProvider, ScreenChange, apply_element_targets,
+    click_fingerprint, element_id, format_ui_element_lines, format_ui_elements, frame_signature,
+    merge_ui_elements, overlay_elements, parse_computer_actions, resolve_bot_workspace_cwd,
+    resolve_bot_workspace_path, screen_change_between, should_block_stale_click,
 };
 use rig_core::completion::ToolDefinition;
 use serde_json::{Value, json};
@@ -27,6 +28,10 @@ pub struct ToolCtx {
     pub vision: bool,
     pub gui_block: Mutex<Option<String>>,
     pub previous_frame: Mutex<Option<String>>,
+    /// Coarse signature of the previous capture. `frame_id` is a sha256, so on
+    /// a live desktop every panel clock tick is a "new" frame; the signature is
+    /// what makes "nothing actually happened" detectable.
+    pub previous_signature: Mutex<Option<Vec<u8>>>,
     pub elements: Mutex<Vec<UiElement>>,
     pub miss_streak: Mutex<u32>,
     pub last_click_key: Mutex<Option<String>>,
@@ -430,28 +435,40 @@ fn text_outcome(text: impl Into<String>) -> ToolOutcome {
     }
 }
 
-fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
-    if let Some(message) = ctx.gui_block.lock().unwrap().clone() {
-        return Some(ToolOutcome {
+/// A human holds the desktop, so nothing may touch it or describe it — no
+/// matter what the model can see.
+fn gui_blocked(ctx: &ToolCtx) -> Option<ToolOutcome> {
+    ctx.gui_block
+        .lock()
+        .unwrap()
+        .clone()
+        .map(|message| ToolOutcome {
             text: message,
             image: None,
             pause: false,
             blocks: Vec::new(),
-        });
-    }
-    if ctx.vision {
-        None
-    } else {
-        Some(ToolOutcome {
-            text: "This model cannot see the shared desktop. Pick a vision model for Cua computer tools.".into(),
-            image: None,
-            pause: false,
-            blocks: Vec::new(),
         })
-    }
 }
 
-fn observation_text(note: &str, observation: &ComputerObservation, unchanged: bool) -> String {
+/// Everything that acts on pixels. Observation deliberately does not use this:
+/// an element tree is text, so a text-only model can still read the desktop.
+fn vision_guard(ctx: &ToolCtx) -> Option<ToolOutcome> {
+    gui_blocked(ctx).or_else(|| {
+        (!ctx.vision).then(|| {
+            text_outcome(
+                "This model cannot see the shared desktop, so it cannot drive it. computer_observe still reports the element tree as text; pick a vision model to click, type, or browse.",
+            )
+        })
+    })
+}
+
+/// Controls listed in one observation. A busy native desktop lands near this
+/// number and the tail is scrolled-off controls and duplicated windows.
+const MAX_LISTED_ELEMENTS: usize = 120;
+
+/// The element list replaces the element array: models address controls by id
+/// (see `element_id`), so serializing both doubled every observation.
+fn observation_text(note: &str, observation: &ComputerObservation, change: ScreenChange) -> String {
     let label = if observation
         .elements
         .iter()
@@ -461,10 +478,21 @@ fn observation_text(note: &str, observation: &ComputerObservation, unchanged: bo
     } else {
         "Clickable windows"
     };
+    // Coverage belongs on the list, not in a separate warning: this is the
+    // exact place where a model decides that a control does not exist.
+    let coverage = if observation.native_observation_complete {
+        ""
+    } else {
+        " (partial: some windows did not report controls, so a missing entry is not proof)"
+    };
     format!(
-        "{note}{}\n{label}: {}\n{}",
-        if unchanged { " (screen unchanged)" } else { "" },
-        format_ui_elements(&observation.elements),
+        "{note}{}\n{label}{coverage}:\n{}\n{}",
+        match change {
+            ScreenChange::Identical => " (screen unchanged)",
+            ScreenChange::Similar => " (no visible change)",
+            ScreenChange::Changed => "",
+        },
+        format_ui_element_lines(&observation.elements, MAX_LISTED_ELEMENTS),
         json!({
             "frameId": observation.frame_id,
             "width": observation.width,
@@ -472,13 +500,12 @@ fn observation_text(note: &str, observation: &ComputerObservation, unchanged: bo
             "capturedAt": observation.captured_at,
             "cursor": observation.cursor,
             "activeWindow": observation.active_window,
-            "elements": observation.elements,
         })
     )
 }
 
 async fn observe(ctx: &ToolCtx) -> ToolOutcome {
-    if let Some(blocked) = vision_guard(ctx) {
+    if let Some(blocked) = gui_blocked(ctx) {
         return blocked;
     }
     match ctx
@@ -510,7 +537,7 @@ async fn wait_then_observe(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         .unwrap_or(5.0)
         .clamp(1.0, MAX_WAIT_SECS);
     tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
-    if vision_guard(ctx).is_some() {
+    if gui_blocked(ctx).is_some() {
         return text_outcome(format!("waited {seconds:.0}s"));
     }
     match ctx
@@ -872,6 +899,11 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
         .await
     {
         Ok(result) => {
+            let confirmed = result
+                .verdict
+                .as_ref()
+                .is_some_and(|verdict| verdict.decision == ActionDecision::Done);
+            let verdict = result.verdict.as_ref().map(verdict_note);
             if let Some(observation) = result.observation {
                 let (observation, note) = attach_ui_elements(
                     ctx,
@@ -879,18 +911,28 @@ async fn act(ctx: &ToolCtx, args: &Value) -> ToolOutcome {
                     &format!("completed {} computer action(s)", result.completed),
                 )
                 .await;
-                let unchanged =
-                    frames_match(ctx.previous_frame.lock().unwrap().as_deref(), &observation);
+                let change = screen_change(ctx, &observation);
                 let mut outcome = pack_observation(ctx, &note, observation);
-                note_click_result(ctx, had_click, unchanged, &mut outcome);
+                note_click_result(
+                    ctx,
+                    had_click,
+                    // A confirmed effect is a change even when a ticking clock
+                    // hid it in the pixels; counting it as a miss would coach
+                    // the model away from a click that worked.
+                    change != ScreenChange::Changed && !confirmed,
+                    &mut outcome,
+                );
+                with_verdict(&mut outcome, verdict);
                 outcome
             } else {
-                ToolOutcome {
+                let mut outcome = ToolOutcome {
                     text: json!({"ok": true, "completed": result.completed}).to_string(),
                     image: None,
                     pause: false,
                     blocks: Vec::new(),
-                }
+                };
+                with_verdict(&mut outcome, verdict);
+                outcome
             }
         }
         Err(error) => ToolOutcome {
@@ -1008,6 +1050,8 @@ fn pause_unknown_element(_ctx: &ToolCtx, id: u32, elements: &[UiElement]) -> Too
 /// Clicks that change nothing are common and usually recoverable (disabled
 /// button, video still playing, slightly off target). Coach the model instead
 /// of pausing; it can still call request_takeover when it is truly stuck.
+/// `unchanged` is the perceptual comparison on purpose: with a byte-exact one a
+/// ticking clock would reset the streak and this advice would never fire.
 fn note_click_result(ctx: &ToolCtx, had_click: bool, unchanged: bool, outcome: &mut ToolOutcome) {
     if !had_click {
         return;
@@ -1026,13 +1070,52 @@ fn note_click_result(ctx: &ToolCtx, had_click: bool, unchanged: bool, outcome: &
     }
 }
 
+/// What the driver could prove about the actions it just ran, as one line the
+/// model can act on. `None` from the driver stays `None` here: inventing
+/// "it worked" is exactly the mistake that makes a model retype a field that
+/// was already filled.
+fn verdict_note(verdict: &ActionVerdict) -> String {
+    let detail = verdict
+        .effect
+        .as_deref()
+        .map(|effect| format!(" (driver said: {effect})"))
+        .unwrap_or_default();
+    match verdict.decision {
+        ActionDecision::Done => "verdict: effect confirmed. Do not repeat this action.".into(),
+        ActionDecision::VerifyFreshState => format!(
+            "verdict: effect not confirmed{detail}. Read the new screenshot before you retry anything, and never repeat input that may already have worked."
+        ),
+        ActionDecision::Escalate => format!(
+            "verdict: the driver reports no effect{detail}. Re-observe, then change the approach (fresh coordinates, focus the window first, another control) instead of repeating the same input."
+        ),
+    }
+}
+
+/// First line of the tool result: the verdict decides whether the model looks
+/// at the new frame or fires the same input again, so it goes before the frame.
+fn with_verdict(outcome: &mut ToolOutcome, verdict: Option<String>) {
+    if let Some(note) = verdict {
+        outcome.text = format!("{note}\n{}", outcome.text);
+    }
+}
+
 fn pack_observation(ctx: &ToolCtx, note: &str, observation: ComputerObservation) -> ToolOutcome {
-    let unchanged = frames_match(ctx.previous_frame.lock().unwrap().as_deref(), &observation);
+    let change = screen_change(ctx, &observation);
+    let signature = frame_signature(&observation.image);
     *ctx.previous_frame.lock().unwrap() = Some(observation.frame_id.clone());
+    *ctx.previous_signature.lock().unwrap() = signature;
     *ctx.elements.lock().unwrap() = observation.elements.clone();
+    let mut text = observation_text(note, &observation, change);
+    if !ctx.vision {
+        // The list is the whole payload for this model, so say so: left unsaid
+        // it keeps waiting for a picture that is never coming.
+        text.push_str("\n(elements only: this model cannot see the screen)");
+    }
     ToolOutcome {
-        text: observation_text(note, &observation, unchanged),
-        image: if unchanged {
+        text,
+        // Only a byte-identical frame drops the picture. A change too small to
+        // move the signature is still one the model gets to look at.
+        image: if ctx.vision && change != ScreenChange::Identical {
             None
         } else {
             Some(overlay_elements(&observation.image, &observation.elements))
@@ -1040,6 +1123,18 @@ fn pack_observation(ctx: &ToolCtx, note: &str, observation: ComputerObservation)
         pause: false,
         blocks: Vec::new(),
     }
+}
+
+/// How this capture differs from the one the Agent saw last: byte-exact for the
+/// screenshot contract, perceptual for advice.
+fn screen_change(ctx: &ToolCtx, observation: &ComputerObservation) -> ScreenChange {
+    let previous_frame = ctx.previous_frame.lock().unwrap().clone();
+    let previous_signature = ctx.previous_signature.lock().unwrap().clone();
+    screen_change_between(
+        previous_frame.as_deref(),
+        previous_signature.as_deref(),
+        observation,
+    )
 }
 
 /// Quote literal shell text typed by Cua into the visible terminal.
@@ -1815,5 +1910,167 @@ mod saved_login_tests {
         assert!(login_field(&page, "password").is_none());
         page.elements.push(page.elements[0].clone());
         assert!(login_field(&page, "username").is_none());
+    }
+}
+
+#[cfg(test)]
+mod observation_text_tests {
+    use super::*;
+    use lazyboy_control::observation_from_png;
+
+    fn observation(count: usize) -> ComputerObservation {
+        let mut observation = observation_from_png(vec![0xFF, 0xD8, 0xFF], 1920, 1080, None, None);
+        observation.elements = (1..=count as u32)
+            .map(|index| UiElement {
+                id: index,
+                title: format!("Window {index}"),
+                x: index,
+                y: index,
+                w: 100,
+                h: 40,
+                kind: Some("window".into()),
+                ..UiElement::default()
+            })
+            .collect();
+        observation
+    }
+
+    #[test]
+    fn lists_each_control_once_and_names_what_was_dropped() {
+        let text = observation_text(
+            "computer observed",
+            &observation(150),
+            ScreenChange::Changed,
+        );
+        // A model clicks by id, so the element array must not ride along with
+        // the list: it used to double every observation.
+        assert!(!text.contains("\"selector\""));
+        assert!(!text.contains("\"elements\""));
+        assert_eq!(text.matches("[1]").count(), 1);
+        assert!(text.contains("+30 more not listed"));
+        // Screen metadata is small and the model needs the frame id.
+        assert!(text.contains("\"frameId\""));
+        assert!(text.contains("\"width\":1920"));
+
+        let small = observation_text("computer observed", &observation(3), ScreenChange::Changed);
+        assert!(!small.contains("more not listed"));
+        assert!(small.contains("[3] window \"Window 3\""));
+    }
+
+    #[test]
+    fn labels_the_three_screen_states_apart() {
+        let observed = |change| observation_text("observed", &observation(1), change);
+        assert!(observed(ScreenChange::Identical).starts_with("observed (screen unchanged)"));
+        assert!(observed(ScreenChange::Similar).starts_with("observed (no visible change)"));
+        assert!(observed(ScreenChange::Changed).starts_with("observed\n"));
+    }
+
+    #[test]
+    fn an_incomplete_sweep_says_a_missing_control_is_not_proof() {
+        // `observation_from_png` starts out incomplete, and a window that
+        // never answered is not evidence that its buttons are gone.
+        let text = observation_text("observed", &observation(1), ScreenChange::Changed);
+        assert!(text.contains("Clickable windows (partial: some windows did not report controls"));
+        let mut complete = observation(1);
+        complete.native_observation_complete = true;
+        let complete = observation_text("observed", &complete, ScreenChange::Changed);
+        assert!(!complete.contains("partial"));
+        assert!(complete.starts_with("observed\nClickable windows:\n"));
+    }
+}
+
+#[cfg(test)]
+mod verdict_tests {
+    use super::*;
+
+    fn verdict(decision: ActionDecision, effect: Option<&str>) -> ActionVerdict {
+        ActionVerdict {
+            decision,
+            effect: effect.map(str::to_string),
+            verified: None,
+            escalation: None,
+        }
+    }
+
+    #[test]
+    fn an_unproven_effect_says_look_first_never_type_again() {
+        let note = verdict_note(&verdict(
+            ActionDecision::VerifyFreshState,
+            Some("unverifiable"),
+        ));
+        assert!(note.contains("effect not confirmed"));
+        assert!(note.contains("never repeat input"));
+        assert!(note.contains("driver said: unverifiable"));
+    }
+
+    #[test]
+    fn a_confirmed_effect_forbids_repeating_the_action() {
+        let note = verdict_note(&verdict(ActionDecision::Done, Some("confirmed")));
+        assert!(note.starts_with("verdict: effect confirmed"));
+        assert!(note.contains("Do not repeat"));
+    }
+
+    #[test]
+    fn the_verdict_is_the_first_line_and_invents_no_reason() {
+        let mut outcome = text_outcome("completed 1 computer action(s)");
+        with_verdict(
+            &mut outcome,
+            Some(verdict_note(&verdict(ActionDecision::Escalate, None))),
+        );
+        assert!(
+            outcome
+                .text
+                .starts_with("verdict: the driver reports no effect")
+        );
+        assert!(outcome.text.ends_with("completed 1 computer action(s)"));
+        // The driver gave no `effect` field, so nothing may claim one.
+        assert!(!outcome.text.contains("driver said"));
+    }
+}
+
+/// The tool schema rides in front of every request, so its bytes are the
+/// prompt cache key. Collapsing the tools into one `action`-tagged schema
+/// (hermes-style) would strand the `tool_calls` stored in existing
+/// checkpoints; keeping this serialization byte-stable is the half of the
+/// cache win that costs nothing.
+#[cfg(test)]
+mod tool_schema_tests {
+    use super::*;
+
+    fn schema(memory_enabled: bool) -> String {
+        serde_json::to_string(&tool_definitions(memory_enabled)).expect("tool schema is json")
+    }
+
+    #[test]
+    fn the_tool_schema_is_byte_stable_across_calls() {
+        for memory_enabled in [false, true] {
+            assert_eq!(schema(memory_enabled), schema(memory_enabled));
+        }
+    }
+
+    #[test]
+    fn tool_names_are_unique_and_open_with_the_computer_pair() {
+        let tools = tool_definitions(true);
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(unique.len(), names.len());
+        assert_eq!(&names[..2], ["computer_observe", "computer_act"]);
+    }
+
+    #[test]
+    fn memory_tools_are_appended_so_the_desktop_schema_never_moves() {
+        let desktop = |memory_enabled: bool| -> Vec<String> {
+            tool_definitions(memory_enabled)
+                .iter()
+                .filter(|tool| {
+                    !matches!(
+                        tool.name.as_str(),
+                        "remember" | "recall_memory" | "forget_memory"
+                    )
+                })
+                .map(|tool| serde_json::to_string(tool).expect("tool schema is json"))
+                .collect()
+        };
+        assert_eq!(desktop(false), desktop(true));
     }
 }

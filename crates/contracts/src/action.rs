@@ -138,7 +138,9 @@ impl UiElement {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComputerObservation {
-    /// The controller already populated native semantics; skip duplicate enrichment.
+    /// The controller already populated native semantics; skip duplicate
+    /// enrichment. False also means the element list is only partial, so "I
+    /// cannot see that control" is not yet evidence that it is not there.
     #[serde(default)]
     pub native_observation_complete: bool,
     pub frame_id: String,

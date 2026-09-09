@@ -142,12 +142,52 @@ pub struct EnsureScreenResult {
     pub view_port: u16,
 }
 
+/// How much the driver could prove about an action. Variants are ordered from
+/// least to most urgent so a batch can keep its worst verdict. `Done` requires
+/// the driver to confirm an effect: a driver that reports nothing stays
+/// `None` rather than being reported as success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionDecision {
+    Done,
+    VerifyFreshState,
+    Escalate,
+}
+
+impl ActionDecision {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::VerifyFreshState => "verify_fresh_state",
+            Self::Escalate => "escalate",
+        }
+    }
+}
+
+/// The driver's own verdict on the last action, kept verbatim where it exists
+/// so a refusal can still be traced back to the field that produced it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionVerdict {
+    pub decision: ActionDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clipboard_text: Option<String>,
     pub completed: usize,
     pub observation: Option<ComputerObservation>,
+    /// Absent when the driver gave no semantic fields, when nothing was sent to
+    /// the driver (sleep, launch, clipboard), and from an older controld.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<ActionVerdict>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
