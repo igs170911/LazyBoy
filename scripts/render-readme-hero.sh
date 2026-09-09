@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
-# Render docs/hero.html to docs/readme-hero.png
+# Render docs/hero.html into both README banners
 #
 # The banner only frames a real capture (see scripts/capture-hero.mjs), so this
 # step needs any headless Chromium: CHROME=/path/to/chrome, a browser on PATH,
 # the macOS Brave/Chrome install, or a Playwright download.
 #
-#   scripts/render-readme-hero.sh              # the group shot (docs/hero/room.png)
-#   SHOT=agent scripts/render-readme-hero.sh   # the single-agent shot
+# Each language gets its own frame copy and its own screenshot, so the English
+# README never shows a Chinese screen and the Chinese README never shows English.
+#
+#   scripts/render-readme-hero.sh
+#     -> docs/readme-hero.png, docs/readme-hero.zh-TW.png
+#   HERO_LANG=en scripts/render-readme-hero.sh          # one language only
+#   HERO_LANG=en OUT=/tmp/preview.png scripts/render-readme-hero.sh
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 html="$root/docs/hero.html"
-out="${OUT:-$root/docs/readme-hero.png}"
-shot="${SHOT:-room}"
 size="${SIZE:-1280,760}"
+# Deliberately not LANG, which is the system locale and already set.
+langs="${HERO_LANG:-en zh-TW}"
 
 browser=""
 for candidate in "${CHROME:-}" \
@@ -34,13 +39,22 @@ if [ -z "$browser" ]; then
   exit 1
 fi
 
-args=(--headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2
-      --window-size="$size" --screenshot="$out")
-# Root needs the sandbox off; nowhere else does.
-[ "$(id -u)" = "0" ] && args+=(--no-sandbox)
-"$browser" "${args[@]}" "file://$html?shot=$shot"
-
-python3 - "$out" <<'PY'
+for lang in $langs; do
+  case "$lang" in
+    zh-TW) name="readme-hero.zh-TW" ;;
+    en) name="readme-hero" ;;
+    *) echo "unknown HERO_LANG: $lang (expected: en, zh-TW)" >&2; exit 1 ;;
+  esac
+  out="${OUT:-$root/docs/$name.png}"
+  args=(--headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2
+        --window-size="$size" --screenshot="$out")
+  # Root needs the sandbox off; nowhere else does.
+  [ "$(id -u)" = "0" ] && args+=(--no-sandbox)
+  if ! noise="$("$browser" "${args[@]}" "file://$html?lang=$lang" 2>&1)"; then
+    echo "$noise" >&2
+    exit 1
+  fi
+  python3 - "$out" <<'PY'
 from pathlib import Path
 import struct, sys
 p = Path(sys.argv[1])
@@ -48,3 +62,4 @@ data = p.read_bytes()
 w, h = struct.unpack(">II", data[16:24])
 print(f"wrote {p} ({w}x{h}, {p.stat().st_size} bytes)")
 PY
+done

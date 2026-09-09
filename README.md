@@ -110,30 +110,59 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Tests and the tree layout a
 
 The guides below are currently in Traditional Chinese.
 
-| Doc | Contents |
-| --- | --- |
-| [Architecture](./docs/architecture.md) | Task flow, system architecture, computer lifecycle |
-| [Interactive diagram](./docs/workflow.html) | Zoomable, searchable HTML chart; download and open |
-| [Operations](./docs/operations.md) | Resources, env vars, security, site checks, sudo |
-| [Agent experience](./docs/agent-experience.md) | Turn limits, persistent terminal, live chat |
+| Doc                                                      | Contents                                             |
+| -------------------------------------------------------- | ---------------------------------------------------- |
+| [Architecture](./docs/architecture.md)                   | Task flow, system architecture, computer lifecycle   |
+| [Interactive diagram](./docs/workflow.html)              | Zoomable, searchable HTML chart; download and open   |
+| [Operations](./docs/operations.md)                       | Resources, env vars, security, site checks, sudo     |
+| [Agent experience](./docs/agent-experience.md)           | Turn limits, persistent terminal, live chat          |
 | [hermes-agent review](./docs/hermes-agent-cua-review.md) | Cua harness smoothness: comparison with hermes-agent |
-| [Development](./docs/development.md) | Local dev, checks and tests, directory layout |
-| [Env example](./.env.example) | Environment variables and defaults |
+| [Development](./docs/development.md)                     | Local dev, checks and tests, directory layout        |
+| [Env example](./.env.example)                            | Environment variables and defaults                   |
 
 ## Data
 
 Chats, memory, browser profiles, and encrypted credentials stay on your host. When you use an external model, the prompts, tool results, and screenshots the task needs may still be sent to that provider.
 
+## Acknowledgements
+
+LazyBoy is mostly other people's software, carefully assembled. The projects we lean on hardest:
+
+**Special thanks**
+
+- **[Cua](https://github.com/trycua/cua)** — the Linux desktop driver behind every click, keystroke, and screenshot. We rebuild `cua-driver-rs` v0.23.2 from source with two small patches kept in this repo: one lets the agent cursor wear the bot's own colour, the other swaps the embedded Latin-only badge font for [jf open Huninn](https://github.com/justfont/open-huninn-font) so Chinese renders. Neither patch touches input handling or permissions.
+- **[hermes-agent](https://github.com/NousResearch/hermes-agent)** — not a dependency, but the reference we kept returning to while tuning how smooth an agent's desktop should feel. The comparison is written up in the [hermes-agent review](./docs/hermes-agent-cua-review.md).
+
+**Agents and retrieval** — [rig](https://github.com/0xPlaygrounds/rig) · [rmcp](https://github.com/modelcontextprotocol/rust-sdk) · [fastembed-rs](https://github.com/Anush008/fastembed-rs) and [ONNX Runtime](https://github.com/microsoft/onnxruntime), running [paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2)
+
+**Rust** — Tokio · Axum · tower-http · SQLx · reqwest · rustls · Bollard · tracing · aes-gcm and hmac from [RustCrypto](https://github.com/RustCrypto) · cap-std · cron · chrono · uuid · thiserror · dotenvy
+
+**Web** — React · Vite · TypeScript · [noVNC](https://github.com/novnc/noVNC) · react-markdown with [remark-gfm](https://github.com/remarkjs/remark-gfm) and [remark-breaks](https://github.com/remarkjs/remark-breaks) · [Blobatar](https://github.com/Alain00/blobatar) avatars · [react-useanimations](https://github.com/useAnimations/react-useanimations) icons
+
+**Data** — [PostgreSQL](https://www.postgresql.org) · [pgvector](https://github.com/pgvector/pgvector)
+
+**The desktop inside each container** — [Docker](https://www.docker.com) · [Debian](https://www.debian.org) · [XFCE](https://www.xfce.org) · [Chromium](https://www.chromium.org) · [Xvfb](https://www.x.org) · Thunar · [x11vnc](https://github.com/LibVNC/x11vnc) · [websockify](https://github.com/novnc/websockify) · [AT-SPI2](https://gitlab.gnome.org/GNOME/at-spi2-core) · [gosu](https://github.com/tianon/gosu) · [LXCFS](https://github.com/lxc/lxcfs) · git · zsh with [Powerlevel10k](https://github.com/romkatv/powerlevel10k) · htop
+
+**Type and theme** — [jf open Huninn](https://github.com/justfont/open-huninn-font) (SIL OFL) in the UI and on the agent badge · [Noto CJK](https://github.com/notofonts/noto-cjk), DejaVu, and Liberation as fallbacks · [MesloLGS NF](https://github.com/romkatv/powerlevel10k-media) in the terminal · [Arc Dark](https://github.com/horst3180/arc-theme) and [Papirus](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme) for the look of the room
+
+Every version above is pinned in `Cargo.lock`, `apps/web/package.json`, and `image/computer/Dockerfile`. LazyBoy is Apache-2.0; each project keeps its own license. Thanks also to the maintainers whose names never make it into a README, and to everyone who files a good bug report.
+
 ---
 
 <div align="center">
 
+<img src="./apps/web/public/lazyboy-icon.png" width="72" height="72" alt="LazyBoy" />
+
+**LazyBoy is free and open source.** If it hands you back an afternoon, a coffee is the nicest way to say so.
+
+<a href="https://www.buymeacoffee.com/daniel.wang.1993"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="48" /></a>
+
+<img src="https://img.shields.io/badge/license-Apache--2.0-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Apache License 2.0" />
+<img src="https://img.shields.io/badge/release-0.1.0-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Release 0.1.0" />
+<img src="https://img.shields.io/badge/Rust%20%2B%20React-6f9c96?style=for-the-badge&labelColor=1b1b22" alt="Rust and React" />
+
 **Daniel Wang** <img src="https://flagcdn.com/w20/tw.png" width="20" alt="Taiwan" />
 
-[igs170911@gmail.com](mailto:igs170911@gmail.com)
-
-<a href="https://www.buymeacoffee.com/daniel.wang.1993"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="50" /></a>
-
-[Apache License 2.0](./LICENSE)
+[igs170911@gmail.com](mailto:igs170911@gmail.com) · [Apache License 2.0](./LICENSE)
 
 </div>

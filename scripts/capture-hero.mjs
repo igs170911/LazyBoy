@@ -9,6 +9,11 @@
 //   node scripts/capture-hero.mjs --out docs/hero/room.png --pick 測試聊天
 //   node scripts/capture-hero.mjs --out docs/hero/desktop.png --selector .side-card
 //
+// `--lang` pins the UI language so each README gets a banner and a screenshot
+// in the same language; the app itself defaults to zh-TW.
+//
+//   node scripts/capture-hero.mjs --lang en --out docs/hero/room-en.png --pick 測試聊天
+//
 // A capture that goes into the repository must not photograph whatever the
 // agent's browser happens to have open. `--hide` blanks a region (its layout
 // box stays, so nothing reflows) and `--anchor` prints where that region sits
@@ -40,6 +45,7 @@ const config = {
   out: option('out', 'docs/hero/app.png'),
   pick: option('pick', ''),
   selector: option('selector', '.app-shell'),
+  lang: option('lang', 'zh-TW'),
   hide: option('hide', ''),
   anchor: option('anchor', ''),
   width: Number(option('width', 1480)),
@@ -48,6 +54,10 @@ const config = {
   scale: Number(option('scale', 2)),
   settle: Number(option('settle', 6000)),
 };
+
+if (!['zh-TW', 'en'].includes(config.lang)) {
+  throw new Error(`--lang must be zh-TW or en, got "${config.lang}"`);
+}
 
 function findChrome() {
   const candidates = [
@@ -204,6 +214,13 @@ try {
     sessionId,
   ).then((result) => result.result?.value);
   if (status !== 200) throw new Error(`login failed with HTTP ${status}`);
+  // The app reads its locale once, at module init, so pin it before the reload
+  // that mounts the real view.
+  await connection.send(
+    'Runtime.evaluate',
+    { expression: `localStorage.setItem('lazyboy.locale', ${JSON.stringify(config.lang)})` },
+    sessionId,
+  );
   await goto(`${config.base}/`);
 
   if (config.pick) {

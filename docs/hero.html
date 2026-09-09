@@ -77,14 +77,11 @@
         </svg>
         LazyBoy
       </div>
-      <div class="pill"><b>Self-hosted</b> a Linux desktop per agent</div>
+      <div class="pill"><b id="pill-strong"></b> <span id="pill-rest"></span></div>
     </div>
     <div class="copy">
-      <h1>Give an agent a real computer</h1>
-      <p class="lead">
-        Assign work by text, voice, or a quick demo, then watch its own Linux desktop do it.<br/>
-        Chats, memory, and desktops stay on your host. You choose the model.
-      </p>
+      <h1 id="title"></h1>
+      <p class="lead" id="lead"></p>
     </div>
     <div class="window">
       <div class="chrome"><i class="dot r"></i><i class="dot y"></i><i class="dot g"></i></div>
@@ -92,32 +89,63 @@
     </div>
   </div>
   <script>
-    // Every layer is a real capture from scripts/capture-hero.mjs, so the banner
-    // never shows an invented UI. The group view is two layers on purpose:
-    // room.png is captured with `--hide .side-card`, which blanks the desktop
-    // panel (an agent's browser holds whatever its owner left open), and
-    // desktop.png drops a neutral one back in at the anchor the same capture
-    // prints. Captures are 2x shots of a 1480px viewport, so a capture-space
-    // number becomes hero-space by multiplying by 1184 / 1480 = 0.8.
-    const layers = {
-      room: [
-        { src: './hero/room.png', x: 0, y: 0, w: 1184, h: 520 },
-        { src: './hero/desktop.png', x: 832, y: 0, w: 352, h: 520 },
-      ],
-      agent: [{ src: './hero/agent.png', x: 0, y: 0, w: 1184, h: 520 }],
+    // One banner per README language: the frame copy and the screenshot are
+    // captured in the same language, so the English README never shows a
+    // Chinese screen and vice versa. ?lang=zh-TW|en.
+    const pages = {
+      en: {
+        pillStrong: 'Self-hosted',
+        pillRest: 'a Linux desktop per agent',
+        title: 'Give an agent a real computer',
+        lead: [
+          'Assign work by text, voice, or a quick demo, then watch its own Linux desktop do it.',
+          'Chats, memory, and desktops stay on your host. You choose the model.',
+        ],
+        alt: 'LazyBoy group chat routing one message to a single agent, with that agent\'s live desktop on the right',
+      },
+      'zh-TW': {
+        pillStrong: '自架部署',
+        pillRest: '每個 Agent 一台 Linux 桌面',
+        title: '給 Agent 一台真正的電腦',
+        lead: [
+          '用文字、語音或一段示範交代任務，接著看它自己的 Linux 桌面動手做完。',
+          '對話、記憶與桌面都留在你的主機上，模型由你挑選。',
+        ],
+        alt: 'LazyBoy 群組對話：訊息由其中一個 Agent 接手回覆，右側是它自己的即時桌面',
+      },
     };
-    const shot = new URLSearchParams(location.search).get('shot') || 'room';
-    const host = document.querySelector('.shot');
-    (layers[shot] || layers.room).forEach((layer) => {
-      const img = document.createElement('img');
-      img.src = layer.src;
-      img.alt = 'LazyBoy group chat routing one message to an agent on its live desktop';
-      img.style.left = `${layer.x}px`;
-      img.style.top = `${layer.y}px`;
-      img.style.width = `${layer.w}px`;
-      img.style.height = `${layer.h}px`;
-      host.appendChild(img);
-    });
+    // Real captures only, from scripts/capture-hero.mjs. The group view is two
+    // layers: room-<lang>.png is shot with `--hide .side-card`, which blanks the
+    // desktop panel (an agent's browser holds whatever its owner left open), and
+    // desktop-<lang>.png drops a neutral one back in at the anchor that same
+    // capture prints. Captures are 2x shots of a 1480px viewport, so a
+    // capture-space number becomes hero-space by multiplying by 1184/1480 = 0.8.
+    const lang = new URLSearchParams(location.search).get('lang') || 'en';
+    const page = pages[lang] || pages.en;
+    const capture = lang === 'en' ? 'en' : 'zh';
+    const layers = [
+      { src: `./hero/room-${capture}.png`, x: 0, y: 0, w: 1184, h: 520 },
+      { src: `./hero/desktop-${capture}.png`, x: 832, y: 0, w: 352, h: 520 },
+    ];
+
+    document.documentElement.lang = lang;
+    document.title = `LazyBoy hero (${lang})`;
+    document.getElementById('pill-strong').textContent = page.pillStrong;
+    document.getElementById('pill-rest').textContent = page.pillRest;
+    document.getElementById('title').textContent = page.title;
+    document.getElementById('lead').innerHTML = page.lead.join('<br/>');
+    document.querySelector('.shot').append(
+      ...layers.map((layer) => {
+        const img = document.createElement('img');
+        img.src = layer.src;
+        img.alt = page.alt;
+        img.style.left = `${layer.x}px`;
+        img.style.top = `${layer.y}px`;
+        img.style.width = `${layer.w}px`;
+        img.style.height = `${layer.h}px`;
+        return img;
+      }),
+    );
   </script>
 </body>
 </html>
