@@ -14,7 +14,7 @@
 
 </div>
 
-![LazyBoy 工作空間：Agent 清單、對話與即時桌面](./docs/readme-hero.png)
+![LazyBoy 群組對話：訊息由其中一個 Agent 接手回覆，右側是它自己的即時桌面](./docs/readme-hero.png)
 
 LazyBoy 讓 Agent 在 Docker 裡使用自己的 Linux 桌面，操作瀏覽器、終端與檔案。你可以建立不同的 Agent、在群組中協作，把示範整理成技能，再安排定時執行。
 
@@ -24,7 +24,9 @@ LazyBoy 讓 Agent 在 Docker 裡使用自己的 Linux 桌面，操作瀏覽器�
 
 - **持續的工作空間**：每個 Agent 有自己的對話、工作紀錄與可設定的長期記憶。
 - **真的能操作電腦**：開網頁、使用終端、整理檔案、操作圖形介面，過程可即時觀看。
+- **附件直接丟進對話**：訊息可帶檔案或圖片，Agent 能在自己的桌面開啟，放在收件匣的複本會自動到期清除。
 - **隨時人工接管**：在同一個桌面完成登入、驗證或手動調整，再交回 Agent。
+- **登入帳密進保險庫**：帳密加密存在 Agent 自己的保險庫，遇到登入頁由它填寫，密碼不會經過模型。
 - **多 Agent 與群組**：支援 Team 共用電腦與 Private 獨立電腦模式；群組裡 @誰就由誰回，沒點名時只叫醒工作內容相關的那個，不會全部出動。
 - **示範教學與排程**：把操作示範整理成技能，使用 cron 安排重複工作。
 - **自選模型與工具**：支援 xAI、OpenCode Go、OpenAI 相容端點，以及 MCP 與檔案技能。
@@ -69,7 +71,7 @@ make down  # 停止服務，保留 PostgreSQL 資料
 
 ## 在手機上使用
 
-手機與桌面使用同一個 Web 介面。將服務部署在可連線的主機後，用手機瀏覽器開啟該服務的網址即可；`127.0.0.1` 只代表手機本身，不能拿來連另一台電腦。
+手機與桌面使用同一個 Web 介面。API 預設只綁 `127.0.0.1`，請在 `.env` 設定 `LAZYBOY_BIND_IP=0.0.0.0`（或指定網卡位址）並重建 api 容器，區網裡的手機才連得到；綁非 loopback 時登入 token 需至少 32 字元。接著用手機瀏覽器開啟該位址——手機上的 `127.0.0.1` 只代表手機本身，不能拿來連另一台電腦。
 
 聊天側欄可點外側空白處收合。操作遠端桌面時，可切換直接點選與觸控板模式，使用工具列叫出鍵盤、按右鍵或拖曳。對外提供服務時請設定 HTTPS，詳見 [部署指南](./docs/operations.md#安全模型)。
 
@@ -79,7 +81,7 @@ make down  # 停止服務，保留 PostgreSQL 資料
 - **後端**：Rust 2024、Axum、Tokio
 - **資料**：PostgreSQL、pgvector、SQLx
 - **桌面**：Docker、Debian、XFCE、Chromium、Xvfb
-- **電腦控制**：CDP、AT-SPI、X11
+- **電腦控制**：Cua Driver（X11、AT-SPI、Chromium）
 - **擴充**：MCP、檔案技能、示範 playbook
 
 流程圖、控制權交接、元件職責與電腦生命週期狀態機，集中在 **[架構與流程](./docs/architecture.md)**。原有的 **[互動流程圖](./docs/workflow.html)** 也保留；下載後用瀏覽器開啟即可操作。
@@ -112,6 +114,7 @@ npm run dev
 | [互動流程圖](./docs/workflow.html) | 可縮放、搜尋的 HTML 圖表；下載後開啟 |
 | [部署與操作](./docs/operations.md) | 資源、環境變數、安全設定、網站驗證、sudo |
 | [AI 使用體驗](./docs/agent-experience.md) | 輪次政策、持久終端機、聊天即時推送 |
+| [hermes-agent 比較](./docs/hermes-agent-cua-review.md) | Cua 操作流暢度：與 hermes-agent 對照 |
 | [開發指南](./docs/development.md) | 本機開發、檢查與測試、目錄結構 |
 | [設定範例](./.env.example) | 環境變數與預設值 |
 

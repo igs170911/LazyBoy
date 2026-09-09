@@ -14,7 +14,7 @@ A self-hosted AI agent workspace. Assign tasks in text or voice, watch the deskt
 
 </div>
 
-![LazyBoy workspace: agent list, chat, and live desktop](./docs/readme-hero.png)
+![LazyBoy group chat routing one message to a single agent, with that agent's live desktop on the right](./docs/readme-hero.png)
 
 LazyBoy gives each agent its own Linux desktop in Docker — browser, terminal, and files. You can run several agents, put them in a group, turn a demonstration into a skill, and schedule it to run again.
 
@@ -24,7 +24,9 @@ This is an early `0.1.0` release with desktop and phone browser UIs. You bring y
 
 - **A lasting workspace**: each agent has its own chats, run history, and optional long-term memory.
 - **A real computer**: open pages, use the terminal, organize files, drive the GUI — and watch it live.
+- **Attachments in chat**: send files or images along with the message; the agent can open them on its own desktop, and inbox copies expire on their own.
 - **Take over any time**: sign in, pass a check, or nudge things by hand on the same desktop, then hand it back.
+- **Saved logins**: keep site credentials in the agent's encrypted vault, so it can fill them in at a login wall without the password ever passing through the model.
 - **Several agents and groups**: shared Team computers or private dedicated desktops; `@name` decides who answers, so a message wakes the one agent it is for instead of all of them.
 - **Teach by demo, then schedule**: turn a walkthrough into a skill; use cron for repeat work.
 - **Your models and tools**: xAI, OpenCode Go, OpenAI-compatible endpoints, MCP, and file skills.
@@ -69,7 +71,7 @@ For resource limits, environment variables, HTTPS, and in-container sudo, see [O
 
 ## On a phone
 
-Desktop and phone share the same web UI. After you deploy on a host the phone can reach, open that URL in the phone browser. `127.0.0.1` is the phone itself — it will not reach another machine.
+Desktop and phone share the same web UI. The API listens on `127.0.0.1` by default, so set `LAZYBOY_BIND_IP=0.0.0.0` (or one network card's address) in `.env` and recreate the api container before a phone on your network can reach it; off-loopback the login token has to be at least 32 characters. Then open that address in the phone browser — `127.0.0.1` there is the phone itself and will not reach another machine.
 
 Tap outside the chat sidebar to collapse it. On the remote desktop you can switch between tap-to-click and trackpad, and use the toolbar for keyboard, right-click, or drag. Put the service behind HTTPS before you expose it; see [Operations](./docs/operations.md#安全模型).
 
@@ -79,7 +81,7 @@ Tap outside the chat sidebar to collapse it. On the remote desktop you can switc
 - **Backend**: Rust 2024, Axum, Tokio
 - **Data**: PostgreSQL, pgvector, SQLx
 - **Desktop**: Docker, Debian, XFCE, Chromium, Xvfb
-- **Computer control**: CDP, AT-SPI, X11
+- **Computer control**: Cua Driver over X11, AT-SPI, and Chromium
 - **Extensions**: MCP, file skills, demonstration playbooks
 
 Flow diagrams, handoff, component roles, and the computer lifecycle live in **[Architecture](./docs/architecture.md)**. The older **[interactive diagram](./docs/workflow.html)** is still there — download it and open it in a browser.
