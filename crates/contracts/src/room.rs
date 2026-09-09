@@ -16,6 +16,9 @@ pub struct Room {
     pub id: String,
     pub name: String,
     pub members: Vec<RoomMember>,
+    /// The member that answers what nobody was named for. `None` means "the
+    /// first member", which is what rooms used before this column resolve to.
+    pub host_bot_id: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
     pub last_preview: Option<String>,
     pub unread_count: i64,
@@ -26,6 +29,18 @@ pub struct Room {
 pub struct CreateRoomInput {
     pub name: String,
     pub member_ids: Vec<String>,
+    /// Optional from the first version: leaving it out makes the first member
+    /// the host, which is what a group needs by default.
+    #[serde(default)]
+    pub host_bot_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRoomInput {
+    /// Must be one of the room's members.
+    #[serde(default)]
+    pub host_bot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

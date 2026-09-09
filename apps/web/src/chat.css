@@ -77,3 +77,31 @@
 .message{padding-bottom:21px}
 .message-time{position:absolute;bottom:0;left:0;font-size:11px;line-height:17px;color:var(--muted);font-variant-numeric:tabular-nums}
 .message.user .message-time{left:auto;right:28px}
+
+/* The day is said once, centred above the first message of that day, so each
+   message only needs its clock time. */
+.day-divider{display:flex;justify-content:center;width:var(--chat-col);margin:6px auto -4px;user-select:none}
+.day-divider time{padding:3px 11px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--muted);font-size:11px;line-height:16px;letter-spacing:.02em}
+
+/* Who the room sent a message to: one thin line in the space under the bubble,
+   opposite the timestamp, so it reads as a note about the message and never as
+   a second message. */
+.route-note{position:absolute;bottom:0;left:0;max-width:56%;overflow:hidden;color:var(--muted);font-size:11px;line-height:17px;opacity:.78;text-overflow:ellipsis;white-space:nowrap}
+.message.user .route-note{left:0;right:auto}
+.message.assistant .route-note{left:auto;right:28px;text-align:right}
+
+/* The `@` list sits where the slash list sits: only one of them is ever open. */
+.mention-suggestions button{align-items:center;gap:8px}
+.mention-suggestions strong{min-width:0}
+
+/* The host is a name in the top bar, not a page of settings. */
+.host-chip-wrap{position:relative;display:inline-flex;align-items:center}
+.host-chip{display:inline-flex;align-items:center;gap:5px;max-width:150px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--muted);font-size:11px;cursor:pointer}
+.host-chip:hover,.host-chip[aria-expanded="true"]{border-color:var(--accent);color:var(--ink)}
+.host-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.host-menu{position:absolute;top:calc(100% + 8px);left:0;z-index:9;display:grid;gap:2px;min-width:190px;padding:8px;border:1px solid var(--border);border-radius:14px;background:var(--menu);box-shadow:0 14px 34px rgba(0,0,0,.35)}
+.host-menu button{display:flex;align-items:center;gap:8px;padding:7px 9px;border:0;border-radius:9px;background:transparent;color:var(--ink);font-size:13px;text-align:left;cursor:pointer}
+.host-menu button:hover,.host-menu button:focus-visible{background:rgba(255,255,255,.08);outline:0}
+.host-menu button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.host-menu-label{padding:2px 9px 4px;color:var(--muted);font-size:11px}
+.host-flag{margin-left:auto;color:var(--accent);font-size:11px;font-weight:650}

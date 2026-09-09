@@ -1280,4 +1280,91 @@ mod tests {
                 .id
         );
     }
+
+    /// A conversation that holds remembered lines can still be removed: the
+    /// memory survives, pointing at nothing, and the guard keeps rejecting a
+    /// genuine move into another agent's conversation.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deleting_a_conversation_keeps_its_memories_and_the_guard(pool: sqlx::PgPool) {
+        sqlx::query("INSERT INTO users(id,name) VALUES ('u','test')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO spaces(id,user_id,name) VALUES ('s','u','test')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for bot in ["a", "b"] {
+            sqlx::query("INSERT INTO bots(id,space_id,user_id,name) VALUES ($1,'s','u',$1)")
+                .bind(bot)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO threads(id,space_id,user_id,bot_id) VALUES ($1,'s','u',$2)")
+                .bind(format!("thread-{bot}"))
+                .bind(bot)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO runs(id,space_id,user_id,bot_id,thread_id,status,prompt)
+             VALUES ('run-a','s','u','a','thread-a','completed','hi')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO messages(id,thread_id,seq,role,body,run_id)
+             VALUES ('msg-a','thread-a',1,'user','remember this','run-a')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // One saved from the chat (message + session), one by the remember tool
+        // (run + session): both link into the conversation being removed.
+        let from_chat = Uuid::new_v4();
+        let from_tool = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO memory_items(id,space_id,user_id,bot_id,session_id,source_run_id,source_message_id,content)
+             VALUES ($1,'s','u','a','thread-a',NULL,'msg-a','saved from chat'),
+                    ($2,'s','u','a','thread-a','run-a',NULL,'saved by tool')",
+        )
+        .bind(from_chat)
+        .bind(from_tool)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("DELETE FROM threads WHERE id='thread-a'")
+            .execute(&pool)
+            .await
+            .expect("a conversation with remembered lines can be deleted");
+        let left: Vec<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT session_id, source_run_id, source_message_id FROM memory_items
+             WHERE bot_id='a' ORDER BY content",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, vec![(None, None, None), (None, None, None)]);
+
+        // The guard still holds: memory cannot be pointed at another agent's
+        // conversation after the fact.
+        let moved = sqlx::query("UPDATE memory_items SET session_id='thread-b' WHERE id=$1")
+            .bind(from_chat)
+            .execute(&pool)
+            .await;
+        assert!(
+            moved.is_err(),
+            "re-homing into another agent's thread must fail"
+        );
+        let kept: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM memory_items WHERE bot_id='a' AND session_id IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(kept, 2);
+    }
 }

@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use lazyboy_contracts::{
-    CreateRoomInput, CreateSessionInput, Room, RoomMember, RoomStatus, Session,
+    CreateRoomInput, CreateSessionInput, Room, RoomMember, RoomStatus, Session, UpdateRoomInput,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -19,7 +19,10 @@ type ApiError = (StatusCode, Json<Value>);
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/rooms", get(list_rooms).post(create_room))
-        .route("/api/rooms/{id}", get(get_room).delete(delete_room))
+        .route(
+            "/api/rooms/{id}",
+            get(get_room).patch(update_room).delete(delete_room),
+        )
         .route(
             "/api/rooms/{id}/sessions",
             get(list_sessions).post(create_session),
@@ -64,10 +67,12 @@ async fn members_for(state: &AppState, room_id: &str) -> Result<Vec<RoomMember>,
     Ok(rows.into_iter().map(member_from_row).collect())
 }
 
-/// `room_from_id` projection: id, name, last message time, preview, unread count.
+/// `room_from_id` projection: id, name, host, last message time, preview, unread
+/// count.
 type RoomSummaryRow = (
     String,
     String,
+    Option<String>,
     Option<chrono::DateTime<chrono::Utc>>,
     Option<String>,
     i64,
@@ -79,7 +84,7 @@ async fn room_from_id(
     id: &str,
 ) -> Result<Option<Room>, sqlx::Error> {
     let row: Option<RoomSummaryRow> = sqlx::query_as(
-            "SELECT r.id, r.name,
+            "SELECT r.id, r.name, r.host_bot_id,
                     (SELECT MAX(m.created_at) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.room_id=r.id),
                     (SELECT m.body FROM messages m JOIN threads t ON t.id=m.thread_id
                      WHERE t.room_id=r.id ORDER BY m.created_at DESC, m.seq DESC LIMIT 1),
@@ -96,13 +101,14 @@ async fn room_from_id(
         .bind(&actor.user_id)
         .fetch_optional(state.pool())
         .await?;
-    let Some((id, name, last_message_at, last_preview, unread_count)) = row else {
+    let Some((id, name, host_bot_id, last_message_at, last_preview, unread_count)) = row else {
         return Ok(None);
     };
     Ok(Some(Room {
         members: members_for(state, &id).await?,
         id,
         name,
+        host_bot_id,
         last_message_at,
         last_preview,
         unread_count,
@@ -149,6 +155,15 @@ async fn create_room(
             Json(json!({"message":"群組需要名稱，並至少兩位機器人"})),
         ));
     }
+    let host_bot_id = input.host_bot_id;
+    if let Some(host) = host_bot_id.as_deref()
+        && !member_ids.iter().any(|member| member.as_str() == host)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message":"主持人必須是群組成員"})),
+        ));
+    }
     let mut members = Vec::new();
     for bot_id in &member_ids {
         let exists: Option<(String, String, String, String)> = sqlx::query_as(
@@ -170,17 +185,20 @@ async fn create_room(
         members.push(member_from_row(row));
     }
     let room_id = Uuid::new_v4().to_string();
-    let host_id = members[0].id.clone();
+    // The host is decided once, here: the member the human chose, or simply the
+    // first one. Starting a group needs no other setting.
+    let host_id = host_bot_id.unwrap_or_else(|| members[0].id.clone());
     let mut tx = state
         .pool()
         .begin()
         .await
         .map_err(|error| internal(error.to_string()))?;
-    sqlx::query("INSERT INTO rooms (id,space_id,user_id,name) VALUES ($1,$2,$3,$4)")
+    sqlx::query("INSERT INTO rooms (id,space_id,user_id,name,host_bot_id) VALUES ($1,$2,$3,$4,$5)")
         .bind(&room_id)
         .bind(&actor.space_id)
         .bind(&actor.user_id)
         .bind(name)
+        .bind(&host_id)
         .execute(&mut *tx)
         .await
         .map_err(|error| internal(error.to_string()))?;
@@ -213,6 +231,7 @@ async fn create_room(
             id: room_id,
             name: name.into(),
             members,
+            host_bot_id: Some(host_id),
             last_message_at: None,
             last_preview: None,
             unread_count: 0,
@@ -256,6 +275,59 @@ async fn delete_room(
         ));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Change who leads the room. This is the only room setting that exists, and it
+/// is reached by one tap on a member — there is no settings page to open.
+async fn update_room(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<UpdateRoomInput>,
+) -> Result<Json<Room>, ApiError> {
+    let actor = actor(&state).await?;
+    let current = room_from_id(&state, &actor, &id)
+        .await
+        .map_err(|error| internal(error.to_string()))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"message":"group not found"})),
+            )
+        })?;
+    let Some(host_bot_id) = input.host_bot_id else {
+        return Ok(Json(current));
+    };
+    if !current
+        .members
+        .iter()
+        .any(|member| member.id == host_bot_id)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message":"主持人必須是群組成員"})),
+        ));
+    }
+    let updated = sqlx::query(
+        "UPDATE rooms SET host_bot_id=$2, updated_at=now()
+         WHERE id=$1 AND space_id=$3 AND user_id=$4",
+    )
+    .bind(&id)
+    .bind(&host_bot_id)
+    .bind(&actor.space_id)
+    .bind(&actor.user_id)
+    .execute(state.pool())
+    .await
+    .map_err(|error| internal(error.to_string()))?;
+    if updated.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message":"group not found"})),
+        ));
+    }
+    room_from_id(&state, &actor, &id)
+        .await
+        .map(|room| Json(room.unwrap_or(current)))
+        .map_err(|error| internal(error.to_string()))
 }
 
 async fn list_sessions(

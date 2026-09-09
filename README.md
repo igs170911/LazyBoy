@@ -25,7 +25,7 @@ This is an early `0.1.0` release with desktop and phone browser UIs. You bring y
 - **A lasting workspace**: each agent has its own chats, run history, and optional long-term memory.
 - **A real computer**: open pages, use the terminal, organize files, drive the GUI — and watch it live.
 - **Take over any time**: sign in, pass a check, or nudge things by hand on the same desktop, then hand it back.
-- **Several agents and groups**: shared Team computers or private dedicated desktops.
+- **Several agents and groups**: shared Team computers or private dedicated desktops; `@name` decides who answers, so a message wakes the one agent it is for instead of all of them.
 - **Teach by demo, then schedule**: turn a walkthrough into a skill; use cron for repeat work.
 - **Your models and tools**: xAI, OpenCode Go, OpenAI-compatible endpoints, MCP, and file skills.
 - **Voice calls**: after you enable a voice provider, you can talk to the agent on a call.

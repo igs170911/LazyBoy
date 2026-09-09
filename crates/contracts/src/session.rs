@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::RoomMember;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
@@ -46,6 +48,10 @@ pub struct SessionMessage {
     pub speaker_name: Option<String>,
     pub speaker_color: Option<String>,
     pub speaker_shape: Option<String>,
+    /// Who the group decided should answer this message, in order. Empty for a
+    /// one-to-one conversation and for messages written before routing existed.
+    #[serde(default)]
+    pub reply_bots: Vec<RoomMember>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

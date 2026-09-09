@@ -106,6 +106,25 @@ pub async fn send(
     let stored_body = crate::attachments::caption_for_title(text, &decoded);
     let mut stored_blocks = blocks.to_vec();
     stored_blocks.extend(crate::attachments::stored_blocks(&decoded));
+    // Who answers is decided before the row lock: an `@name` settles it for
+    // free, and the one model call that sometimes stands in for it must never
+    // hold this thread's transaction open.
+    let room = crate::routing::room_for_thread(state, thread_id).await?;
+    // One run per chosen member — `@name` wins, then the picker's short list,
+    // then the host. A room message keeps this list with it so the chat can say
+    // who is about to talk; a direct message records nothing extra.
+    let mut member_ids: Vec<String> = match room.as_ref() {
+        Some(room) => {
+            crate::routing::audience_for(state, actor, room, thread_id, text)
+                .await
+                .targets
+        }
+        None => vec![bot_id.to_string()],
+    };
+    if member_ids.is_empty() {
+        member_ids.push(bot_id.to_string());
+    }
+    let reply_bot_ids: Option<Vec<String>> = room.map(|_| member_ids.clone());
     let mut tx = state
         .pool()
         .begin()
@@ -199,8 +218,8 @@ pub async fn send(
     .await
     .map_err(|error| error.to_string())?;
     sqlx::query(
-        "INSERT INTO messages (id,thread_id,seq,role,body,blocks,run_id,client_nonce)
-         VALUES ($1,$2,$3,'user',$4,$5,$6,$7)",
+        "INSERT INTO messages (id,thread_id,seq,role,body,blocks,run_id,client_nonce,reply_bot_ids)
+         VALUES ($1,$2,$3,'user',$4,$5,$6,$7,$8)",
     )
     .bind(&message_id)
     .bind(thread_id)
@@ -209,6 +228,7 @@ pub async fn send(
     .bind(json!(stored_blocks))
     .bind(&run_id)
     .bind(client_nonce)
+    .bind(&reply_bot_ids)
     .execute(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
@@ -219,18 +239,6 @@ pub async fn send(
             .execute(&mut *tx)
             .await
             .map_err(|error| error.to_string())?;
-    }
-    let mut member_ids: Vec<String> = if let Some(room_id) = room_id.as_deref() {
-        sqlx::query_scalar("SELECT bot_id FROM room_members WHERE room_id=$1 ORDER BY created_at")
-            .bind(room_id)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|error| error.to_string())?
-    } else {
-        vec![bot_id.to_string()]
-    };
-    if member_ids.is_empty() {
-        member_ids.push(bot_id.to_string());
     }
     for (index, member_id) in member_ids.iter().enumerate() {
         if merged && index == 0 {
@@ -280,7 +288,15 @@ pub async fn send(
             "SELECT EXISTS(SELECT 1 FROM runs WHERE bot_id=$1 AND id<>$2
              AND status IN ('queued','leased','running','waiting_input','waiting_takeover'))",
         )
-        .bind(bot_id)
+        // The question is about the bot that will actually answer, which in a
+        // room is whoever routing put first — not the host the message was
+        // addressed to.
+        .bind(
+            member_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| bot_id.to_string()),
+        )
         .bind(&run_id)
         .fetch_one(&mut *tx)
         .await
@@ -860,7 +876,7 @@ async fn execute_run(
     .unwrap_or_default();
     if !room_mates.is_empty() {
         preamble.push_str(&format!(
-            "\n\nYou are {} in a group chat with: {}. Reply as yourself only. Other agents' lines are prefixed with [Name]. Do not speak for them.",
+            "\n\nYou are {} in a group chat with: {}. Reply as yourself only. Other agents' lines are prefixed with [Name]. Do not speak for them. The human names who should answer: speak when your name is on the message, stay quiet when it is not. When the piece belongs to someone else, say one short line and name them with @TheirName, which hands this one item over once.",
             bot.name,
             room_mates.join("、")
         ));
@@ -2091,6 +2107,15 @@ pub(crate) async fn append_bot_message_with(
     if body.trim().is_empty() && !has_blocks {
         return Ok(());
     }
+    // A bot that names a member may hand this piece over: one hop only, and
+    // never to a member who is already working. The lookup happens before the
+    // transaction so the message write stays short.
+    let handoff = crate::routing::handoff_target(state, run_id, bot_id, body)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!("room hand-off lookup for run {run_id}: {error}");
+            None
+        });
     let mut tx = state
         .pool()
         .begin()
@@ -2106,8 +2131,8 @@ pub(crate) async fn append_bot_message_with(
     .map_err(|error| error.to_string())?;
     let message_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO messages (id,thread_id,seq,role,body,blocks,run_id,speaker_bot_id)
-         VALUES ($1,$2,$3,'assistant',$4,$5,$6,$7)",
+        "INSERT INTO messages (id,thread_id,seq,role,body,blocks,run_id,speaker_bot_id,reply_bot_ids)
+         VALUES ($1,$2,$3,'assistant',$4,$5,$6,$7,$8)",
     )
     .bind(&message_id)
     .bind(thread_id)
@@ -2116,9 +2141,37 @@ pub(crate) async fn append_bot_message_with(
     .bind(&blocks)
     .bind(run_id)
     .bind(bot_id)
+    .bind(handoff.clone().map(|target| vec![target]))
     .execute(&mut *tx)
     .await
     .map_err(|error| error.to_string())?;
+    if let Some(target) = handoff.as_ref() {
+        let owner: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT r.space_id, r.user_id, b.name
+             FROM runs r JOIN bots b ON b.id=r.bot_id WHERE r.id=$1",
+        )
+        .bind(run_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+        if let Some((space_id, user_id, speaker)) = owner {
+            tracing::info!(run_id, target, "room hand-off queued");
+            sqlx::query(
+                "INSERT INTO runs (id,space_id,bot_id,thread_id,user_id,status,trigger,prompt,checkpoint)
+                 VALUES ($1,$2,$3,$4,$5,'queued','handoff',$6,$7)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(space_id)
+            .bind(target)
+            .bind(thread_id)
+            .bind(user_id)
+            .bind(format!("{speaker} 在群組裡把這件事交給你：\n{body}"))
+            .bind(json!({"handoffFrom": run_id}))
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+    }
     tx.commit().await.map_err(|error| error.to_string())?;
     let _ = crate::sessions::append_event(
         state,
