@@ -16,7 +16,7 @@ $(if $(filter 1,$(PUSH)),$(eval MULTI_FLAGS := --push))
 .PHONY: help env env-force \
         up logs ps health down purge \
         computer computer-multi images-multi postgres postgres-down pg-collation \
-        cua-smoke \
+        cua-smoke prepare-screen-network \
         build build-api build-supervisor build-controld \
         fmt fmt-check clippy lint audit test clean \
         web \
@@ -76,10 +76,29 @@ env-force: ## Refuse destructive key regeneration; existing vault keys must be p
 
 up: env ## Build every image and start the whole stack in Docker
 	@echo "building images + starting stack (first run is slow: builds desktop + rust + web)..."
+	@$(MAKE) --no-print-directory prepare-screen-network
 	$(COMPOSE) up -d --build
 	@echo ""
 	@echo "stack launched. open http://127.0.0.1:3101 and sign in with LAZYBOY_APP_TOKEN."
 	$(COMPOSE) ps
+
+# Compose owns `lazyboy_screen` (internal, labeled). A leftover from host-dev or
+# an older supervisor has empty labels, and Compose v2+ then fails after the
+# image build. Recreate only when nothing is attached.
+prepare-screen-network:
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	network="$${LAZYBOY_SCREEN_NETWORK:-lazyboy_screen}"; \
+	if ! docker network inspect "$$network" >/dev/null 2>&1; then exit 0; fi; \
+	label=$$(docker network inspect -f '{{index .Labels "com.docker.compose.network"}}' "$$network"); \
+	if [ "$$label" = "screen" ]; then exit 0; fi; \
+	count=$$(docker network inspect -f '{{len .Containers}}' "$$network"); \
+	if [ "$$count" != "0" ]; then \
+	  echo "error: Docker network $$network exists without Compose labels and still has $$count container(s)." >&2; \
+	  echo "Stop those containers, then: docker network rm $$network" >&2; \
+	  exit 1; \
+	fi; \
+	echo "removing leftover Docker network $$network so Compose can recreate it"; \
+	docker network rm "$$network"
 
 logs: ## Tail logs for all services
 	$(COMPOSE) logs -f

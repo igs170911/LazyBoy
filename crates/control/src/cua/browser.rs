@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use lazyboy_contracts::UiElement;
 use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
@@ -383,8 +385,7 @@ pub async fn run(
                     &[],
                 )
                 .await?;
-            sleep(Duration::from_millis(800)).await;
-            snapshot(client, display, &attached).await
+            snapshot_when_document_ready(client, display, &attached).await
         }
         "click" => click(client, display, &attached, request).await,
         "type" => type_into(client, display, &attached, request).await,
@@ -403,7 +404,6 @@ pub async fn run(
                     &[],
                 )
                 .await?;
-            sleep(Duration::from_millis(200)).await;
             snapshot(client, display, &attached).await
         }
         other => Err(ControlError::InvalidAction(format!(
@@ -451,8 +451,26 @@ async fn click(
             &[],
         )
         .await?;
-    sleep(Duration::from_millis(250)).await;
     snapshot(client, display, bind).await
+}
+
+async fn snapshot_when_document_ready(
+    client: &CuaClient,
+    display: &str,
+    bind: &BrowserBind,
+) -> Result<BrowserPage, ControlError> {
+    let started = Instant::now();
+    loop {
+        let page = snapshot(client, display, bind).await?;
+        if snapshot_has_document(&page) || started.elapsed() >= Duration::from_millis(800) {
+            return Ok(page);
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn snapshot_has_document(page: &BrowserPage) -> bool {
+    page.ok && !page.url.is_empty()
 }
 
 fn unique_native_web_entry<'a>(state: &'a Value, label: &str) -> Result<&'a Value, ControlError> {
@@ -595,7 +613,6 @@ async fn type_into(
             )
             .await?;
     }
-    sleep(Duration::from_millis(200)).await;
     snapshot(client, display, bind).await
 }
 
@@ -665,6 +682,20 @@ mod tests {
         assert_eq!(find_ref(&page, ""), None);
         assert_eq!(find_ref(&page, "#"), None);
         assert_eq!(find_ref(&page, "Smoke Entry"), Some("p1:2"));
+    }
+
+    #[test]
+    fn navigation_snapshot_is_ready_once_a_url_is_present() {
+        let mut page = BrowserPage {
+            ok: true,
+            url: "https://example.com".into(),
+            ..BrowserPage::default()
+        };
+        assert!(snapshot_has_document(&page));
+        page.url.clear();
+        assert!(!snapshot_has_document(&page));
+        page.ok = false;
+        assert!(!snapshot_has_document(&page));
     }
 
     #[test]

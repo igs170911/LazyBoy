@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
+use futures_util::StreamExt;
 use lazyboy_contracts::{ModelProvider, SessionAttachment};
 use lazyboy_harness::{
     CredentialChain, DynModel, ResolveModelRequest, connect_model, resolve_backend,
@@ -16,6 +17,7 @@ use rig_core::completion::message::{
     AssistantContent, ImageDetail, ImageMediaType, Message, ToolResultContent, UserContent,
 };
 use rig_core::completion::{CompletionModel, ToolDefinition};
+use rig_core::streaming::StreamedAssistantContent;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -796,13 +798,29 @@ async fn execute_run(
     let run_policy = RunPolicy::from_env();
     let mut guard = LoopGuard::with_watch(run_policy, turns);
     let attempt_clock = std::time::Instant::now();
+    let memory_started = std::time::Instant::now();
     let memory = if ctx.memory_enabled {
         match state
             .memory
             .recall(state.pool(), actor, bot_id, prompt, None)
             .await
         {
-            Ok(items) => state.memory.durable_block(&items),
+            Ok(items) => {
+                let context = state.memory.durable_context(&items);
+                crate::monitor::record(
+                    state,
+                    run_id,
+                    "memory",
+                    json!({
+                        "event": "recalled", "botId": bot_id,
+                        "enabled": state.memory.globally_enabled(),
+                        "elapsedMs": memory_started.elapsed().as_millis() as u64,
+                        "candidateCount": items.len(), "memories": context.used,
+                    }),
+                )
+                .await;
+                context.block
+            }
             Err(error) => {
                 crate::monitor::record(
                     state,
@@ -1024,7 +1042,7 @@ async fn execute_run(
                 &preamble,
                 &history,
                 &defs,
-                Trace { state, run_id, turn: turns },
+                Trace { state, run_id, thread_id, bot_id, turn: turns },
             ) => result
         }?;
         let assistant = Message::Assistant {
@@ -1630,6 +1648,8 @@ fn retryable_run_error(error: &str) -> bool {
 struct Trace<'a> {
     state: &'a AppState,
     run_id: &'a str,
+    thread_id: &'a str,
+    bot_id: &'a str,
     turn: u32,
 }
 
@@ -1659,7 +1679,7 @@ async fn complete_with_retry(
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
             Duration::from_secs(165),
-            complete_once(model, pending.clone(), preamble, history, defs),
+            stream_once(model, pending.clone(), preamble, history, defs, trace),
         )
         .await;
         match result {
@@ -1708,6 +1728,127 @@ async fn complete_with_retry(
         }
     }
     Err(last)
+}
+
+// Each attempt has its own generation. The UI replaces an interrupted draft
+// rather than appending a retry to it. Only public Text events leave this layer.
+async fn stream_once(
+    model: &DynModel,
+    pending: Message,
+    preamble: &str,
+    history: &[Message],
+    defs: &[ToolDefinition],
+    trace: Trace<'_>,
+) -> Result<Vec<AssistantContent>, String> {
+    let generation = Uuid::new_v4().to_string();
+    // Reconnects restore only this attempt, not every historical text delta.
+    // Merge into the harness checkpoint so normal progress saves preserve it.
+    sqlx::query("UPDATE runs SET checkpoint=COALESCE(checkpoint,'{}'::jsonb)||$2 WHERE id=$1 AND status='running'")
+        .bind(trace.run_id)
+        .bind(json!({"replyGeneration":generation}))
+        .execute(trace.state.pool())
+        .await
+        .map_err(|error| error.to_string())?;
+    let _ = crate::sessions::append_event(
+        trace.state,
+        trace.thread_id,
+        "reply.started",
+        json!({"runId":trace.run_id,"botId":trace.bot_id,"generation":generation}),
+    )
+    .await;
+    let result = match model {
+        DynModel::Xai(model) => {
+            stream_with(model, pending, preamble, history, defs, trace, &generation).await
+        }
+        DynModel::OpenAi(model) => {
+            stream_with(model, pending, preamble, history, defs, trace, &generation).await
+        }
+        DynModel::OpenAiResponses(model) => {
+            stream_with(model, pending, preamble, history, defs, trace, &generation).await
+        }
+    };
+    if result.is_err() {
+        let _ = crate::sessions::append_event(
+            trace.state,
+            trace.thread_id,
+            "reply.reset",
+            json!({"runId":trace.run_id,"generation":generation}),
+        )
+        .await;
+    }
+    result
+}
+
+async fn stream_with<M: CompletionModel + Clone>(
+    model: &M,
+    pending: Message,
+    preamble: &str,
+    history: &[Message],
+    defs: &[ToolDefinition],
+    trace: Trace<'_>,
+    generation: &str,
+) -> Result<Vec<AssistantContent>, String> {
+    let request = model
+        .completion_request(pending)
+        .preamble(preamble.to_string())
+        .messages(history.to_vec())
+        .tools(defs.to_vec())
+        .build();
+    tokio::time::timeout(Duration::from_secs(150), async {
+        let response = model
+            .stream(request)
+            .await
+            .map_err(|error| error.to_string())?;
+        collect_reply_stream(response, |text| async move {
+            let _ = crate::sessions::append_event(
+                trace.state,
+                trace.thread_id,
+                "reply.delta",
+                json!({"runId":trace.run_id,"generation":generation,"text":text}),
+            )
+            .await;
+        })
+        .await
+    })
+    .await
+    .map_err(|_| "AI 回應逾時（150 秒）".to_string())?
+}
+
+async fn collect_reply_stream<F, Fut>(
+    mut response: rig_core::streaming::StreamingCompletionResponse,
+    mut publish: F,
+) -> Result<Vec<AssistantContent>, String>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut text = String::new();
+    let mut terminal = false;
+    let mut flush = tokio::time::interval(Duration::from_millis(150));
+    flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            part = response.next() => {
+                let Some(part) = part else { break };
+                match part.map_err(|error| error.to_string())? {
+                    StreamedAssistantContent::Text(part) => text.push_str(&part.text),
+                    StreamedAssistantContent::Final(_) => terminal = true,
+                    _ => {}
+                }
+            }
+            _ = flush.tick() => {
+                if !text.is_empty() { publish(std::mem::take(&mut text)).await; }
+            }
+        }
+    }
+    // A truncated stream must not execute partially assembled tool calls.
+    if !terminal {
+        return Err("model stream ended before its final response".into());
+    }
+    if !text.is_empty() {
+        publish(text).await;
+    }
+    Ok(response.choice)
 }
 
 async fn complete_with<M>(
@@ -1897,6 +2038,20 @@ pub(crate) async fn cancel_active_runs(
     .await
     .map_err(|error| error.to_string())?;
     for run_id in &run_ids {
+        if let Ok(thread_id) =
+            sqlx::query_scalar::<_, String>("SELECT thread_id FROM runs WHERE id=$1")
+                .bind(run_id)
+                .fetch_one(state.pool())
+                .await
+        {
+            let _ = crate::sessions::append_event(
+                state,
+                &thread_id,
+                "run.cancelled",
+                json!({"runId":run_id}),
+            )
+            .await;
+        }
         computer::release_screen_execution(state, run_id).await?;
     }
     sqlx::query(
@@ -3232,6 +3387,75 @@ mod tests {
     };
     use rig_core::completion::message::{Message, UserContent};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn reply_stream_publishes_before_model_finishes() {
+        use futures_util::StreamExt;
+        use rig_core::streaming::{RawStreamingChoice, StreamFinal, StreamingCompletionResponse};
+        let source =
+            futures_util::stream::iter(vec![Ok(RawStreamingChoice::Message("visible now".into()))])
+                .chain(futures_util::stream::once(async {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    Ok(RawStreamingChoice::FinalResponse(StreamFinal::new(
+                        "fixture",
+                        Default::default(),
+                    )))
+                }));
+        let response = StreamingCompletionResponse::stream("fixture", Box::pin(source));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(super::collect_reply_stream(response, move |text| {
+            tx.send(text).unwrap();
+            std::future::ready(())
+        }));
+        let first = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .unwrap();
+        assert_eq!(first.as_deref(), Some("visible now"));
+        assert!(
+            !task.is_finished(),
+            "text must arrive before the terminal response"
+        );
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn reply_stream_requires_terminal_and_preserves_text() {
+        use rig_core::streaming::{RawStreamingChoice, StreamFinal, StreamingCompletionResponse};
+        let stream = StreamingCompletionResponse::stream(
+            "fixture",
+            Box::pin(futures_util::stream::iter(vec![
+                Ok(RawStreamingChoice::Message("你".into())),
+                Ok(RawStreamingChoice::Message("好".into())),
+                Ok(RawStreamingChoice::FinalResponse(StreamFinal::new(
+                    "fixture",
+                    Default::default(),
+                ))),
+            ])),
+        );
+        let mut published = String::new();
+        let content = super::collect_reply_stream(stream, |text| {
+            published.push_str(&text);
+            std::future::ready(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(published, "你好");
+        assert!(
+            matches!(&content[0], rig_core::message::AssistantContent::Text(text) if text.text == "你好")
+        );
+        let truncated = StreamingCompletionResponse::stream(
+            "fixture",
+            Box::pin(futures_util::stream::iter(vec![Ok(
+                RawStreamingChoice::Message("incomplete".into()),
+            )])),
+        );
+        assert!(
+            super::collect_reply_stream(truncated, |_| std::future::ready(()))
+                .await
+                .unwrap_err()
+                .contains("before its final response")
+        );
+    }
 
     #[test]
     fn takeover_resume_invalidates_pre_handoff_refs() {

@@ -4,6 +4,7 @@
 .env.*
 !.env.example
 /data
+models--*/
 image/computer/lazyboy-controld
 node_modules
 dist

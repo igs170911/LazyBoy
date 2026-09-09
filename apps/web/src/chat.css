@@ -53,7 +53,7 @@
 .stop-send svg{width:14px;height:14px;fill:currentColor}
 .composer-plus:disabled{opacity:.35;cursor:not-allowed}
 .message{position:relative;padding-right:28px}
-.messages .remember-msg{display:none}
+.messages .remember-msg{display:grid}
 .working-label{font-size:13px;letter-spacing:.02em;line-height:1.35;white-space:nowrap;background:linear-gradient(90deg,#7a8088 0%,#7a8088 28%,#fff 50%,#7a8088 72%,#7a8088 100%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:working-shimmer 1.35s linear infinite}
 .message.assistant.spoken{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:10px;row-gap:3px;justify-content:start;align-items:end}
 .message.assistant.spoken .msg-avatar{grid-column:1;grid-row:2;align-self:start;max-width:none;margin:4px 0 0;padding:0;border-radius:0;background:transparent;line-height:normal}

@@ -1,0 +1,47 @@
+--- a/crates/platform-linux/src/browser_platform.rs
++++ b/crates/platform-linux/src/browser_platform.rs
+@@ -20,8 +20,11 @@
+ };
+ use tokio::io::{AsyncReadExt, AsyncWriteExt};
+ 
+-#[derive(Debug, Default)]
+-pub struct LinuxBrowserPlatform;
++pub struct LinuxBrowserPlatform {
++    cursor_registry: Arc<CursorRegistry>,
++    browser_cursors: Mutex<BrowserCursorTracker>,
++}
++include!("lazyboy_browser_cursor.rs");
+ 
+ fn refusal(code: BrowserRefusalCode, message: impl Into<String>) -> BrowserRefusal {
+     BrowserRefusal::new(code, message)
+@@ -474,6 +477,10 @@
+ 
+ #[async_trait]
+ impl BrowserPlatform for LinuxBrowserPlatform {
++    async fn visualize_browser_action(&self, action: BrowserVisualAction) {
++        self.show_browser_cursor(action).await;
++    }
++
+     fn isolated_browser_executable(&self) -> Result<String, BrowserRefusal> {
+         for candidate in isolated_browser_candidates() {
+             let Ok(executable) = select_isolated_browser_executable([candidate]) else {
+--- a/crates/platform-linux/src/tools/impl_.rs
++++ b/crates/platform-linux/src/tools/impl_.rs
+@@ -7591,7 +7591,7 @@
+             .and_then(Value::as_i64)
+             .filter(|pid| *pid > 0)
+             .ok_or_else(|| "kill_app requires a positive integer pid".to_owned())?;
+-        let fingerprint = crate::browser_platform::LinuxBrowserPlatform
++        let fingerprint = crate::browser_platform::LinuxBrowserPlatform::default()
+             .process_fingerprint(pid)
+             .await
+             .map_err(|error| error.message)?;
+@@ -8265,7 +8265,7 @@
+         super::page::LinuxPageBackend::new(),
+     ))));
+     let browser_engine = cua_driver_core::browser::BrowserEngine::new_with_runtime_services(
+-        Arc::new(crate::browser_platform::LinuxBrowserPlatform),
++        Arc::new(crate::browser_platform::LinuxBrowserPlatform::new(state.cursor_registry.clone())),
+         r.approval_broker(),
+         r.protected_resource_ownership(),
+     );

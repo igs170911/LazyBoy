@@ -415,6 +415,11 @@ async fn events(
                     "SELECT e.seq,e.type,e.payload FROM events e
                  JOIN threads t ON t.id=e.thread_id
                  WHERE e.thread_id=$1 AND e.seq>$2 AND t.space_id=$3 AND t.user_id=$4
+                   AND (e.type NOT IN ('reply.started','reply.delta','reply.reset') OR EXISTS (
+                     SELECT 1 FROM runs r WHERE r.id=e.payload->>'runId'
+                       AND r.thread_id=e.thread_id AND r.status='running'
+                       AND r.checkpoint->>'replyGeneration'=e.payload->>'generation'
+                   ))
                  ORDER BY e.seq ASC LIMIT 100",
                 )
                 .bind(&id)
@@ -632,6 +637,7 @@ pub(crate) async fn cancel_session_runs(
     .await
     .map_err(|error| error.to_string())?;
     for run_id in &run_ids {
+        let _ = append_event(state, thread_id, "run.cancelled", json!({"runId":run_id})).await;
         crate::computer::release_screen_execution(state, run_id).await?;
         sqlx::query(
             "UPDATE computers SET execution_bot_id=NULL, execution_run_id=NULL,

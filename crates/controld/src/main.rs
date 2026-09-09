@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -133,6 +134,9 @@ async fn controller_health(
 async fn observe(
     State(app): State<App>,
     headers: HeaderMap,
+    // Drain even an optional {} payload before sending a large screenshot.
+    // Leaving request bytes unread can reset close-after-response clients.
+    _body: Bytes,
 ) -> Result<Json<serde_json::Value>, ControlFailure> {
     if !authorized(&headers, &app.token) {
         return Err(StatusCode::UNAUTHORIZED.into());

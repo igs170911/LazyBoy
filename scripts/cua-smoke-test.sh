@@ -156,6 +156,10 @@ if [[ "$code" -eq 0 ]]; then
   docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-cursor-color-test
   code=$?
 fi
+if [[ "$code" -eq 0 ]]; then
+  docker exec -u 1000:1000 "$name" python3 /usr/local/bin/lazyboy-cua-observe-http-test
+  code=$?
+fi
 set -e
 
 out="${CUA_SMOKE_OUT:-/tmp/lazyboy-cua-smoke-last}"

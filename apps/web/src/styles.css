@@ -60,7 +60,8 @@ button{color:inherit}
 
 .grow{flex:1}
 
-.danger-ghost:hover{color:var(--danger)}
+.danger-ghost{min-height:36px;border-radius:10px;padding:0 15px;border:1px solid transparent;background:transparent;color:var(--danger);cursor:pointer}
+.danger-ghost:hover{border-color:var(--danger-line);background:var(--danger-fill);color:#fff}
 
 .mobile-menu{display:none}
 
