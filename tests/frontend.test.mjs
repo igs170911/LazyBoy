@@ -439,7 +439,7 @@ test('a burst of session events settles into one refresh',()=>{
 
 test('chat follows the event stream instead of a fixed two second poll',()=>{
   const app=fs.readFileSync('apps/web/src/App.tsx','utf8');
-  assert.match(app,/subscribeToSession\(activeSessionId,\(\)=>settle\.kick\(\)/);
+  assert.match(app,/subscribeToSession\(activeSessionId,event=>\{[^}]*settle\.kick\(\)\}/,'every non-streaming event kicks the settle coalescer');
   assert.match(app,/createCoalescer\(\(\)=>\{if\(!document\.hidden\)refresh\(\)\.catch\(\(\)=>\{\}\)\},EVENT_SETTLE_MS\)/);
   assert.match(app,/document\.addEventListener\("visibilitychange",resume\)/);
   assert.doesNotMatch(app,/const timer=setInterval\(\(\)=>\{refresh\(\)/,'the 2s transcript poll should be gone');
@@ -621,4 +621,94 @@ for(const hostUpdatesDuringReconnect of [false,true])test(`reconnect preserves s
   assert.equal(instances.length,2,'the retry dialed a new session');
   assert.equal(instances.at(-1).viewOnly,false,'a handoff made mid-reconnect still owns the new session');
   assert.equal(instances.at(-1).focused,true,'taking over lands the first keystroke');
+});
+
+// Who speaks in a room is decided by three small pure functions, so the `@`
+// list is run rather than read: which token the caret is writing, who that token
+// could mean, and what the composer holds after a pick.
+const mentionsJs=ts.transpileModule(fs.readFileSync('apps/web/src/mentions.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+const mentionsBox={exports:{},require:()=>{throw new Error('unexpected import')}};
+vm.runInNewContext(mentionsJs,mentionsBox);
+const {mentionToken,mentionChoices,acceptMention}=mentionsBox.exports;
+const EVERYONE='所有人';
+const roster=[{id:'b1',name:'小美'},{id:'b2',name:'Alex'},{id:'b3',name:'Alexa'},{id:'b4',name:'工程小助手'}];
+// The list is built inside a vm, so its arrays are not this realm's arrays:
+// compare what a person sees (names, joined) rather than the objects themselves.
+const names=(token,source=roster)=>mentionChoices(token,source,EVERYONE).map(choice=>choice.name).join(',');
+
+test('a mention list opens only on the token under the caret',()=>{
+  assert.equal(mentionToken('@',1),'','a bare @ is still a list, not a word');
+  assert.equal(mentionToken('@小美',3),'小美');
+  assert.equal(mentionToken('嗨 @小美 @',7),'','the last word wins, the earlier mention is spent');
+  assert.equal(mentionToken('@小美 幫我看',4),null,'a finished name closes the list');
+  assert.equal(mentionToken('幫我改一下佈景',6),null,'plain text offers nobody');
+  assert.equal(mentionToken('mail@example.com',16),null,'an email address is not a mention');
+  assert.equal(mentionToken('@@',2),null,'a doubled @ is a typo, not a name');
+});
+
+test('the whole-room escape hatch is the first name you are offered',()=>{
+  const open=mentionChoices('',roster,EVERYONE);
+  assert.equal(open[0].name,EVERYONE,'@ comes with the escape hatch on top');
+  assert.equal(open[0].member,null,'it reaches the room, so it is nobody in particular');
+  assert.equal(names('').split(',').length,roster.length+1,'then the whole room, in order');
+  assert.equal(names('').split(',')[1],roster[0].name);
+  assert.equal(names('所'),EVERYONE,'a token that cannot grow into 所有人 drops it');
+  assert.equal(names(EVERYONE).split(',')[0],EVERYONE,'typing it out keeps it offered');
+});
+
+test('mention choices match loosely and stay one glance long',()=>{
+  assert.equal(names('alex'),'Alex,Alexa','case does not matter, room order does');
+  assert.equal(names('小'),'小美,工程小助手','a name anywhere in the word hits');
+  assert.equal(names(' nobody '),'','a token nobody can answer to offers nobody');
+  const crowd=Array.from({length:9},(_,index)=>({id:`b${index}`,name:`bot${index}`}));
+  assert.equal(names('',crowd).split(',').length,6,'six rows is the cap');
+  assert.equal(names('',crowd).split(',')[0],EVERYONE,'and the escape hatch still leads');
+});
+
+test('accepting a mention leaves the sentence readable and the list closed',()=>{
+  const fresh=acceptMention('@',1,'小美');
+  assert.equal(fresh.text,'@小美 ');
+  assert.equal(fresh.caret,fresh.text.length,'the caret sits past the space, so typing continues the sentence');
+  assert.equal(mentionToken(fresh.text,fresh.caret),null,'and the list does not reopen behind it');
+  const picked=acceptMention('幫我 @小 部署',5,'小美');
+  assert.ok(picked.text.startsWith('幫我 @小美 '),'only the typed token is replaced');
+  assert.ok(picked.text.includes('部署'),'the rest of the message survives');
+  assert.equal(acceptMention('@小',2,'小美').text,'@小美 ','a half-typed name is replaced whole');
+});
+
+// When a message was said is split the way chat apps split it: the day once,
+// as a divider, and the clock time on each message. The words for today and
+// yesterday come from the catalog; everything else is the locale's own spelling.
+const chatTimeJs=ts.transpileModule(fs.readFileSync('apps/web/src/chat-time.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+const chatTimeBox={exports:{},require:()=>{throw new Error('unexpected import')}};
+vm.runInNewContext(chatTimeJs,chatTimeBox);
+const {dayLabel,sameDay,clockTime}=chatTimeBox.exports;
+const words={today:zhTW.today,yesterday:zhTW.yesterday};
+// A Wednesday afternoon, built in local time so the calendar day is unambiguous.
+const now=new Date(2026,9,7,15,30);
+const daysAgo=(count,hour=9)=>new Date(2026,9,7-count,hour);
+
+test('a day is named the way people say it',()=>{
+  assert.equal(dayLabel(daysAgo(0,0),now,'zh-TW',words),'今天','midnight still counts as today');
+  assert.equal(dayLabel(daysAgo(0,23),now,'zh-TW',words),'今天','a message later today is still today, not the future');
+  assert.equal(dayLabel(daysAgo(1,23),now,'zh-TW',words),'昨天','yesterday means the calendar day, not 24 hours');
+  assert.equal(dayLabel(daysAgo(1),now,'en',{today:en.today,yesterday:en.yesterday}),'Yesterday');
+  assert.equal(dayLabel(daysAgo(2),now,'zh-TW',words),'星期一','the past week goes by weekday');
+  assert.equal(dayLabel(daysAgo(6),now,'zh-TW',words),'星期四','six days back is the last weekday');
+  const week=dayLabel(daysAgo(7),now,'zh-TW',words);
+  assert.match(week,/9\/30|9月30日/,'a week or more ago is written as a date');
+  assert.match(week,/週三|星期三/,'with its weekday, so it reads like a chat and not a form');
+  assert.ok(!/2026/.test(week),'this year is not spelled out');
+  assert.match(dayLabel(new Date(2025,9,1),now,'zh-TW',words),/2025/,'another year is spelled out');
+  assert.match(dayLabel(new Date(2026,8,15),now,'en',{today:en.today,yesterday:en.yesterday}),/Tue, 9\/15/,'English keeps the same short numeric date');
+  assert.equal(dayLabel('not a date',now,'zh-TW',words),'','garbage shows nothing rather than Invalid Date');
+});
+
+test('messages split by calendar day and show only their clock time',()=>{
+  assert.ok(sameDay(new Date(2026,9,7,0,1),new Date(2026,9,7,23,59)),'first and last minute share a day');
+  assert.ok(!sameDay(new Date(2026,9,7,23,59),new Date(2026,9,8,0,0)),'a minute past midnight is a new day');
+  assert.ok(!sameDay('garbage','garbage'),'two unreadable dates are not the same day');
+  assert.equal(clockTime(new Date(2026,9,7,9,5),'zh-TW'),'09:05','24-hour clock, zero padded');
+  assert.equal(clockTime(new Date(2026,9,7,15,30),'en'),'15:30');
+  assert.equal(clockTime('garbage','en'),'');
 });

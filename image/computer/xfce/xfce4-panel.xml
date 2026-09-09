@@ -5,11 +5,11 @@
     <value type="int" value="1"/>
     <property name="dark-mode" type="bool" value="true"/>
     <property name="panel-1" type="empty">
-      <property name="position" type="string" value="p=8;x=640;y=798"/>
+      <property name="position" type="string" value="p=8;x=640;y=782"/>
       <property name="length" type="uint" value="100"/>
       <property name="position-locked" type="bool" value="true"/>
-      <property name="size" type="uint" value="40"/>
-      <property name="icon-size" type="uint" value="24"/>
+      <property name="size" type="uint" value="36"/>
+      <property name="icon-size" type="uint" value="22"/>
       <property name="background-style" type="uint" value="0"/>
       <property name="autohide-behavior" type="uint" value="0"/>
       <property name="mode" type="uint" value="0"/>
@@ -25,13 +25,14 @@
   <property name="plugins" type="empty">
     <property name="plugin-1" type="string" value="applicationsmenu">
       <property name="show-generic-names" type="bool" value="false"/>
+      <property name="show-button-icon" type="bool" value="true"/>
       <property name="show-button-title" type="bool" value="true"/>
       <property name="button-title" type="string" value="應用程式"/>
     </property>
     <property name="plugin-2" type="string" value="tasklist">
       <property name="show-handle" type="bool" value="false"/>
       <property name="show-labels" type="bool" value="true"/>
-      <property name="flat-buttons" type="bool" value="false"/>
+      <property name="flat-buttons" type="bool" value="true"/>
       <property name="grouping" type="uint" value="0"/>
       <property name="include-all-workspaces" type="bool" value="true"/>
     </property>

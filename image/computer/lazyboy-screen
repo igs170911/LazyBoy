@@ -56,6 +56,12 @@ hydrate_xfce() {
   if [[ -r /etc/xdg/xfce4/helpers.rc ]]; then
     cp -f /etc/xdg/xfce4/helpers.rc "$xfce_home/.config/xfce4/helpers.rc" || true
   fi
+  # Terminals launched by this desktop (boot, panel, menu) inherit
+  # XDG_CONFIG_HOME=$xfce_home/.config, not $HOME/.config.
+  if [[ -r /usr/share/lazyboy/skel/terminalrc ]]; then
+    mkdir -p "$xfce_home/.config/xfce4/terminal"
+    cp -f /usr/share/lazyboy/skel/terminalrc "$xfce_home/.config/xfce4/terminal/terminalrc" || true
+  fi
 }
 
 wait_display() {
@@ -159,7 +165,6 @@ start_desktop() {
     return 0
   fi
   hydrate_xfce "$xfce_home"
-  DISPLAY="$display" xsetroot -solid "#0f172a" >/dev/null 2>&1 || true
   export DISPLAY="$display"
   export XDG_CONFIG_HOME="$xfce_home/.config"
   export XDG_CACHE_HOME="$xfce_home/.cache"

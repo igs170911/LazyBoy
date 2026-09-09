@@ -14,7 +14,7 @@
     <property name="snap_to_windows" type="bool" value="true"/>
     <property name="title_font" type="string" value="jf open 粉圓 2.1 11"/>
     <property name="button_layout" type="string" value="O|HMC"/>
-    <property name="theme" type="string" value="Default"/>
+    <property name="theme" type="string" value="Arc-Dark"/>
     <property name="double_click_action" type="string" value="maximize"/>
   </property>
 </channel>

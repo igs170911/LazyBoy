@@ -38,7 +38,6 @@ python3 tests/log-rotation.test.py
 
 # Cua Driver 能否控制現有 XFCE + Xvfb 桌面（會建 computer image）
 make cua-smoke
-# 結果摘要見 docs/cua-compatibility.md、docs/cua-review.md
 # 生產路徑只使用 Cua；更新後請重建 supervisor 與桌面映像。
 
 # Python 整合測試用 docker compose exec 連進 Postgres，自己建一次性資料庫後清掉
@@ -105,6 +104,31 @@ builder 並註冊 binfmt；主機本身的架構會跳過註冊，否則在特�
 不推送 registry 時輸出 OCI archive（`nerdctl load -i <檔>` 可載入），因為 Docker 的
 `docker` driver 無法匯出 manifest list。
 
+### README 首頁圖
+
+首頁圖不再手刻假介面：先用 `scripts/capture-hero.mjs` 拍**正在跑的真實介面**，再由
+`docs/hero.html` 套上品牌框輸出 `docs/readme-hero.png`。兩段都只要有任一 Chromium
+（`CHROME=` 指定，否則依序找 PATH 上的 chromium／Chrome 與 Playwright 下載的 chrome）。
+
+```bash
+# 1. 對運行中的 stack 擷取真實畫面（登入 token 讀 .env，可用 LB_TOKEN／LB_URL 覆寫）
+# 群組視圖的右欄是機器人自己的瀏覽器，進圖前先用 --hide 遮掉，再補一張中立的上去；
+# --anchor 會印出被遮區塊在圖上的位置，hero.html 的圖層座標就是從這裡來的。
+node scripts/capture-hero.mjs --out docs/hero/agent.png
+node scripts/capture-hero.mjs --out docs/hero/room.png --pick 測試聊天 \
+  --hide .side-card --anchor .side-card
+node scripts/capture-hero.mjs --out docs/hero/desktop.png --pick 阿狗 --selector .side-card
+
+# 2. 套框輸出 README 用的圖，SHOT= 決定用哪張（預設 room）
+scripts/render-readme-hero.sh
+SHOT=agent scripts/render-readme-hero.sh
+```
+
+`capture-hero.mjs` 直接講 CDP，沒有 npm 相依。預設擷取 1480x650（2 倍圖），正好對應
+`hero.html` 的 1184x520 視窗，不會裁到圖。noVNC 是即時串流，`--settle`（預設 6 秒）是留給
+桌面畫出內容的時間。**發布前務必逐張檢查**：機器人瀏覽器裡留著的帳號、網址與貼文會一起進
+圖，`--hide` 的 selector 沒命中時擷取會直接失敗，不要繞過這個檢查把圖放進 repo。
+
 ### 專案結構
 
 ```text
@@ -122,7 +146,8 @@ LazyBoy/
 ├── migrations/               SQLx PostgreSQL migrations
 ├── tests/                    Rust 以外的契約與回歸測試
 ├── scripts/                  環境初始化與執行工具
-├── docs/hero.html            README 首頁視覺原稿
+├── docs/hero.html            README 首頁框架（品牌＋真實截圖）
+├── docs/hero/                README 用的真實截圖原檔
 ├── docs/workflow.html        可互動產品流程圖
 ├── docker-compose.yml        正式堆疊
 ├── clippy.toml               Clippy 閾值（要在 repo 根目錄執行才讀得到）

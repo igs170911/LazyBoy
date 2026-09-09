@@ -485,6 +485,7 @@ type MessageWithSpeakerRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Value,
 );
 
 pub async fn messages_for_session(
@@ -494,7 +495,16 @@ pub async fn messages_for_session(
 ) -> Result<Vec<SessionMessage>, ApiError> {
     let rows: Vec<MessageWithSpeakerRow> = sqlx::query_as(
         "SELECT m.id, m.thread_id, m.seq, m.role, m.body, m.blocks, m.run_id,
-                m.client_nonce, m.created_at, m.speaker_bot_id, b.name, b.avatar_color, b.avatar_shape
+                m.client_nonce, m.created_at, m.speaker_bot_id, b.name, b.avatar_color, b.avatar_shape,
+                COALESCE((
+                    SELECT jsonb_agg(
+                               jsonb_build_object('id', r.id, 'name', r.name,
+                                                  'avatarColor', r.avatar_color,
+                                                  'avatarShape', r.avatar_shape)
+                               ORDER BY picked.ord)
+                      FROM unnest(m.reply_bot_ids) WITH ORDINALITY AS picked(bot_id, ord)
+                      JOIN bots r ON r.id = picked.bot_id
+                ), '[]'::jsonb) AS reply_bots
          FROM messages m
          JOIN threads t ON t.id=m.thread_id
          LEFT JOIN bots b ON b.id=m.speaker_bot_id
@@ -523,6 +533,8 @@ pub async fn messages_for_session(
             speaker_name: row.10,
             speaker_color: row.11,
             speaker_shape: row.12,
+            // A malformed array must not take the whole transcript with it.
+            reply_bots: serde_json::from_value(row.13).unwrap_or_default(),
         })
         .collect())
 }

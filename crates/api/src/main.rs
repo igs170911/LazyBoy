@@ -10,6 +10,7 @@ mod monitor;
 mod retention;
 mod rooms;
 mod routes;
+mod routing;
 mod runs;
 mod schedules;
 mod screen_proxy;
