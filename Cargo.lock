@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "lazyboy-api"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -1922,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "lazyboy-contracts"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1933,7 +1933,7 @@ dependencies = [
 
 [[package]]
 name = "lazyboy-control"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "lazyboy-controld"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "axum",
  "lazyboy-control",
@@ -1963,7 +1963,7 @@ dependencies = [
 
 [[package]]
 name = "lazyboy-harness"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1982,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "lazyboy-sandbox"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "lazyboy-supervisor"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "axum",
  "base64 0.22.1",

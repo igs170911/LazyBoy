@@ -18,7 +18,7 @@
 
 LazyBoy 讓 Agent 在 Docker 裡使用自己的 Linux 桌面，操作瀏覽器、終端與檔案。你可以建立不同的 Agent、在群組中協作，把示範整理成技能，再安排定時執行。
 
-目前為早期版本 `0.1.0`，提供桌面與手機瀏覽器介面；模型金鑰由你自行設定。
+目前為早期版本 `v0.1.0-alpha`，提供桌面與手機瀏覽器介面；模型金鑰由你自行設定。
 
 ## 功能
 
@@ -156,7 +156,7 @@ LazyBoy 站在許多開源專案的肩上，下面是我們用到最多、也最
 <a href="https://www.buymeacoffee.com/daniel.wang.1993"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="請我喝杯咖啡" height="48" /></a>
 
 <img src="https://img.shields.io/badge/license-Apache--2.0-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Apache License 2.0" />
-<img src="https://img.shields.io/badge/release-0.1.0-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Release 0.1.0" />
+<img src="https://img.shields.io/badge/release-v0.1.0--alpha-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Release v0.1.0-alpha" />
 <img src="https://img.shields.io/badge/Rust%20%2B%20React-6f9c96?style=for-the-badge&labelColor=1b1b22" alt="Rust and React" />
 
 **danielwang** <img src="https://flagcdn.com/w20/tw.png" width="20" alt="Taiwan" />

@@ -18,7 +18,7 @@ A self-hosted AI agent workspace. Assign tasks in text or voice, watch the deskt
 
 LazyBoy gives each agent its own Linux desktop in Docker — browser, terminal, and files. You can run several agents, put them in a group, turn a demonstration into a skill, and schedule it to run again.
 
-This is an early `0.1.0` release with desktop and phone browser UIs. You bring your own model API key.
+This is an early `v0.1.0-alpha` release with desktop and phone browser UIs. You bring your own model API key.
 
 ## Features
 
@@ -158,7 +158,7 @@ Every version above is pinned in `Cargo.lock`, `apps/web/package.json`, and `ima
 <a href="https://www.buymeacoffee.com/daniel.wang.1993"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="48" /></a>
 
 <img src="https://img.shields.io/badge/license-Apache--2.0-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Apache License 2.0" />
-<img src="https://img.shields.io/badge/release-0.1.0-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Release 0.1.0" />
+<img src="https://img.shields.io/badge/release-v0.1.0--alpha-2f9e8f?style=for-the-badge&labelColor=1b1b22" alt="Release v0.1.0-alpha" />
 <img src="https://img.shields.io/badge/Rust%20%2B%20React-6f9c96?style=for-the-badge&labelColor=1b1b22" alt="Rust and React" />
 
 **Daniel Wang** <img src="https://flagcdn.com/w20/tw.png" width="20" alt="Taiwan" />
