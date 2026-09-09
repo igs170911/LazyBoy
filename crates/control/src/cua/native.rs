@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use lazyboy_contracts::{RefVerb, UiElement};
 use serde_json::{Value, json};
 
-use super::{ListedWindow, client::CuaClient};
+use super::{
+    ListedWindow,
+    client::{CuaClient, action_verdict},
+};
+use crate::ActionVerdict;
 use crate::ControlError;
 
 #[derive(Debug, Clone)]
@@ -117,7 +121,7 @@ pub(super) async fn act(
     target: NativeTarget,
     verb: RefVerb,
     text: Option<&str>,
-) -> Result<(), ControlError> {
+) -> Result<Option<ActionVerdict>, ControlError> {
     client
         .call(
             display,
@@ -141,6 +145,6 @@ pub(super) async fn act(
         }
         RefVerb::Focus => return Err(ControlError::Unsupported),
     };
-    client.call(display, tool, &payload, &[]).await?;
-    Ok(())
+    let reply = client.call(display, tool, &payload, &[]).await?;
+    Ok(action_verdict(&reply))
 }

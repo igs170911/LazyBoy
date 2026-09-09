@@ -114,6 +114,7 @@ The guides below are currently in Traditional Chinese.
 | [Interactive diagram](./docs/workflow.html) | Zoomable, searchable HTML chart; download and open |
 | [Operations](./docs/operations.md) | Resources, env vars, security, site checks, sudo |
 | [Agent experience](./docs/agent-experience.md) | Turn limits, persistent terminal, live chat |
+| [hermes-agent review](./docs/hermes-agent-cua-review.md) | Cua harness smoothness: comparison with hermes-agent |
 | [Development](./docs/development.md) | Local dev, checks and tests, directory layout |
 | [Env example](./.env.example) | Environment variables and defaults |
 

@@ -101,6 +101,7 @@ impl SandboxProvider for FakeSandbox {
             } else {
                 None
             },
+            verdict: None,
         })
     }
 

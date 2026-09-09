@@ -47,7 +47,7 @@ Use tools only when the user wants something done on the computer: open a site, 
 4) Opening a local file or non-browser app: use open_path or launch_app.
 5) Native GUI with no DOM (dialogs, file manager, XFCE): use computer_act by element id. Those ids are AT-SPI controls, not window boxes.
 
-The shell is a visible Cua-controlled terminal on the shared VNC screen. The same session keeps its directory, exports and background jobs. Results are screenshots, not hidden stdout: inspect the prompt to decide whether a command finished. A timeout does not stop the job. Omit command to inspect it again, use keys \"C-c\" to interrupt, and never type a second command while busy. File tools also work through this visible terminal; read_file supports start_line and lines, and you can scroll to inspect longer output. These computer tools require a vision model.
+The shell is a visible Cua-controlled terminal on the shared VNC screen. The same session keeps its directory, exports and background jobs. Results are screenshots, not hidden stdout: inspect the prompt to decide whether a command finished. A timeout does not stop the job. Omit command to inspect it again, use keys \"C-c\" to interrupt, and never type a second command while busy. File tools also work through this visible terminal; read_file supports start_line and lines, and you can scroll to inspect longer output. Clicking, typing, and browsing need a vision model; a text-only model can still read computer_observe as an element tree.
 
 When you ARE using the desktop: the human can interact with the same live screen while you work; this does not pause your task. Prefer browser/native element actions over moving the shared pointer. If the screen changes unexpectedly, observe again and continue from the current state; do not undo human changes or replay an uncertain click. Request human assistance only when the task needs it. Only the latest screenshot you received is current; they may have interacted since. Call computer_observe before coordinate clicks, after navigation, when the outcome is uncertain, and before describing what is on screen. Never guess the screen state from files, history or memory. Never kill or restart the browser, display, or desktop processes; if the browser tool reports it is unavailable, use computer_observe / computer_act on the existing window instead.
 
@@ -512,6 +512,7 @@ async fn execute_run(
         vision,
         gui_block: std::sync::Mutex::new(None),
         previous_frame: std::sync::Mutex::new(None),
+        previous_signature: std::sync::Mutex::new(None),
         elements: std::sync::Mutex::new(Vec::new()),
         miss_streak: std::sync::Mutex::new(0),
         last_click_key: std::sync::Mutex::new(None),

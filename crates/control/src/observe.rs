@@ -77,6 +77,51 @@ pub fn format_ui_elements(elements: &[UiElement]) -> String {
         .join(" ")
 }
 
+/// Titles longer than this are cut with an ellipsis. AT-SPI labels in chat and
+/// Electron clients can be entire message bodies, and a label only has to
+/// identify a control.
+const MAX_ELEMENT_TITLE_CHARS: usize = 60;
+
+/// One line per control: `[id] kind "title" @ x,y`. Models address controls by
+/// id (see `actions::element_id`), so this list is meant to replace the element
+/// array in a tool result, not to sit next to it; `max` keeps a dense desktop
+/// inside the per-turn budget and says what was dropped.
+pub fn format_ui_element_lines(elements: &[UiElement], max: usize) -> String {
+    if elements.is_empty() {
+        return "none".into();
+    }
+    let mut lines: Vec<String> = elements
+        .iter()
+        .take(max)
+        .map(|element| {
+            let (x, y) = element.center();
+            let kind = element
+                .role
+                .as_deref()
+                .or(element.kind.as_deref())
+                .unwrap_or("control");
+            let title: String = element
+                .title
+                .chars()
+                .filter(|character| *character != '\n' && *character != '\r')
+                .take(MAX_ELEMENT_TITLE_CHARS)
+                .collect();
+            let ellipsis = if element.title.chars().count() > MAX_ELEMENT_TITLE_CHARS {
+                "…"
+            } else {
+                ""
+            };
+            format!("[{}] {kind} \"{title}{ellipsis}\" @ {x},{y}", element.id)
+        })
+        .collect();
+    if let Some(dropped) = elements.len().checked_sub(max) {
+        lines.push(format!(
+            "+{dropped} more not listed: re-observe after scrolling, or aim at the coordinates above"
+        ));
+    }
+    lines.join("\n")
+}
+
 fn sniff_image_mime(image: &[u8]) -> &'static str {
     if image.len() >= 3 && image[0] == 0xFF && image[1] == 0xD8 && image[2] == 0xFF {
         "image/jpeg"
@@ -118,6 +163,41 @@ pub fn signatures_similar(a: &[u8], b: &[u8]) -> bool {
         .filter(|(x, y)| x.abs_diff(**y) > 24)
         .count();
     changed * 50 < a.len()
+}
+
+/// How a capture differs from the frame the Agent last saw. `Identical` is the
+/// transport fact: the same picture is already in the model's context. Byte
+/// equality alone is too strict for advice, because a panel clock or a blinking
+/// caret makes every capture a new sha256 and a click that did nothing would
+/// never be recognised; `Similar` is the perceptual answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenChange {
+    Identical,
+    Similar,
+    Changed,
+}
+
+/// Compare a capture against the previous frame id and signature. Skipping a
+/// screenshot is still only correct for `Identical`: a change too small to see
+/// is a change the model should be allowed to look at, while "nothing moved,
+/// do not repeat this" may use `Similar`.
+pub fn screen_change_between(
+    previous_frame: Option<&str>,
+    previous_signature: Option<&[u8]>,
+    observation: &ComputerObservation,
+) -> ScreenChange {
+    if frames_match(previous_frame, observation) {
+        return ScreenChange::Identical;
+    }
+    let (Some(previous), Some(current)) = (previous_signature, frame_signature(&observation.image))
+    else {
+        return ScreenChange::Changed;
+    };
+    if signatures_similar(previous, &current) {
+        ScreenChange::Similar
+    } else {
+        ScreenChange::Changed
+    }
 }
 
 #[cfg(test)]
@@ -194,6 +274,111 @@ mod tests {
         assert!(signatures_similar(&base, &clock));
         assert!(!signatures_similar(&base, &dialog));
         assert!(frame_signature(b"not an image").is_none());
+    }
+
+    #[test]
+    fn screen_change_calls_a_clock_tick_similar_not_identical() {
+        fn png(paint: impl Fn(u32, u32) -> Rgb<u8>) -> Vec<u8> {
+            let img = RgbImage::from_fn(320, 180, paint);
+            let mut out = Vec::new();
+            PngEncoder::new(&mut out)
+                .write_image(img.as_raw(), 320, 180, ExtendedColorType::Rgb8)
+                .unwrap();
+            out
+        }
+        let plain = png(|_, _| Rgb([240, 240, 240]));
+        let clock = png(|x, y| {
+            if x < 6 && y < 6 {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([240, 240, 240])
+            }
+        });
+        let dialog = png(|x, y| {
+            if x < 160 && y < 90 {
+                Rgb([20, 20, 20])
+            } else {
+                Rgb([240, 240, 240])
+            }
+        });
+
+        let before = observation_from_png(plain.clone(), 320, 180, None, None);
+        let signature = frame_signature(&plain);
+
+        // Byte for byte the same frame: the model already holds this picture.
+        let same = observation_from_png(plain.clone(), 320, 180, None, None);
+        assert_eq!(
+            screen_change_between(Some(before.frame_id.as_str()), signature.as_deref(), &same),
+            ScreenChange::Identical
+        );
+
+        // A flipping panel clock is a new sha256 of the same screen. Only the
+        // perceptual answer lets the "stop repeating this click" advice fire.
+        let tick = observation_from_png(clock, 320, 180, None, None);
+        assert_ne!(tick.frame_id, before.frame_id);
+        assert_eq!(
+            screen_change_between(Some(before.frame_id.as_str()), signature.as_deref(), &tick),
+            ScreenChange::Similar
+        );
+
+        let covered = observation_from_png(dialog, 320, 180, None, None);
+        assert_eq!(
+            screen_change_between(
+                Some(before.frame_id.as_str()),
+                signature.as_deref(),
+                &covered
+            ),
+            ScreenChange::Changed
+        );
+
+        // With no signature to compare, only byte equality counts.
+        assert_eq!(
+            screen_change_between(None, None, &same),
+            ScreenChange::Changed
+        );
+    }
+
+    #[test]
+    fn element_lines_cap_the_count_and_long_labels() {
+        let elements: Vec<UiElement> = (1..=5)
+            .map(|index| UiElement {
+                id: index,
+                title: format!("Window {index}"),
+                x: index * 10,
+                y: index * 20,
+                w: 40,
+                h: 20,
+                kind: Some("window".into()),
+                ..UiElement::default()
+            })
+            .collect();
+        let listing = format_ui_element_lines(&elements, 3);
+        let lines: Vec<&str> = listing.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], "[1] window \"Window 1\" @ 30,30");
+        assert!(listing.contains("+2 more not listed"));
+        assert!(!listing.contains("Window 5"));
+
+        // A label identifies a control; it is not a text channel.
+        let chatty = vec![UiElement {
+            id: 7,
+            title: "x".repeat(200),
+            ..UiElement::default()
+        }];
+        let line = format_ui_element_lines(&chatty, 10);
+        assert_eq!(line.matches('x').count(), MAX_ELEMENT_TITLE_CHARS);
+        assert!(line.ends_with("\" @ 0,0"));
+
+        // A role tells the model more than the internal kind does.
+        let control = vec![UiElement {
+            id: 3,
+            title: "Send".into(),
+            kind: Some("dom".into()),
+            role: Some("button".into()),
+            ..UiElement::default()
+        }];
+        assert!(format_ui_element_lines(&control, 10).starts_with("[3] button \"Send\""));
+        assert_eq!(format_ui_element_lines(&[], 10), "none");
     }
 
     #[test]

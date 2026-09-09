@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -10,6 +10,7 @@ use tokio::process::Command;
 
 use crate::controller::ControlError;
 use crate::screen::normalize_display;
+use crate::{ActionDecision, ActionVerdict};
 
 pub const PRIMARY_SOCKET: &str = "/tmp/lazyboy/cua.sock";
 
@@ -17,6 +18,9 @@ pub const PRIMARY_SOCKET: &str = "/tmp/lazyboy/cua.sock";
 pub struct CuaClient {
     bin: PathBuf,
     motion_sessions: Arc<tokio::sync::Mutex<HashMap<(PathBuf, String), SystemTime>>>,
+    /// Displays whose driver session saw a timed-out mutation. The socket state
+    /// of such a session is unknown, so the next mutation gets a fresh one.
+    suspect: Arc<tokio::sync::Mutex<HashSet<String>>>,
 }
 
 impl Default for CuaClient {
@@ -24,6 +28,7 @@ impl Default for CuaClient {
         Self {
             bin: PathBuf::from("cua-driver"),
             motion_sessions: Arc::default(),
+            suspect: Arc::default(),
         }
     }
 }
@@ -94,6 +99,45 @@ impl CuaClient {
         Ok(text)
     }
 
+    /// `cua-driver manifest`: the driver's own description of its CLI surface.
+    /// `None` when the binary predates the verb or answers with anything but a
+    /// JSON object, so an unexpected driver stays as opaque as it was.
+    pub async fn manifest(&self) -> Option<Value> {
+        let mut command = Command::new(&self.bin);
+        command.arg("manifest");
+        let output = bounded_output(&mut command, Duration::from_secs(10))
+            .await
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        // A telemetry banner can precede the payload, so take the line that
+        // actually parses instead of trusting stdout to be one object.
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| serde_json::from_str(line.trim()).ok())
+    }
+
+    /// `cua-driver list-tools`: every tool this driver build can dispatch.
+    /// Read-only and daemon-free, which makes it safe on the health path.
+    pub async fn tool_names(&self) -> Option<Vec<String>> {
+        let mut command = Command::new(&self.bin);
+        command.arg("list-tools");
+        let output = bounded_output(&mut command, Duration::from_secs(10))
+            .await
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let names = parse_tool_names(&text);
+        (!names.is_empty()).then_some(names)
+    }
+
     // Apply Cua's supported motion settings once per named session/daemon.
     // Short, tight glides avoid the driver's 750 ms default flight.
     async fn configure_cursor_motion(&self, screen: &str, body: &Value, force: bool) {
@@ -141,13 +185,31 @@ impl CuaClient {
         extra: &[&str],
     ) -> Result<Value, ControlError> {
         let mut body = with_session_label(screen, payload);
+        if !read_after_session_restart(tool) {
+            self.repair_suspect_session(screen, &body).await?;
+        }
         if needs_cursor_motion(tool) {
             self.configure_cursor_motion(screen, &body, false).await;
         }
         let mut escalated = false;
         let mut revived = false;
         loop {
-            let outcome = self.attempt(screen, tool, &body, extra).await?;
+            let outcome = match self.attempt(screen, tool, &body, extra).await {
+                Ok(outcome) => outcome,
+                Err(ControlError::Timeout) => {
+                    // A mutation that ran out of clock may still have landed, so
+                    // it is never replayed: mark the session unusable and report
+                    // the unknown outcome instead of trying again.
+                    if tool != "start_session" {
+                        self.suspect
+                            .lock()
+                            .await
+                            .insert(normalize_display(screen).to_string());
+                    }
+                    return Err(ControlError::Timeout);
+                }
+                Err(error) => return Err(error),
+            };
             if outcome.session_ended && !revived && tool != "start_session" {
                 let session = json!({"session":body["session"]});
                 let started = self.attempt(screen, "start_session", &session, &[]).await?;
@@ -174,6 +236,37 @@ impl CuaClient {
                 Some(error) => Err(error),
                 None => Ok(outcome.value),
             };
+        }
+    }
+
+    /// One timed-out call is enough to distrust a session: the request may
+    /// still be queued, half-written, or already applied. The next mutation
+    /// therefore opens a fresh named session instead of inheriting that state.
+    /// Reads skip the extra round trip — a stale read cannot do damage, and a
+    /// replayed mutation can.
+    async fn repair_suspect_session(&self, screen: &str, body: &Value) -> Result<(), ControlError> {
+        let key = normalize_display(screen).to_string();
+        if !self.suspect.lock().await.remove(&key) {
+            return Ok(());
+        }
+        let session = json!({"session": body.get("session")});
+        match self.attempt(screen, "start_session", &session, &[]).await {
+            Ok(outcome) => {
+                // A driver that answers, even to refuse, proved the transport is
+                // alive; the mutation's own error is the better signal then.
+                if outcome.error.is_none() {
+                    // A new session does not inherit the cursor glide tuning.
+                    self.configure_cursor_motion(screen, body, true).await;
+                }
+                Ok(())
+            }
+            Err(error @ ControlError::Timeout) => {
+                // Still unknown: keep the marker and do not push a mutation into
+                // the same state that just timed out.
+                self.suspect.lock().await.insert(key);
+                Err(error)
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -239,6 +332,34 @@ fn public_agent_name(name: &str) -> String {
         .chars()
         .filter(|ch| !ch.is_control())
         .take(80)
+        .collect()
+}
+
+/// `list-tools` prints `tool_name: one-line description`. The CLI also prints
+/// banners and usage text whose leading token is lowercase-shaped, so these
+/// words are dropped before they can pass for a capability.
+const TOOL_LIST_NOISE: &[&str] = &[
+    "usage",
+    "error",
+    "warning",
+    "warn",
+    "note",
+    "help",
+    "subcommands",
+];
+
+fn parse_tool_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let (name, _) = line.split_once(':')?;
+            let name = name.trim();
+            let shaped = name.len() > 2
+                && !TOOL_LIST_NOISE.contains(&name)
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+            shaped.then(|| name.to_string())
+        })
         .collect()
 }
 
@@ -312,6 +433,43 @@ fn recommended_delivery(value: &Value) -> Option<String> {
         .filter_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
         .find(|mode| matches!(*mode, "foreground" | "background"))
         .map(str::to_string)
+}
+
+/// What the driver says about the effect of its own reply. Every field is
+/// additive in the driver contract, so an older build yields `None`: a reply
+/// with no semantic evidence is not proof that anything happened, and claiming
+/// `done` would be the difference between one look and one more blind click.
+pub fn action_verdict(value: &Value) -> Option<ActionVerdict> {
+    let effect = ["effect", "status"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_str))
+        // `status: ok` is the driver's "no error", the same reading
+        // `response_error` takes, so it carries no evidence either.
+        .find(|text| !text.is_empty() && *text != "ok")
+        .map(str::to_string);
+    let verified = value.get("verified").and_then(Value::as_bool);
+    let degraded = value.get("degraded").and_then(Value::as_bool) == Some(true);
+    let escalation = recommended_delivery(value);
+    let code = ["code", "reason_code"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_str))
+        .find(|code| !code.is_empty() && *code != "ok");
+
+    let decision = if effect.as_deref() == Some("confirmed") || verified == Some(true) {
+        ActionDecision::Done
+    } else if effect.as_deref() == Some("suspected_noop") || code.is_some() {
+        ActionDecision::Escalate
+    } else if effect.is_some() || verified == Some(false) || degraded || escalation.is_some() {
+        ActionDecision::VerifyFreshState
+    } else {
+        return None;
+    };
+    Some(ActionVerdict {
+        decision,
+        effect,
+        verified,
+        escalation,
+    })
 }
 
 fn with_session_label(display: &str, payload: &Value) -> Value {
@@ -706,5 +864,74 @@ mod tests {
     fn extracts_json_object_from_noisy_stdout() {
         let parsed = parse_jsonish("✅ ok\n{\"status\":\"ok\",\"x\":1}\n").unwrap();
         assert_eq!(parsed["status"], "ok");
+    }
+
+    #[test]
+    fn a_confirmed_effect_outranks_an_advisory_escalation() {
+        let verdict = action_verdict(&json!({
+            "effect": "confirmed",
+            "verified": true,
+            "escalation": {"recommended": "foreground"}
+        }))
+        .expect("verdict");
+        assert_eq!(verdict.decision, ActionDecision::Done);
+        assert_eq!(verdict.escalation.as_deref(), Some("foreground"));
+    }
+
+    #[test]
+    fn unverifiable_effect_becomes_verify_fresh_state() {
+        assert_eq!(
+            action_verdict(&json!({"effect": "unverifiable"}))
+                .expect("verdict")
+                .decision,
+            ActionDecision::VerifyFreshState
+        );
+        assert_eq!(
+            action_verdict(&json!({"verified": false}))
+                .expect("verdict")
+                .decision,
+            ActionDecision::VerifyFreshState
+        );
+    }
+
+    #[test]
+    fn suspected_noop_and_refusal_codes_escalate() {
+        assert_eq!(
+            action_verdict(&json!({"effect": "suspected_noop"}))
+                .expect("verdict")
+                .decision,
+            ActionDecision::Escalate
+        );
+        assert_eq!(
+            action_verdict(&json!({"reason_code": "target_gone"}))
+                .expect("verdict")
+                .decision,
+            ActionDecision::Escalate
+        );
+    }
+
+    #[test]
+    fn a_reply_without_semantic_evidence_claims_nothing() {
+        // `status: ok` only means the driver did not error, so it proves no
+        // effect and must not be reported as one.
+        assert!(action_verdict(&json!({"status": "ok", "windows": []})).is_none());
+        assert_eq!(
+            action_verdict(&json!({"degraded": true}))
+                .expect("verdict")
+                .decision,
+            ActionDecision::VerifyFreshState
+        );
+    }
+
+    #[test]
+    fn the_tool_list_keeps_names_and_drops_banner_noise() {
+        let text = "Cua Driver sends content-free product telemetry by default.\n\
+                    usage: cua-driver [SUBCOMMAND]\n\
+                    click: Click against a target pid\n\
+                    start_session: Open a named session\n";
+        assert_eq!(
+            parse_tool_names(text),
+            vec!["click".to_string(), "start_session".to_string()]
+        );
     }
 }

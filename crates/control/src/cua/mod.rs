@@ -23,11 +23,11 @@ use crate::controller::{
     ComputerController, ComputerDriver, ControlContext, ControlError, ControllerHealth,
 };
 use crate::{
-    ActionRequest, ActionResult, BrowserPage, BrowserRequest, RecordingRequest, RecordingResult,
-    RecordingSession, action_pause_ms, image_dimensions, normalize_display, observation_from_png,
-    observation_with_elements, teach_trajectory_dir,
+    ActionRequest, ActionResult, ActionVerdict, BrowserPage, BrowserRequest, RecordingRequest,
+    RecordingResult, RecordingSession, action_pause_ms, image_dimensions, normalize_display,
+    observation_from_png, observation_with_elements, teach_trajectory_dir,
 };
-use client::first_array_of_objects;
+use client::{action_verdict, first_array_of_objects};
 
 pub use client::CuaClient;
 
@@ -45,6 +45,114 @@ fn driver_release(version: &str) -> Option<(u32, u32)> {
     let digits = version.find(|character: char| character.is_ascii_digit())?;
     let mut parts = version[digits..].split('.');
     Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// CLI surface LazyBoy spawns. `call` writes screenshots to a file because a
+/// base64 frame in a pipe cannot survive a busy desktop.
+const REQUIRED_CLI_ARGS: &[(&str, &[&str])] = &[
+    ("call", &["--socket", "--screenshot-out-file"]),
+    ("status", &["--socket"]),
+];
+
+/// Every driver tool the harness dispatches. Naming them turns a pin failure
+/// into "this driver cannot do X" instead of a bare "unhealthy".
+const REQUIRED_TOOLS: &[&str] = &[
+    "bring_to_front",
+    "browser_click",
+    "browser_navigate",
+    "browser_prepare",
+    "browser_type",
+    "click",
+    "drag",
+    "get_browser_state",
+    "get_cursor_position",
+    "get_desktop_state",
+    "get_screen_size",
+    "get_window_state",
+    "health_report",
+    "hotkey",
+    "launch_app",
+    "list_windows",
+    "move_cursor",
+    "press_key",
+    "scroll",
+    "set_agent_cursor_motion",
+    "set_value",
+    "start_recording",
+    "start_session",
+    "stop_recording",
+    "type_text",
+];
+
+/// `subcommands: [{ "name", "args": [{ "name" }] }]` from `cua-driver manifest`.
+fn advertised_flags(manifest: &Value) -> HashMap<&str, Vec<&str>> {
+    manifest
+        .get("subcommands")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|verb| Some((verb["name"].as_str()?, verb)))
+        .map(|(name, verb)| {
+            (
+                name,
+                verb.get("args")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|arg| arg["name"].as_str())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// Required `verb --flag` pairs this driver does not advertise.
+fn cli_contract_gap(manifest: &Value) -> Vec<String> {
+    let advertised = advertised_flags(manifest);
+    let mut gap = Vec::new();
+    for (verb, flags) in REQUIRED_CLI_ARGS {
+        let offered: &[&str] = advertised.get(verb).map(Vec::as_slice).unwrap_or_default();
+        gap.extend(
+            flags
+                .iter()
+                .filter(|flag| !offered.contains(flag))
+                .map(|flag| format!("{verb} {flag}")),
+        );
+    }
+    gap
+}
+
+/// Required tools the driver cannot dispatch.
+fn missing_tools(advertised: &[String]) -> Vec<&'static str> {
+    REQUIRED_TOOLS
+        .iter()
+        .copied()
+        .filter(|tool| !advertised.iter().any(|named| named == tool))
+        .collect()
+}
+
+/// What a driver that failed the pin is actually missing. Both probes are
+/// read-only and degrade to silence on drivers that predate them.
+async fn capability_gap(client: &CuaClient) -> Vec<String> {
+    let mut gap = Vec::new();
+    if let Some(manifest) = client.manifest().await {
+        let missing = cli_contract_gap(&manifest);
+        if !missing.is_empty() {
+            gap.push(format!("driver CLI is missing: {}", missing.join(", ")));
+        }
+    }
+    if let Some(tools) = client.tool_names().await {
+        let missing = missing_tools(&tools);
+        gap.push(if missing.is_empty() {
+            format!(
+                "all {} driver tools LazyBoy needs are present, so only the version series differs",
+                REQUIRED_TOOLS.len()
+            )
+        } else {
+            format!("driver tools are missing: {}", missing.join(", "))
+        });
+    }
+    gap
 }
 
 pub use translate::{TranslatedAction, translate_action};
@@ -92,6 +200,9 @@ impl ComputerController for CuaController {
                         PINNED_DRIVER.0,
                         PINNED_DRIVER.1
                     ));
+                    // Only the failing path pays for the probes; a healthy
+                    // desktop is never asked about its own surface again.
+                    details.extend(capability_gap(&self.client).await);
                 }
                 Ok(ControllerHealth {
                     backend: "cua".into(),
@@ -130,6 +241,7 @@ impl ComputerController for CuaController {
                 completed: 1,
                 clipboard_text: Some(text),
                 observation: None,
+                verdict: None,
             });
         }
         let display = ctx.display.as_str();
@@ -143,7 +255,7 @@ impl ComputerController for CuaController {
             .run_actions(request, display, profile, &mut targets)
             .await
         {
-            Ok(completed) => {
+            Ok((completed, verdict)) => {
                 let observation = if request.observe {
                     Some(self.observe_display(display).await?)
                 } else {
@@ -154,6 +266,7 @@ impl ComputerController for CuaController {
                     clipboard_text: None,
                     completed,
                     observation,
+                    verdict,
                 })
             }
             Err(error) => {
@@ -305,19 +418,24 @@ impl CuaController {
         display: &str,
         profile: Option<&str>,
         targets: &mut HashMap<String, native::NativeTarget>,
-    ) -> Result<usize, ControlError> {
+    ) -> Result<(usize, Option<ActionVerdict>), ControlError> {
         let mut completed = 0usize;
+        // One batch, one answer: keep the most urgent verdict the driver gave.
+        let mut verdict = None;
         while completed < request.actions.len() {
             let action = &request.actions[completed];
             if let Some(payload) = drag_payload(&request.actions[completed..]) {
-                self.dispatch(
-                    display,
-                    TranslatedAction::Cua {
-                        tool: "drag",
-                        payload,
-                    },
-                )
-                .await?;
+                merge_verdict(
+                    &mut verdict,
+                    self.dispatch(
+                        display,
+                        TranslatedAction::Cua {
+                            tool: "drag",
+                            payload,
+                        },
+                    )
+                    .await?,
+                );
                 completed += 5;
                 continue;
             }
@@ -335,10 +453,13 @@ impl CuaController {
                     .get(target)
                     .cloned()
                     .ok_or(ControlError::StaleReference)?;
-                native::act(&self.client, display, target, *verb, text.as_deref()).await?;
+                merge_verdict(
+                    &mut verdict,
+                    native::act(&self.client, display, target, *verb, text.as_deref()).await?,
+                );
             } else {
                 let translated = translate_action(action, display, profile)?;
-                self.dispatch(display, translated).await?;
+                merge_verdict(&mut verdict, self.dispatch(display, translated).await?);
             }
             let pause = action_pause_ms(action);
             if pause > 0 {
@@ -349,7 +470,7 @@ impl CuaController {
         if request.settle_ms > 0 {
             sleep(Duration::from_millis(u64::from(request.settle_ms))).await;
         }
-        Ok(completed)
+        Ok((completed, verdict))
     }
 
     async fn lock_screen(&self, display: &str) -> tokio::sync::OwnedMutexGuard<()> {
@@ -386,8 +507,16 @@ impl CuaController {
             Some(dimensions) => dimensions,
             None => self.screen_size(display).await,
         };
-        let cursor = self.cursor(display).await;
-        let windows = self.windows(display).await.unwrap_or_default();
+        // Cursor position and window list are two independent reads of the same
+        // frame: run them as two CLI processes at once instead of end to end.
+        let (cursor, windows) = tokio::join!(self.cursor(display), self.windows(display));
+        // A window list that failed is not a desktop with no windows. Telling
+        // those apart is what keeps a driver hiccup from reaching the model as
+        // "the screen is empty".
+        let (windows, windows_listed) = match windows {
+            Ok(windows) => (windows, true),
+            Err(_) => (Vec::new(), false),
+        };
         let active = windows
             .iter()
             .max_by_key(|window| window.z)
@@ -432,7 +561,7 @@ impl CuaController {
             observation_from_png(png, width, height, cursor, active),
             elements,
         );
-        observation.native_observation_complete = complete;
+        observation.native_observation_complete = complete && windows_listed;
         Ok(observation)
     }
 
@@ -496,20 +625,24 @@ impl CuaController {
         &self,
         display: &str,
         translated: TranslatedAction,
-    ) -> Result<(), ControlError> {
+    ) -> Result<Option<ActionVerdict>, ControlError> {
         match translated {
             TranslatedAction::Sleep { ms } => {
                 sleep(Duration::from_millis(ms)).await;
-                Ok(())
+                Ok(None)
             }
-            TranslatedAction::Launch { argv } => launch::run(&self.client, display, &argv).await,
+            TranslatedAction::Launch { argv } => {
+                launch::run(&self.client, display, &argv).await?;
+                Ok(None)
+            }
             TranslatedAction::FocusTitle { title } => self.focus_title(display, &title).await,
             TranslatedAction::Cua { tool, mut payload } => {
                 if tool == "type_text"
                     && let Some(text) = payload.get("text").and_then(Value::as_str)
                     && (!text.is_ascii() || text.contains(['\n', '\r']))
                 {
-                    return clipboard::paste(&self.client, display, text).await;
+                    clipboard::paste(&self.client, display, text).await?;
+                    return Ok(None);
                 }
 
                 if tool == "scroll" && payload.get("x").is_none() {
@@ -536,16 +669,21 @@ impl CuaController {
                     payload["window_id"] = json!(window.id);
                     payload["delivery_mode"] = json!("foreground");
                 }
-                self.client.call(display, tool, &payload, &[]).await?;
-                Ok(())
+                let reply = self.client.call(display, tool, &payload, &[]).await?;
+                Ok(action_verdict(&reply))
             }
         }
     }
 
-    async fn focus_title(&self, display: &str, title: &str) -> Result<(), ControlError> {
+    async fn focus_title(
+        &self,
+        display: &str,
+        title: &str,
+    ) -> Result<Option<ActionVerdict>, ControlError> {
         let windows = self.windows(display).await?;
         let window = window_matching_title(&windows, title).ok_or(ControlError::TargetNotFound)?;
-        self.client
+        let reply = self
+            .client
             .call(
                 display,
                 "bring_to_front",
@@ -553,7 +691,20 @@ impl CuaController {
                 &[],
             )
             .await?;
-        Ok(())
+        Ok(action_verdict(&reply))
+    }
+}
+
+/// The more urgent verdict wins: one suspected no-op makes the whole batch
+/// unproven, and the model has to hear about that one, not about the steps
+/// that happened to report cleanly.
+fn merge_verdict(current: &mut Option<ActionVerdict>, step: Option<ActionVerdict>) {
+    if let Some(step) = step
+        && current
+            .as_ref()
+            .is_none_or(|best| step.decision > best.decision)
+    {
+        *current = Some(step);
     }
 }
 
@@ -800,6 +951,36 @@ mod tests {
     fn a_new_minor_series_is_not_compatible() {
         assert_ne!(driver_release("cua-driver 0.24.0"), Some(PINNED_DRIVER));
         assert_eq!(driver_release("cua-driver 0.23.9"), Some(PINNED_DRIVER));
+    }
+
+    #[test]
+    fn an_older_driver_is_named_by_the_verb_flag_it_lacks() {
+        let manifest = json!({"subcommands": [
+            {"name": "call", "args": [{"name": "tool"}, {"name": "--socket"}]},
+            {"name": "status", "args": [{"name": "--socket"}]},
+        ]});
+        assert_eq!(cli_contract_gap(&manifest), ["call --screenshot-out-file"]);
+    }
+
+    #[test]
+    fn the_pinned_driver_surface_passes_the_cli_contract() {
+        let manifest = json!({"subcommands": [
+            {"name": "call", "args": [{"name": "tool"}, {"name": "json-args"},
+                {"name": "--screenshot-out-file"}, {"name": "--socket"}]},
+            {"name": "status", "args": [{"name": "--socket"}]},
+        ]});
+        assert!(cli_contract_gap(&manifest).is_empty());
+    }
+
+    #[test]
+    fn a_missing_tool_is_named_instead_of_a_bare_unhealthy() {
+        let all: Vec<String> = REQUIRED_TOOLS.iter().map(|tool| tool.to_string()).collect();
+        assert!(missing_tools(&all).is_empty());
+        let advertised: Vec<String> = all
+            .into_iter()
+            .filter(|tool| tool != "get_window_state")
+            .collect();
+        assert_eq!(missing_tools(&advertised), ["get_window_state"]);
     }
 
     #[test]

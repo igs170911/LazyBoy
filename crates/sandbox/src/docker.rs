@@ -259,6 +259,10 @@ impl SandboxProvider for DockerSandbox {
             } else {
                 None
             },
+            // An older controld simply omits the verdict.
+            verdict: body
+                .get("verdict")
+                .and_then(|value| serde_json::from_value(value.clone()).ok()),
         })
     }
 
