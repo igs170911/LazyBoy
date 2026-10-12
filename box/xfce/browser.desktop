@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=瀏覽器
+Name[zh_TW]=瀏覽器
+Comment=Chromium on my computer
+Exec=/usr/local/bin/box-chrome
+Icon=web-browser
+Terminal=false
+Categories=Network;WebBrowser;GTK;
+StartupNotify=true

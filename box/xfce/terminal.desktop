@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=終端機
+Name[zh_TW]=終端機
+Comment=Terminal on my computer
+Exec=/usr/local/bin/box-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;GTK;
+StartupNotify=true

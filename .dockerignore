@@ -1,0 +1,16 @@
+.git
+.data
+.run
+.venv
+web
+tests
+docs
+vendor/hermes-agent/.git
+vendor/hermes-agent/.venv
+vendor/hermes-agent/tests
+vendor/hermes-agent/apps
+vendor/hermes-agent/website
+vendor/hermes-agent/.hermes
+**/__pycache__
+box/playwright/node_modules
+

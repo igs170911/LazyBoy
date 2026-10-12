@@ -1,0 +1,6 @@
+laya[serve,onnx]==0.3.27
+semantic-router[fastembed]==0.1.16
+fastembed==0.3.6
+litellm==1.104.0
+transformers==4.57.6
+numpy==1.26.4

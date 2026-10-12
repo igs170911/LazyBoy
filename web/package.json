@@ -1,0 +1,37 @@
+{
+  "name": "lazyboy-hermes-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && node ../tools/frontend-assets.test.mjs",
+    "preview": "vite preview",
+    "test:e2e": "playwright test e2e/hermes",
+    "test:e2e:desktop": "playwright test e2e/hermes --project=desktop",
+    "test:e2e:mobile": "playwright test e2e/hermes --project=mobile",
+    "test:e2e:report": "playwright show-report e2e-report"
+  },
+  "dependencies": {
+    "@blobatar/react": "^2.7.0",
+    "@fontsource/huninn": "^5.3.0",
+    "blobatar": "^2.7.0",
+    "highlight.js": "^11.12.0",
+    "lucide-react": "^1.52.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
+    "remark-cjk-friendly": "^2.3.2",
+    "remark-cjk-friendly-gfm-strikethrough": "^2.3.1",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

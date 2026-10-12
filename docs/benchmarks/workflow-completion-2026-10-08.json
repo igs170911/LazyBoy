@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-08",
+  "scope": "Product routing, local classifier integration, install checks, calendar recovery and comparison runner",
+  "offline_backend_tests": {"passed": 79, "excluded": 1, "excluded_test": "test_normal_rpc_close_notifies_runtime_and_rejects_pending_calls", "reason": "Restricted socket access", "paid_api": false},
+  "frontend_build": "passed",
+  "static_install_check": "passed",
+  "python_compile_and_shell_syntax": "passed",
+  "new_browser_tests": {"passed": 0, "blocked": 2, "reason": "Chromium launch: setsockopt Operation not permitted"},
+  "new_native_routing_test": "not run: Docker socket access denied",
+  "clean_host_install": "not run",
+  "live_model_comparison": "not run",
+  "formal_service_restarted": false,
+  "hermes_core_modified": false
+}

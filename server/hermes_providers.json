@@ -1,0 +1,799 @@
+[
+ {
+  "id": "fireworks",
+  "label": "Fireworks AI",
+  "description": "Fireworks AI (OpenAI-compatible direct model API)",
+  "base_url": "https://api.fireworks.ai/inference/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://app.fireworks.ai/settings/users/api-keys",
+  "models": [
+   "accounts/fireworks/models/kimi-k2p6",
+   "accounts/fireworks/models/glm-5p2",
+   "accounts/fireworks/models/kimi-k2p7-code"
+  ],
+  "local": false
+ },
+ {
+  "id": "openrouter",
+  "label": "OpenRouter",
+  "description": "OpenRouter (Pay-per-use API aggregator)",
+  "base_url": "https://openrouter.ai/api/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://openrouter.ai/keys",
+  "models": [
+   "anthropic/claude-sonnet-4.6",
+   "openai/gpt-5.4",
+   "deepseek/deepseek-chat",
+   "google/gemini-3.8-flash",
+   "google/gemini-3.7-flash",
+   "qwen/qwen3-plus"
+  ],
+  "local": false
+ },
+ {
+  "id": "novita",
+  "label": "NovitaAI",
+  "description": "NovitaAI (Cloud: Model API, Agent Sandbox, GPU Cloud)",
+  "base_url": "https://api.novita.ai/openai/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://novita.ai/settings/key-management",
+  "models": [
+   "moonshotai/kimi-k2.5",
+   "minimax/minimax-m2.7",
+   "zai-org/glm-5",
+   "deepseek/deepseek-v3-0324",
+   "deepseek/deepseek-r1-0528",
+   "qwen/qwen3-235b-a22b-fp8"
+  ],
+  "local": false
+ },
+ {
+  "id": "lmstudio",
+  "label": "LM Studio",
+  "description": "LM Studio (Local desktop app with built-in model server)",
+  "base_url": "http://127.0.0.1:1234/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [],
+  "local": true
+ },
+ {
+  "id": "anthropic",
+  "label": "Anthropic",
+  "description": "Anthropic (Claude models via API key or Claude Code)",
+  "base_url": "https://api.anthropic.com/v1",
+  "protocol": "messages",
+  "signup_url": "",
+  "models": [
+   "claude-fable-5.1",
+   "claude-fable-5",
+   "claude-opus-5-5",
+   "claude-opus-5",
+   "claude-sonnet-5",
+   "claude-opus-4-8",
+   "claude-opus-4-7",
+   "claude-opus-4-6",
+   "claude-sonnet-4-6",
+   "claude-opus-4-5-20251101",
+   "claude-sonnet-4-5-20250929",
+   "claude-opus-4-20250514",
+   "claude-sonnet-4-20250514",
+   "claude-haiku-4-5-20251001"
+  ],
+  "local": false
+ },
+ {
+  "id": "openai-api",
+  "label": "OpenAI API",
+  "description": "OpenAI API (api.openai.com, API key)",
+  "base_url": "https://api.openai.com/v1",
+  "protocol": "responses",
+  "signup_url": "",
+  "models": [
+   "gpt-6.1-sol",
+   "gpt-6.1-sol-pro",
+   "gpt-6-sol",
+   "gpt-6-sol-pro",
+   "gpt-6-luna",
+   "gpt-6-luna-pro",
+   "gpt-5.6-sol",
+   "gpt-5.6-sol-pro",
+   "gpt-5.6-terra",
+   "gpt-5.6-terra-pro",
+   "gpt-5.6-luna",
+   "gpt-5.6-luna-pro",
+   "gpt-5.5",
+   "gpt-5.5-pro",
+   "gpt-5.4",
+   "gpt-5.4-mini",
+   "gpt-5.4-nano",
+   "gpt-5-mini",
+   "gpt-5.3-codex",
+   "gpt-4.1",
+   "gpt-4o",
+   "gpt-4o-mini"
+  ],
+  "local": false
+ },
+ {
+  "id": "alibaba",
+  "label": "Qwen Cloud",
+  "description": "Qwen Cloud / DashScope (Qwen + multi-provider)",
+  "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "qwen3.8-max",
+   "qwen3.7-max",
+   "qwen3.7-plus",
+   "qwen3.6-plus",
+   "qwen3.6-flash",
+   "kimi-k2.5",
+   "qwen3.5-plus",
+   "qwen3-coder-plus",
+   "qwen3-coder-next",
+   "glm-5.2",
+   "glm-5",
+   "glm-4.7",
+   "deepseek-v4-pro",
+   "deepseek-v4-flash-0731",
+   "MiniMax-M2.5"
+  ],
+  "local": false
+ },
+ {
+  "id": "xiaomi",
+  "label": "Xiaomi MiMo",
+  "description": "Xiaomi MiMo (MiMo-V2.5 and V2 models: pro, omni, flash)",
+  "base_url": "https://api.xiaomimimo.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "mimo-v2.6-pro",
+   "mimo-v2.6-flash",
+   "mimo-v2.6-pro-ultraspeed",
+   "mimo-v2.5-pro",
+   "mimo-v2.5",
+   "mimo-v2-pro",
+   "mimo-v2-omni",
+   "mimo-v2-flash"
+  ],
+  "local": false
+ },
+ {
+  "id": "tencent-tokenhub",
+  "label": "Tencent TokenHub",
+  "description": "Tencent TokenHub (Hy4 preview via tokenhub.tencentmaas.com)",
+  "base_url": "https://tokenhub.tencentmaas.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "hy4-preview",
+   "hy3",
+   "hy3-preview"
+  ],
+  "local": false
+ },
+ {
+  "id": "tencent-tokenplan",
+  "label": "Tencent TokenPlan",
+  "description": "Tencent TokenPlan (Hy4 preview via api.lkeap.cloud.tencent.com, Anthropic Messages)",
+  "base_url": "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1",
+  "protocol": "messages",
+  "signup_url": "",
+  "models": [
+   "hy4-preview",
+   "hy3",
+   "hy3-preview"
+  ],
+  "local": false
+ },
+ {
+  "id": "nvidia",
+  "label": "NVIDIA NIM",
+  "description": "NVIDIA NIM (Nemotron models via build.nvidia.com or local NIM)",
+  "base_url": "https://integrate.api.nvidia.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://build.nvidia.com/",
+  "models": [
+   "nvidia/nemotron-3-ultra-550b-a55b",
+   "nvidia/nemotron-3-super-120b-a12b",
+   "nvidia/nemotron-3.5-lightning-30b-a3b",
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+   "z-ai/glm-5.3",
+   "z-ai/glm-5.2",
+   "moonshotai/kimi-k2.6",
+   "minimaxai/minimax-m3"
+  ],
+  "local": false
+ },
+ {
+  "id": "huggingface",
+  "label": "Hugging Face",
+  "description": "Hugging Face Inference Providers",
+  "base_url": "https://router.huggingface.co/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://huggingface.co/settings/tokens",
+  "models": [
+   "moonshotai/Kimi-K2.5",
+   "Qwen/Qwen3.5-397B-A17B",
+   "Qwen/Qwen3.5-35B-A3B",
+   "deepseek-ai/DeepSeek-V3.2",
+   "MiniMaxAI/MiniMax-M2.5",
+   "zai-org/GLM-5",
+   "XiaomiMiMo/MiMo-V2-Flash",
+   "moonshotai/Kimi-K2-Thinking",
+   "moonshotai/Kimi-K2.6"
+  ],
+  "local": false
+ },
+ {
+  "id": "gemini",
+  "label": "Google AI Studio",
+  "description": "Google AI Studio (Native Gemini API)",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "gemini-3.8-flash",
+   "gemini-3.7-flash",
+   "gemini-3.1-pro-preview",
+   "gemini-3-pro-preview",
+   "gemini-3.6-flash",
+   "gemini-3.1-flash-lite-preview"
+  ],
+  "local": false
+ },
+ {
+  "id": "deepseek",
+  "label": "DeepSeek",
+  "description": "DeepSeek (V3, R1, coder, direct API)",
+  "base_url": "https://api.deepseek.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://platform.deepseek.com/",
+  "models": [
+   "deepseek-flash",
+   "deepseek-v4-pro"
+  ],
+  "local": false
+ },
+ {
+  "id": "xai",
+  "label": "xAI",
+  "description": "xAI Grok (Direct API)",
+  "base_url": "https://api.x.ai/v1",
+  "protocol": "responses",
+  "signup_url": "",
+  "models": [
+   "grok-4.6",
+   "grok-composer-2.5-fast",
+   "grok-build-0.1",
+   "grok-4.5",
+   "grok-4.3",
+   "grok-4.20-0309-reasoning",
+   "grok-4.20-0309-non-reasoning",
+   "grok-4.20-multi-agent-0309"
+  ],
+  "local": false
+ },
+ {
+  "id": "zai",
+  "label": "Z.AI / GLM",
+  "description": "Z.AI / GLM (Zhipu direct API)",
+  "base_url": "https://api.z.ai/api/paas/v4",
+  "protocol": "chat_completions",
+  "signup_url": "https://z.ai/",
+  "models": [
+   "glm-5.3",
+   "glm-5.3-flash",
+   "glm-5.2",
+   "glm-5.1",
+   "glm-5",
+   "glm-5v-turbo",
+   "glm-5-turbo",
+   "glm-4.7",
+   "glm-4.5",
+   "glm-4.5-flash"
+  ],
+  "local": false
+ },
+ {
+  "id": "kimi-coding",
+  "label": "Kimi / Kimi Coding Plan",
+  "description": "Kimi Coding Plan (api.kimi.com & Moonshot API)",
+  "base_url": "https://api.moonshot.ai/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "kimi-k3",
+   "kimi-k2.7-code",
+   "kimi-k2.6",
+   "kimi-k2.5",
+   "kimi-for-coding",
+   "kimi-for-coding-highspeed",
+   "kimi-k2-thinking",
+   "kimi-k2-thinking-turbo",
+   "kimi-k2-turbo-preview",
+   "kimi-k2-0905-preview"
+  ],
+  "local": false
+ },
+ {
+  "id": "kimi-coding-cn",
+  "label": "Kimi / Moonshot (China)",
+  "description": "Kimi / Moonshot China (Domestic direct API)",
+  "base_url": "https://api.moonshot.cn/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "kimi-k3",
+   "kimi-k2.7-code",
+   "kimi-k2.7-code-highspeed",
+   "kimi-k2.6",
+   "kimi-k2.5",
+   "kimi-k2-thinking",
+   "kimi-k2-turbo-preview",
+   "kimi-k2-0905-preview"
+  ],
+  "local": false
+ },
+ {
+  "id": "stepfun",
+  "label": "StepFun Step Plan",
+  "description": "StepFun Step Plan (Agent / coding models via Step Plan API)",
+  "base_url": "https://api.stepfun.ai/step_plan/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "step-3.7-flash",
+   "step-3.5-flash",
+   "step-3.5-flash-2603"
+  ],
+  "local": false
+ },
+ {
+  "id": "minimax",
+  "label": "MiniMax",
+  "description": "MiniMax (Global direct API)",
+  "base_url": "https://api.minimax.io/anthropic/v1",
+  "protocol": "messages",
+  "signup_url": "",
+  "models": [
+   "MiniMax-M3",
+   "MiniMax-M2.7",
+   "MiniMax-M2.5",
+   "MiniMax-M2.1",
+   "MiniMax-M2"
+  ],
+  "local": false
+ },
+ {
+  "id": "minimax-cn",
+  "label": "MiniMax (China)",
+  "description": "MiniMax China (Domestic direct API)",
+  "base_url": "https://api.minimaxi.com/anthropic/v1",
+  "protocol": "messages",
+  "signup_url": "",
+  "models": [
+   "MiniMax-M3",
+   "MiniMax-M2.7",
+   "MiniMax-M2.5",
+   "MiniMax-M2.1",
+   "MiniMax-M2"
+  ],
+  "local": false
+ },
+ {
+  "id": "ollama-cloud",
+  "label": "Ollama Cloud",
+  "description": "Ollama Cloud (Cloud-hosted open models, ollama.com)",
+  "base_url": "https://ollama.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [],
+  "local": false
+ },
+ {
+  "id": "arcee",
+  "label": "Arcee AI",
+  "description": "Arcee AI (Trinity models, direct API)",
+  "base_url": "https://api.arcee.ai/api/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "trinity-large-thinking",
+   "trinity-large-preview",
+   "trinity-mini"
+  ],
+  "local": false
+ },
+ {
+  "id": "gmi",
+  "label": "GMI Cloud",
+  "description": "GMI Cloud (Multi-model direct API)",
+  "base_url": "https://api.gmi-serving.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://www.gmicloud.ai/",
+  "models": [
+   "zai-org/GLM-5.1-FP8",
+   "deepseek-ai/DeepSeek-V3.2",
+   "moonshotai/Kimi-K2.5",
+   "google/gemini-3.1-flash-lite-preview",
+   "anthropic/claude-sonnet-5",
+   "anthropic/claude-sonnet-4.6",
+   "openai/gpt-5.4"
+  ],
+  "local": false
+ },
+ {
+  "id": "kilocode",
+  "label": "Kilo Code",
+  "description": "Kilo Code (Kilo Gateway API)",
+  "base_url": "https://api.kilo.ai/api/gateway",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "anthropic/claude-opus-4.6",
+   "anthropic/claude-sonnet-4.6",
+   "openai/gpt-5.4",
+   "google/gemini-3-pro-preview",
+   "google/gemini-3-flash-preview"
+  ],
+  "local": false
+ },
+ {
+  "id": "opencode-zen",
+  "label": "OpenCode Zen",
+  "description": "OpenCode Zen (Curated models, pay-as-you-go)",
+  "base_url": "https://opencode.ai/zen/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "x-preview-f-free",
+   "kimi-k3",
+   "kimi-k2.5",
+   "kimi-k2.6",
+   "gpt-5.6-sol",
+   "gpt-5.6-terra",
+   "gpt-5.6-luna",
+   "gpt-5.5",
+   "gpt-5.5-pro",
+   "gpt-5.4-pro",
+   "gpt-5.4",
+   "gpt-5.4-mini",
+   "gpt-5.4-nano",
+   "gpt-5.3-codex",
+   "gpt-5.3-codex-spark",
+   "gpt-5.2",
+   "gpt-5.2-codex",
+   "gpt-5.1",
+   "gpt-5.1-codex",
+   "gpt-5.1-codex-max",
+   "gpt-5.1-codex-mini",
+   "gpt-5",
+   "gpt-5-codex",
+   "gpt-5-nano",
+   "claude-fable-5",
+   "claude-opus-5",
+   "claude-sonnet-5",
+   "claude-opus-4-8",
+   "claude-opus-4-7",
+   "claude-opus-4-6",
+   "claude-opus-4-5",
+   "claude-sonnet-4-6",
+   "claude-sonnet-4-5",
+   "claude-sonnet-4",
+   "claude-haiku-4-5",
+   "gemini-3.8-flash",
+   "gemini-3.7-flash",
+   "gemini-3.6-flash",
+   "gemini-3.5-flash",
+   "gemini-3.5-flash-lite"
+  ],
+  "local": false
+ },
+ {
+  "id": "opencode-go",
+  "label": "OpenCode Go",
+  "description": "OpenCode Go (Open models subscription)",
+  "base_url": "https://opencode.ai/zen/go/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "kimi-k3",
+   "kimi-k2.7-code",
+   "kimi-k2.6",
+   "kimi-k2.5",
+   "gpt-5.6-luna",
+   "grok-4.5",
+   "glm-5.3",
+   "glm-5.3-flash",
+   "glm-5.2",
+   "glm-5.1",
+   "glm-5",
+   "mimo-v2.5-pro",
+   "mimo-v2.5",
+   "mimo-v2-pro",
+   "mimo-v2-omni",
+   "minimax-m3",
+   "minimax-m2.7",
+   "minimax-m2.5",
+   "deepseek-v4-pro",
+   "deepseek-v4-flash",
+   "qwen3.8-max",
+   "qwen3.7-max",
+   "qwen3.7-plus",
+   "qwen3.6-plus",
+   "qwen3.5-plus",
+   "hy3",
+   "hy3-preview",
+   "muse-spark-1.2-contributor",
+   "muse-spark-1.3-contributor"
+  ],
+  "local": false
+ },
+ {
+  "id": "azure-foundry",
+  "label": "Azure Foundry",
+  "description": "Azure Foundry (OpenAI-style or Anthropic-style endpoint, your Azure AI deployment)",
+  "base_url": "",
+  "protocol": "chat_completions",
+  "signup_url": "https://ai.azure.com/",
+  "models": [],
+  "local": false
+ },
+ {
+  "id": "ai-gateway",
+  "label": "Vercel AI Gateway",
+  "description": "Vercel AI Gateway (Multi-model aggregator)",
+  "base_url": "https://ai-gateway.vercel.sh/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "moonshotai/kimi-k2.6",
+   "alibaba/qwen3.6-plus",
+   "zai/glm-5.1",
+   "minimax/minimax-m2.7",
+   "anthropic/claude-sonnet-4.6",
+   "anthropic/claude-opus-4.7",
+   "anthropic/claude-opus-4.6",
+   "anthropic/claude-haiku-4.5",
+   "openai/gpt-5.4",
+   "openai/gpt-5.4-mini",
+   "openai/gpt-5.3-codex",
+   "google/gemini-3.1-pro-preview",
+   "google/gemini-3-flash",
+   "google/gemini-3.1-flash-lite-preview",
+   "xai/grok-4.20-reasoning"
+  ],
+  "local": false
+ },
+ {
+  "id": "actual",
+  "label": "Actual Computer",
+  "description": "Actual Computer - hosted inference via api.actual.inc, or local offline inference via model.base_url in config.yaml",
+  "base_url": "https://api.actual.inc/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://actual.inc",
+  "models": [],
+  "local": false
+ },
+ {
+  "id": "alibaba-cn",
+  "label": "Alibaba Cloud DashScope (China)",
+  "description": "Alibaba Cloud DashScope, mainland-China endpoint",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "protocol": "chat_completions",
+  "signup_url": "",
+  "models": [
+   "qwen3.8-max",
+   "qwen3.7-max",
+   "qwen3.7-plus",
+   "qwen3.6-plus",
+   "qwen3.6-flash",
+   "kimi-k2.5",
+   "qwen3.5-plus",
+   "qwen3-coder-plus",
+   "qwen3-coder-next",
+   "glm-5.2",
+   "glm-5",
+   "glm-4.7",
+   "deepseek-v4-pro",
+   "deepseek-v4-flash-0731",
+   "MiniMax-M2.5"
+  ],
+  "local": false
+ },
+ {
+  "id": "alibaba-token-plan",
+  "label": "Alibaba Cloud (Token Plan)",
+  "description": "Alibaba Cloud Model Studio Token Plan (flat-token tier)",
+  "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://help.aliyun.com/zh/model-studio/",
+  "models": [
+   "qwen3.8-max-0902",
+   "qwen3.7-max",
+   "qwen3.7-plus",
+   "qwen3.6-plus",
+   "qwen3.6-flash",
+   "deepseek-v4-pro",
+   "deepseek-v4-flash",
+   "deepseek-v3.2",
+   "kimi-k2.7-code",
+   "kimi-k2.6",
+   "kimi-k2.5",
+   "glm-5.2",
+   "glm-5.1",
+   "glm-5"
+  ],
+  "local": false
+ },
+ {
+  "id": "alibaba-token-plan-cn",
+  "label": "Alibaba Cloud (Token Plan, China)",
+  "description": "Alibaba Cloud Model Studio Token Plan, mainland-China endpoint",
+  "base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://help.aliyun.com/zh/model-studio/",
+  "models": [
+   "qwen3.8-max-0902",
+   "qwen3.7-max",
+   "qwen3.7-plus",
+   "qwen3.6-plus",
+   "qwen3.6-flash",
+   "deepseek-v4-pro",
+   "deepseek-v4-flash",
+   "deepseek-v3.2",
+   "kimi-k2.7-code",
+   "kimi-k2.6",
+   "kimi-k2.5",
+   "glm-5.2",
+   "glm-5.1",
+   "glm-5"
+  ],
+  "local": false
+ },
+ {
+  "id": "alibaba-coding-plan",
+  "label": "Alibaba Cloud (Coding Plan)",
+  "description": "Alibaba Cloud Coding Plan (Dedicated coding tier)",
+  "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://help.aliyun.com/zh/model-studio/",
+  "models": [
+   "qwen3.7-plus",
+   "qwen3.6-plus",
+   "qwen3.5-plus",
+   "qwen3-max-2026-01-23",
+   "qwen3-coder-plus",
+   "qwen3-coder-next",
+   "kimi-k2.5",
+   "glm-5",
+   "glm-4.7",
+   "MiniMax-M2.5"
+  ],
+  "local": false
+ },
+ {
+  "id": "alibaba-coding-plan-cn",
+  "label": "Alibaba Cloud (Coding Plan, China)",
+  "description": "Alibaba Cloud Coding Plan, mainland-China endpoint",
+  "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://help.aliyun.com/zh/model-studio/",
+  "models": [
+   "qwen3.7-plus",
+   "qwen3.6-plus",
+   "qwen3.5-plus",
+   "qwen3-max-2026-01-23",
+   "qwen3-coder-plus",
+   "qwen3-coder-next",
+   "kimi-k2.5",
+   "glm-5",
+   "glm-4.7",
+   "MiniMax-M2.5"
+  ],
+  "local": false
+ },
+ {
+  "id": "commandcode",
+  "label": "CommandCode",
+  "description": "CommandCode — 20+ models via OpenAI-compatible API",
+  "base_url": "https://api.commandcode.ai/provider/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://commandcode.ai/",
+  "models": [
+   "deepseek/deepseek-v4-pro",
+   "deepseek/deepseek-v4-flash",
+   "Qwen/Qwen3.7-Max",
+   "Qwen/Qwen3.6-Plus",
+   "moonshotai/Kimi-K2.6",
+   "zai-org/GLM-5.1",
+   "MiniMaxAI/MiniMax-M2.7",
+   "stepfun/Step-3.5-Flash",
+   "xiaomi/mimo-v2.5-pro",
+   "google/gemini-3.5-flash",
+   "gpt-5.5"
+  ],
+  "local": false
+ },
+ {
+  "id": "commandcode-anthropic",
+  "label": "CommandCode (Anthropic)",
+  "description": "CommandCode — Claude models via Anthropic Messages API",
+  "base_url": "https://api.commandcode.ai/provider/v1",
+  "protocol": "messages",
+  "signup_url": "https://commandcode.ai/",
+  "models": [
+   "claude-sonnet-4-6",
+   "claude-opus-4-7",
+   "claude-haiku-4-5-20251001"
+  ],
+  "local": false
+ },
+ {
+  "id": "deepinfra",
+  "label": "DeepInfra",
+  "description": "DeepInfra — 100+ open models, pay-per-use",
+  "base_url": "https://api.deepinfra.com/v1/openai",
+  "protocol": "chat_completions",
+  "signup_url": "https://deepinfra.com/dash/api_keys",
+  "models": [],
+  "local": false
+ },
+ {
+  "id": "meta-ai",
+  "label": "Meta Model API",
+  "description": "Meta Muse Spark family (Meta Superintelligence Labs)",
+  "base_url": "https://api.meta.ai/v1",
+  "protocol": "responses",
+  "signup_url": "https://developer.meta.com/ai/",
+  "models": [
+   "muse-spark-1.2"
+  ],
+  "local": false
+ },
+ {
+  "id": "nebius-token-factory",
+  "label": "Nebius Token Factory",
+  "description": "Nebius Token Factory — OpenAI-compatible inference",
+  "base_url": "https://api.tokenfactory.nebius.com/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://tokenfactory.nebius.com/",
+  "models": [
+   "Qwen/Qwen3.5-397B-A17B-fast",
+   "deepseek-ai/DeepSeek-V4-Pro",
+   "zai-org/GLM-5.1",
+   "moonshotai/Kimi-K2.5-fast",
+   "MiniMaxAI/MiniMax-M2.5-fast",
+   "deepseek-ai/DeepSeek-V3.2-fast",
+   "NousResearch/Hermes-4-70B",
+   "openai/gpt-oss-120b-fast",
+   "meta-llama/Llama-3.3-70B-Instruct"
+  ],
+  "local": false
+ },
+ {
+  "id": "router",
+  "label": "Ramp Router",
+  "description": "Ramp Router (router.com) — routes each request to the cheapest model that clears your quality bar",
+  "base_url": "https://api.router.com/v1",
+  "protocol": "responses",
+  "signup_url": "https://app.router.com/keys",
+  "models": [],
+  "local": false
+ },
+ {
+  "id": "upstage",
+  "label": "Upstage Solar",
+  "description": "Upstage (Solar API)",
+  "base_url": "https://api.upstage.ai/v1",
+  "protocol": "chat_completions",
+  "signup_url": "https://console.upstage.ai/api-keys",
+  "models": [
+   "solar-pro3"
+  ],
+  "local": false
+ }
+]

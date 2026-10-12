@@ -1,0 +1,7 @@
+{
+  "answer": ["你好", "請解釋什麼是遞迴", "將這段文字翻譯成英文", "把以下內容改寫成簡短訊息", "幫我整理剛才的想法", "Explain recursion", "Translate the supplied paragraph", "Summarize the text above", "Rewrite this draft politely"],
+  "native": ["查詢今天台北天氣", "搜尋最新官方公告", "讀取本機專案的設定檔", "執行測試並查看結果", "查詢 Google Drive 文件", "Search for current official news", "Read the local configuration file", "Run the project tests", "Find the document in Google Drive"],
+  "browser": ["登入網站並填寫表單", "操作瀏覽器裡的動態網頁", "打開購物網站查看購物車", "Log in to the website and fill out the form", "Use the browser to interact with the dashboard", "Open the shopping cart in the browser"],
+  "desktop": ["查看桌面畫面", "操作螢幕上的原生應用程式", "在桌面應用程式點擊按鈕", "Inspect the desktop screenshot", "Use the native desktop application", "Click the button in the desktop window"],
+  "work": ["完整實作並驗證這個功能", "重構後端並完成測試", "深入研究比較多個方案", "Implement and verify the entire feature", "Refactor the backend and run tests", "Research and compare multiple approaches in depth"]
+}

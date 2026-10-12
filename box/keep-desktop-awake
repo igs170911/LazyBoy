@@ -1,0 +1,28 @@
+#!/bin/bash
+# Idempotent: apply to a running desktop without reconnecting VNC or Chromium.
+set -euo pipefail
+export DISPLAY="${DISPLAY:-:1}"
+export XDG_CONFIG_HOME=/home/box/.config
+export XDG_RUNTIME_DIR=/tmp/box-runtime
+if [[ -f /tmp/lazyboy/dbus.env ]]; then
+  source /tmp/lazyboy/dbus.env
+  export DBUS_SESSION_BUS_ADDRESS
+fi
+
+xset s 0 0
+xset s noblank
+xset s reset
+# Xvnc commonly has no DPMS extension; that already means it cannot power off.
+xset -dpms 2>/dev/null || true
+# Some Xvnc builds expose these as read-only once started. Avoid trying to
+# rewrite values already fixed at zero by the launch arguments.
+for parameter in IdleTimeout MaxIdleTime MaxDisconnectionTime MaxConnectionTime; do
+  if [[ "$(vncconfig -display "$DISPLAY" -get "$parameter")" != "0" ]]; then
+    vncconfig -display "$DISPLAY" -set "$parameter=0"
+  fi
+done
+# Persist in the desktop's home volume, on the same D-Bus session as its apps.
+gsettings set org.gnome.desktop.session idle-delay 0
+gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
+gsettings set org.gnome.desktop.screensaver lock-enabled false
+gsettings set org.gnome.desktop.lockdown disable-lock-screen true

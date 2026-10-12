@@ -1,0 +1,739 @@
+<style id="lazyboy-novnc-skin">
+html, body {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  background: #111 !important;
+}
+#noVNC_control_bar,
+#noVNC_control_bar_handle,
+#noVNC_control_bar_anchor,
+#noVNC_control_bar_hint,
+#noVNC_status,
+#noVNC_connect_dlg,
+#noVNC_password_dlg,
+#noVNC_credentials_dlg,
+#noVNC_version_dlg,
+#noVNC_verify_server_dlg,
+#noVNC_transition,
+#noVNC_clipboard,
+#noVNC_settings,
+#noVNC_power,
+.noVNC_logo,
+#noVNC_control_bar .noVNC_scroll,
+#noVNC_fallback_error {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  transform: none !important;
+}
+#noVNC_container, #noVNC_container > div, #noVNC_container canvas { border-radius:0!important; clip-path:none!important; }
+#noVNC_container { position:absolute!important; inset:0!important; width:100%!important; height:100%!important; overflow:auto!important; background:#111!important; }
+#noVNC_screen { width:100%!important; height:100%!important; }
+#noVNC_container canvas { flex:none!important; margin:auto!important; touch-action:none; }
+#lazyboy-tools { position:absolute;inset:0 0 auto;z-index:100;height:48px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#181818;border-bottom:1px solid #ffffff1f;box-sizing:border-box;overflow-x:auto;font:12px system-ui;color:#eee; }
+#lazyboy-tools button,#lazyboy-clipboard button { flex-shrink:0;min-height:36px;padding:6px 10px;border:1px solid #ffffff24;border-radius:7px;background:#252525;color:#eee;cursor:pointer;font:inherit;touch-action:manipulation; }
+#lazyboy-tools button[aria-pressed="true"] { background:#395b50; }
+#lazyboy-clipboard { position:absolute;z-index:101;inset:52px 8px auto;padding:12px;background:#202020;border:1px solid #ffffff26;border-radius:10px;color:#eee;font:13px system-ui;box-shadow:0 12px 32px #0008; }
+#lazyboy-clipboard[hidden] { display:none; }
+#lazyboy-clipboard textarea { box-sizing:border-box;width:100%;height:110px;margin:8px 0;padding:10px;background:#111;color:#fff;border:1px solid #555;border-radius:6px;font:16px system-ui;user-select:text; }
+#lazyboy-clipboard p { margin:8px 0 0;line-height:1.5; }
+#lazyboy-pan { position:absolute;inset:0;z-index:99;touch-action:none;cursor:grab; }
+#lazyboy-pan[hidden] { display:none; }
+#lazyboy-tools { display:none; }
+html[data-mobile="true"] body { display:grid;grid-template:"screen" minmax(0,1fr) "controls" auto / minmax(0,1fr); }
+html[data-mobile="true"] #noVNC_container { position:relative!important;grid-area:screen;min-width:0;min-height:0; }
+html[data-mobile="true"] #lazyboy-tools { position:relative;inset:auto;grid-area:controls;display:flex;flex-direction:column;align-items:stretch;height:auto;max-height:46dvh;padding:8px 8px max(8px,env(safe-area-inset-bottom));border-top:1px solid #ffffff1f;border-bottom:0;overflow:auto;gap:6px; }
+#lazyboy-more[hidden] { display:none !important; }
+#lazyboy-toast { position:fixed;z-index:130;left:50%;bottom:16px;transform:translateX(-50%);padding:8px 14px;border-radius:999px;background:#111c;color:#fff;font:13px system-ui;pointer-events:none; }
+#lazyboy-toast[hidden] { display:none; }
+html[data-mobile="true"] #lazyboy-toast { bottom:calc(72px + env(safe-area-inset-bottom)); }
+#lazyboy-tools .buttons { display:flex;gap:5px;overflow-x:auto;flex-shrink:0; }
+#lazyboy-tools button { min-height:44px;min-width:44px; }
+#lazyboy-tools .secondary button { font-size:12px; }
+#lazyboy-trackpad { height:clamp(70px,14dvh,120px);flex-shrink:0;display:grid;place-items:center;border:1px solid #ffffff30;border-radius:10px;background:#ffffff08;color:#aaa;touch-action:none;user-select:none;font-size:12px; }
+#lazyboy-trackpad[hidden] { display:none; }
+#lazyboy-pointer-help { margin:0;color:#999;font-size:11px;line-height:1.4; }
+#lazyboy-cursor { display:none;position:fixed;z-index:98;width:16px;height:16px;border:2px solid white;border-radius:50%;box-shadow:0 0 0 1px #000;transform:translate(-50%,-50%);pointer-events:none; }
+#lazyboy-cursor::after { content:"";position:absolute;inset:4px;background:white;border-radius:50%; }
+html[data-mobile="true"][data-landscape="true"] body { grid-template:"controls screen" minmax(0,1fr) / 190px minmax(0,1fr); }
+html[data-mobile="true"][data-landscape="true"] #lazyboy-tools { max-height:100%;border-top:0;border-right:1px solid #ffffff1f; }
+html[data-landscape="true"] #lazyboy-tools .buttons { flex-wrap:wrap;overflow:visible; }
+html[data-landscape="true"] #lazyboy-trackpad { height:80px; }
+html[data-theme="light"] #lazyboy-trackpad { background:#eeeef0;color:#62626a;border-color:#d0d0d6; }
+html[data-theme="light"] #lazyboy-pointer-help { color:#62626a; }
+html[data-theme="light"] #lazyboy-tools { background:#f7f7f8;color:#18181b;border-color:#d8d8dc; }
+html[data-theme="light"] #lazyboy-tools button,
+html[data-theme="light"] #lazyboy-clipboard button { background:#fff;color:#18181b;border-color:#d8d8dc; }
+html[data-theme="light"] #lazyboy-tools button[aria-pressed="true"] { background:#dceee6; }
+html[data-theme="light"] #lazyboy-clipboard { background:#fff;color:#18181b;border-color:#d8d8dc;box-shadow:0 12px 32px #0002; }
+html[data-theme="light"] #lazyboy-clipboard textarea { background:#f5f5f6;color:#18181b;border-color:#c9c9ce; }
+</style>
+<script id="lazyboy-novnc-bridge">
+(function () {
+  // The viewer is same-origin; follow the host theme without changing remote pixels.
+  try {
+    var hostRoot = window.parent.document.documentElement;
+    var syncTheme = function() { document.documentElement.dataset.theme = hostRoot.dataset.theme || "dark"; };
+    syncTheme();
+    if (window.parent !== window) {
+      var themeObserver = new MutationObserver(syncTheme);
+      themeObserver.observe(hostRoot, { attributes:true, attributeFilter:["data-theme"] });
+      window.addEventListener("pagehide", function() { themeObserver.disconnect(); });
+    }
+  } catch (_themeError) {}
+  var ui = null;
+  var messages = null;
+  import("./core/rfb.js").then(function(mod) { messages = mod.default.messages; }).catch(function() {});
+  var lastHost = "";
+  var lastBox = "";
+  var lastPasteAt = 0;
+  import("./app/ui.js").then(function (mod) {
+    ui = mod && (mod.default || mod.UI || mod);
+  }).catch(function () {});
+
+  function hideChrome() {
+    var ids = [
+      "noVNC_control_bar", "noVNC_control_bar_anchor", "noVNC_control_bar_handle",
+      "noVNC_control_bar_hint", "noVNC_status", "noVNC_connect_dlg", "noVNC_transition",
+      "noVNC_credentials_dlg", "noVNC_clipboard", "noVNC_settings"
+    ];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el && el.classList && (el.classList.contains("noVNC_open") || el.classList.contains("noVNC_active"))) el.classList.remove("noVNC_open", "noVNC_active");
+    }
+    var bar = document.getElementById("noVNC_control_bar");
+    if (bar && bar.classList && bar.classList.contains("noVNC_open")) bar.classList.remove("noVNC_open");
+  }
+
+  function rfb() {
+    if (ui && ui.rfb) return ui.rfb;
+    if (window.UI && window.UI.rfb) return window.UI.rfb;
+    return null;
+  }
+
+  function clipboardBox() {
+    return document.getElementById("noVNC_clipboard_text");
+  }
+
+  var zoom = 1;
+  var paintMobilePointer = function() {};
+  var resetMobilePointer = function() {};
+  function fillCanvas(session) {
+    if (!session) return;
+    var canvas = session._canvas;
+    var screen = session._screen;
+    var container = document.getElementById("noVNC_container");
+    if (!canvas || !screen || !container) return;
+    session.resizeSession = false;
+    session.scaleViewport = false;
+    session.clipViewport = false;
+    var display = session._display;
+    if (display && !display.__lazyboyFill) {
+      display.__lazyboyFill = true;
+      display._rescale = function () { this._scale = 1; };
+      display.absX = function (x) { return Math.floor(x / (canvas.clientWidth || 1) * this._fbWidth); };
+      display.absY = function (y) { return Math.floor(y / (canvas.clientHeight || 1) * this._fbHeight); };
+    }
+    var w = canvas.width || 1024, h = canvas.height || 768;
+    var fit = Math.min(container.clientWidth / w, container.clientHeight / h);
+    canvas.style.setProperty("width", Math.round(w * fit * zoom) + "px", "important");
+    canvas.style.setProperty("height", Math.round(h * fit * zoom) + "px", "important");
+    screen.style.overflow = "auto";
+    screen.style.background = "#111";
+    paintMobilePointer();
+  }
+
+  function status(text) {
+    var el = document.getElementById("lazyboy-clipboard-status");
+    if (el) el.textContent = text;
+  }
+
+  function writeHost(text) {
+    if (typeof text !== "string") return;
+    lastBox = text;
+    var output = document.getElementById("lazyboy-clipboard-text");
+    if (output) output.value = text;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () { status("電腦文字已收到，請按「複製到本機」或手動選取文字。"); });
+    }
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "lazyboy-clipboard-write", text: text }, window.location.origin);
+      }
+    } catch (_e) {}
+  }
+
+  function requestBoxClipboard(session) {
+    if (messages && session && (session._clipboardServerCapabilitiesActions || {})[1 << 25]) {
+      messages.extendedClipboardRequest(session._sock, [1]);
+    }
+  }
+
+  function toast(text) {
+    var el = document.getElementById("lazyboy-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "lazyboy-toast";
+      el.setAttribute("role", "status");
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.hidden = false;
+    clearTimeout(el._hide);
+    el._hide = setTimeout(function () { el.hidden = true; }, 1200);
+  }
+
+  function copyBox(text) {
+    writeHost(text);
+    if (text) toast("已複製");
+  }
+
+  function applyHostPaste(text, typeKey) {
+    if (!text) return;
+    var now = Date.now();
+    if (now - lastPasteAt < 250 && text === lastHost) return;
+    lastPasteAt = now;
+    lastHost = text;
+    var session = rfb();
+    if (session && typeof session.clipboardPasteFrom === "function") {
+      // Some servers advertise UTF-8 Provide but not Notify. noVNC otherwise
+      // falls back to Latin-1 and corrupts Chinese text on these servers.
+      var formats = session._clipboardServerCapabilitiesFormats || {};
+      var actions = session._clipboardServerCapabilitiesActions || {};
+      if (messages && formats[1] && actions[1 << 28] && !actions[1 << 27]) {
+        session._clipboardText = text;
+        messages.extendedClipboardProvide(session._sock, [1], [text]);
+      } else {
+        session.clipboardPasteFrom(text);
+      }
+    }
+    var box = clipboardBox();
+    if (box) box.value = text;
+    if (typeKey && session && typeof session.sendKey === "function") {
+      setTimeout(function () { sendCtrlChord(session, 0x76, "KeyV", false); }, 40);
+    }
+  }
+
+  function askParentClipboard(done) {
+    if (!window.parent || window.parent === window) {
+      done("");
+      return;
+    }
+    var settled = false;
+    function finish(text) {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("message", onMsg);
+      done(text || "");
+    }
+    var onMsg = function (event) {
+      if (event.origin !== window.location.origin || event.source !== window.parent) return;
+      if (!event.data || event.data.type !== "lazyboy-clipboard-text") return;
+      finish(typeof event.data.text === "string" ? event.data.text : "");
+    };
+    window.addEventListener("message", onMsg);
+    try {
+      window.parent.postMessage({ type: "lazyboy-clipboard-read" }, window.location.origin);
+    } catch (_e) {
+      finish("");
+      return;
+    }
+    setTimeout(function () { finish(""); }, 400);
+  }
+
+  function readHostText(done) {
+    var finished = false;
+    function once(text) {
+      if (finished) return;
+      if (text) {
+        finished = true;
+        done(text);
+      }
+    }
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(function (text) {
+        if (text) once(text);
+        else askParentClipboard(function (parentText) {
+          if (finished) return;
+          finished = true;
+          done(parentText || "");
+        });
+      }).catch(function () {
+        askParentClipboard(function (parentText) {
+          if (finished) return;
+          finished = true;
+          done(parentText || "");
+        });
+      });
+      return;
+    }
+    askParentClipboard(function (parentText) {
+      if (finished) return;
+      finished = true;
+      done(parentText || "");
+    });
+  }
+
+  function pasteHost(typeKey) {
+    readHostText(function (text) {
+      if (!text) return;
+      applyHostPaste(text, typeKey);
+    });
+  }
+
+  function bindRfb(session) {
+    if (!session) return;
+    if (session.__lazyboyBound) return;
+    session.__lazyboyBound = true;
+    fillCanvas(session);
+    // Keep idle viewers idle. Rescale only when the viewport/framebuffer changes.
+    var resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(function() { fillCanvas(session); }) : null;
+    var canvasObserver = new MutationObserver(function() { fillCanvas(session); });
+    if (resizeObserver) {
+      var container = document.getElementById("noVNC_container");
+      if (container) resizeObserver.observe(container);
+    }
+    if (session._canvas) canvasObserver.observe(session._canvas, {attributes:true,attributeFilter:["width","height"]});
+    function stopWatching() { if (resizeObserver) resizeObserver.disconnect(); canvasObserver.disconnect(); window.removeEventListener("pagehide",stopWatching); }
+    window.addEventListener("pagehide",stopWatching);
+    session.addEventListener("clipboard", function (event) {
+      var text = event && event.detail && event.detail.text;
+      if (typeof text === "string") copyBox(text);
+    });
+    session.addEventListener("disconnect", function() { stopWatching(); resetMobilePointer(); reportViewer(paused ? "paused" : "disconnected"); scheduleReconnect(); });
+    session.addEventListener("connect", function () {
+      clearTimeout(stableTimer);
+      stableTimer = setTimeout(function() { retries = 0; }, 10000);
+      reportViewer("connected");
+      resetMobilePointer();
+      hideChrome();
+      fillCanvas(session);
+    });
+  }
+
+  // noVNC 1.3 only auto-reconnects after a clean close; reconnect the socket
+  // in place for dropped links instead of waiting for the host to reload the page.
+  var paused = false, pauseTimer = null, retryTimer = null, stableTimer = null, retries = 0, wasActive = true;
+  function connectNow() {
+    clearTimeout(retryTimer); retryTimer = null;
+    if (paused || !ui || rfb()) return;
+    try { ui.connect(); } catch (_e) {}
+  }
+  function scheduleReconnect() {
+    if (paused || retryTimer || !ui || retries >= 3) return;
+    retryTimer = setTimeout(connectNow, 500 * Math.pow(2, retries++));
+  }
+  // Nobody is looking: stop making the box encode frames for a hidden viewer.
+  function setActive(active) {
+    if (active) {
+      clearTimeout(pauseTimer); pauseTimer = null;
+      if (!paused) { if (!wasActive) lastViewerReport = 0; wasActive = true; return; }
+      paused = false; retries = 0; wasActive = true;
+      connectNow();
+      return;
+    }
+    wasActive = false;
+    if (paused || pauseTimer) return;
+    pauseTimer = setTimeout(function() {
+      pauseTimer = null;
+      paused = true;
+      clearTimeout(retryTimer); retryTimer = null;
+      var live = rfb();
+      if (live) { try { ui.disconnect(); } catch (_e) { live.disconnect(); } }
+      reportViewer("paused");
+    }, 15000);
+  }
+  window.addEventListener("message", function(event) {
+    if (event.origin !== window.location.origin || event.source !== window.parent) return;
+    if (event.data && event.data.type === "lazyboy:viewer-active") setActive(!!event.data.active);
+  });
+
+  var lastViewerReport = 0;
+  var lastViewerState = "";
+  function reportViewer(state) {
+    lastViewerState = state;
+    if (window.parent !== window) window.parent.postMessage({type:"lazyboy:viewer-status",state:state},window.location.origin);
+  }
+  function poll() {
+    var live = rfb(), state = paused && !live ? "paused" : live ? live._rfbConnectionState : (
+      document.documentElement.classList.contains("noVNC_connecting") ||
+      document.documentElement.classList.contains("noVNC_reconnecting") || !ui ? "connecting" : "disconnected");
+    if (state !== lastViewerState || Date.now() - lastViewerReport > 4000) {
+      lastViewerReport = Date.now();
+      reportViewer(state);
+    }
+    hideChrome();
+    bindRfb(live);
+    var box = clipboardBox();
+    if (box && box.value && box.value !== lastBox && box.value !== lastHost) copyBox(box.value);
+  }
+
+  // Same interaction as LazyBoy's viewer, adapted to this noVNC version's
+  // scaled-coordinate _sendMouse(x, y, buttonMask) API.
+  function mountPointerControls(tools) {
+    var pad = tools.querySelector("#lazyboy-trackpad");
+    var modeButton = tools.querySelector('[data-action="mode"]');
+    var dragButton = tools.querySelector('[data-action="drag"]');
+    var cursor = document.createElement("div"); cursor.id = "lazyboy-cursor"; document.body.appendChild(cursor);
+    var trackpad = false, dragging = false, pointer = { x:.5, y:.5 };
+    var points = new Map(), gesture = null, scrollX = 0, scrollY = 0;
+    function usable() { var r = rfb(); return r && r._rfbConnectionState === "connected" && !r.viewOnly && !r._viewOnly; }
+    function geometry() { var r = rfb(); return r && r._canvas && r._canvas.getBoundingClientRect(); }
+    paintMobilePointer = function() {
+      var rect = geometry(), container = document.getElementById("noVNC_container").getBoundingClientRect();
+      var x = rect ? rect.left + pointer.x * rect.width : 0, y = rect ? rect.top + pointer.y * rect.height : 0;
+      var visible = document.documentElement.dataset.mobile === "true" && trackpad && usable() && rect && x >= container.left && x < container.right && y >= container.top && y < container.bottom;
+      cursor.style.display = visible ? "block" : "none";
+      cursor.style.left = x + "px"; cursor.style.top = y + "px";
+    };
+    function send(mask) {
+      var r = rfb(), rect = geometry();
+      if (!usable() || !rect || !r._sendMouse) return;
+      r._sendMouse(Math.max(0, Math.min(rect.width - 1, pointer.x * rect.width)), Math.max(0, Math.min(rect.height - 1, pointer.y * rect.height)), mask);
+      paintMobilePointer();
+    }
+    function release() {
+      if (dragging) send(0);
+      dragging = false; dragButton.setAttribute("aria-pressed", "false");
+      dragButton.textContent = "拖曳";
+    }
+    function click(mask) { release(); send(mask); send(0); }
+    function tap(mask) {
+      release();
+      send(mask);
+      setTimeout(function () { send(0); }, 40);
+    }
+    function update() {
+      pad.hidden = !trackpad;
+      modeButton.textContent = trackpad ? "觸控板" : "直接點選";
+      modeButton.setAttribute("aria-pressed", String(trackpad));
+      tools.querySelector("#lazyboy-pointer-help").textContent = trackpad ? "輕點左鍵 · 雙指捲動／輕點右鍵 · 拖曳再按一次放開" : "輕點左鍵 · 上下滑捲動 · 按住出選單";
+      paintMobilePointer(); fillCanvas(rfb());
+    }
+    function center() {
+      var list = Array.from(points.values());
+      return { x:list.reduce(function(n,p) { return n+p.x; },0)/list.length, y:list.reduce(function(n,p) { return n+p.y; },0)/list.length };
+    }
+    pad.addEventListener("pointerdown", function(e) {
+      e.preventDefault(); if (!usable()) return;
+      pad.setPointerCapture(e.pointerId); points.set(e.pointerId, {x:e.clientX,y:e.clientY});
+      var c = center();
+      if (!gesture) { gesture = {start:c,last:c,moved:false,fingers:1,time:Date.now()}; scrollX=0;scrollY=0; }
+      if (points.size > 1) { release();gesture.fingers=Math.max(gesture.fingers,points.size);gesture.start=c;gesture.last=c; }
+    });
+    pad.addEventListener("pointermove", function(e) {
+      if (!points.has(e.pointerId) || !gesture) return;
+      e.preventDefault(); points.set(e.pointerId,{x:e.clientX,y:e.clientY});
+      var c=center(), dx=c.x-gesture.last.x, dy=c.y-gesture.last.y; gesture.last=c;
+      if (Math.hypot(c.x-gesture.start.x,c.y-gesture.start.y)>4) gesture.moved=true;
+      if (!gesture.moved) return;
+      if (gesture.fingers === 2 && points.size === 2) {
+        scrollX-=dx;scrollY-=dy;
+        while(Math.abs(scrollY)>=24) { click(scrollY<0?8:16);scrollY+=scrollY<0?24:-24; }
+        while(Math.abs(scrollX)>=24) { click(scrollX<0?32:64);scrollX+=scrollX<0?24:-24; }
+      } else if (gesture.fingers === 1) {
+        var rect=geometry(); if (!rect) return;
+        pointer.x=Math.max(0,Math.min(1,pointer.x+dx/rect.width));
+        pointer.y=Math.max(0,Math.min(1,pointer.y+dy/rect.height));
+        send(dragging?1:0);
+      }
+    });
+    pad.addEventListener("pointerup", function(e) {
+      if (!points.has(e.pointerId)) return;
+      e.preventDefault();points.delete(e.pointerId);
+      if (points.size) { if(gesture) gesture.last=center();return; }
+      if (gesture && !gesture.moved && Date.now()-gesture.time<450 && !dragging) click(gesture.fingers===2?4:1);
+      gesture=null;
+    });
+    function cancel() {
+      points.clear();
+      if (fingers) fingers.clear();
+      if (gesture && gesture.mode === "drag") send(0);
+      dropTimer(gesture);
+      gesture = null;
+      release();
+    }
+    resetMobilePointer = cancel;
+    pad.addEventListener("pointercancel",cancel);
+    window.addEventListener("blur",cancel);window.addEventListener("pagehide",cancel);
+    document.addEventListener("visibilitychange",function() { if(document.hidden)cancel(); });
+    document.getElementById("noVNC_container").addEventListener("scroll",paintMobilePointer,true);
+    ["touchstart","touchmove","touchend"].forEach(function(type) {
+      document.addEventListener(type,function(e) {
+        if(document.documentElement.dataset.mobile!=="true" || !e.target.closest("canvas"))return;
+        e.preventDefault();e.stopImmediatePropagation();
+      },{capture:true,passive:false});
+    });
+    var screenEl = document.getElementById("noVNC_container");
+    var fingers = new Map(), gesture = null;
+    function dropTimer(g) { if (g && g.timer) clearTimeout(g.timer); }
+    function fingerPoint(e) {
+      var rect = geometry();
+      if (!rect || !rect.width || !rect.height) return null;
+      return { x:e.clientX, y:e.clientY, nx:Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width)), ny:Math.max(0,Math.min(1,(e.clientY-rect.top)/rect.height)) };
+    }
+    function fingerCenter() {
+      var list = Array.from(fingers.values());
+      return { x:list.reduce(function(n,p){return n+p.x;},0)/list.length, y:list.reduce(function(n,p){return n+p.y;},0)/list.length, nx:list[0].nx, ny:list[0].ny };
+    }
+    function roll(dx, dy) {
+      scrollX -= dx; scrollY -= dy;
+      while (Math.abs(scrollY) >= 16) { click(scrollY < 0 ? 8 : 16); scrollY += scrollY < 0 ? 16 : -16; }
+      while (Math.abs(scrollX) >= 16) { click(scrollX < 0 ? 32 : 64); scrollX += scrollX < 0 ? 16 : -16; }
+    }
+    screenEl.addEventListener("pointerdown", function(e) {
+      if (document.documentElement.dataset.mobile !== "true" || trackpad || !e.target.closest || !e.target.closest("canvas")) return;
+      e.preventDefault(); e.stopPropagation();
+      if (!usable()) return;
+      var point = fingerPoint(e); if (!point) return;
+      try { screenEl.setPointerCapture(e.pointerId); } catch (_e) {}
+      fingers.set(e.pointerId, point);
+      if (!gesture) {
+        gesture = { start:point, last:point, moved:false, fingers:1, time:Date.now(), long:false, mode:"pending", axis:null, timer:null };
+        scrollX = 0; scrollY = 0;
+        gesture.timer = setTimeout(function() {
+          if (!gesture || gesture.moved || gesture.fingers !== 1) return;
+          gesture.long = true;
+        }, 400);
+      }
+      if (fingers.size > 1) {
+        dropTimer(gesture);
+        gesture.fingers = Math.max(gesture.fingers, fingers.size);
+        gesture.mode = "scroll";
+        gesture.last = fingerCenter();
+      }
+    }, true);
+    screenEl.addEventListener("pointermove", function(e) {
+      if (trackpad || !fingers.has(e.pointerId) || !gesture) return;
+      e.preventDefault(); e.stopPropagation();
+      var point = fingerPoint(e); if (!point) return;
+      fingers.set(e.pointerId, point);
+      var c = fingerCenter(), dx = c.x - gesture.last.x, dy = c.y - gesture.last.y;
+      gesture.last = c;
+      var travel = Math.hypot(c.x - gesture.start.x, c.y - gesture.start.y);
+      if (!gesture.moved && travel > 8) {
+        gesture.moved = true;
+        dropTimer(gesture);
+        pointer.x = point.nx; pointer.y = point.ny;
+        if (gesture.long && gesture.fingers === 1) { gesture.mode = "drag"; send(1); return; }
+        gesture.mode = "scroll";
+        if (gesture.fingers === 1) gesture.axis = Math.abs(c.y - gesture.start.y) >= Math.abs(c.x - gesture.start.x) ? "y" : "x";
+        send(0);
+      }
+      if (!gesture.moved) return;
+      if (gesture.mode === "drag") { pointer.x = point.nx; pointer.y = point.ny; send(1); return; }
+      if (gesture.fingers === 1 && gesture.axis === "y") roll(0, dy);
+      else if (gesture.fingers === 1 && gesture.axis === "x") roll(dx, 0);
+      else roll(dx, dy);
+    }, true);
+    function finishDirect(e) {
+      if (!fingers.has(e.pointerId)) return;
+      e.preventDefault(); e.stopPropagation();
+      fingers.delete(e.pointerId);
+      if (fingers.size) { if (gesture) gesture.last = fingerCenter(); return; }
+      var done = gesture; gesture = null;
+      if (!done) return;
+      dropTimer(done);
+      if (done.mode === "drag") {
+        var destination = fingerPoint(e);
+        if (destination) { pointer.x = destination.nx; pointer.y = destination.ny; }
+        send(0); return;
+      }
+      if (done.start) { pointer.x = done.start.nx; pointer.y = done.start.ny; }
+      if (!done.moved && done.long) { tap(4); return; }
+      if (!done.moved && Date.now() - done.time < 500) tap(done.fingers >= 2 ? 4 : 1);
+    }
+    screenEl.addEventListener("pointerup", finishDirect, true);
+    screenEl.addEventListener("pointercancel", function(e) { fingers.clear(); if (gesture && gesture.mode === "drag") send(0); dropTimer(gesture); gesture = null; }, true);
+    update();
+    return { release:cancel, action:function(name) {
+      if(name==="mode") { cancel();trackpad=!trackpad;update();return true; }
+      if(["left","right","up","down","drag"].indexOf(name)<0)return false;
+      if(!usable())return true;
+      if(name==="left")click(1);
+      if(name==="right")click(4);
+      if(name==="up")click(8);
+      if(name==="down")click(16);
+      if(name==="drag") {
+        trackpad=true;dragging=!dragging;send(dragging?1:0);
+        dragButton.setAttribute("aria-pressed",String(dragging));dragButton.textContent=dragging?"放開拖曳":"拖曳";update();
+      }
+      return true;
+    }};
+  }
+
+  function mountTools() {
+    if (!document.getElementById("noVNC_container")) return;
+    if (document.getElementById("lazyboy-tools")) return;
+    var tools = document.createElement("div");
+    tools.id = "lazyboy-tools";
+    tools.setAttribute("role", "toolbar");
+    tools.setAttribute("aria-label", "電腦操作");
+    tools.innerHTML = '<div class="buttons"><button data-action="keyboard">鍵盤</button><button data-action="paste">貼上</button><button data-action="more" aria-pressed="false">更多</button></div><div id="lazyboy-more" hidden><div class="buttons"><button data-action="mode" aria-pressed="false">直接點選</button><button data-action="left">左鍵</button><button data-action="right">右鍵</button><button data-action="drag" aria-pressed="false">拖曳</button><button data-action="up" aria-label="向上捲動">↑</button><button data-action="down" aria-label="向下捲動">↓</button></div><div id="lazyboy-trackpad" hidden role="group" aria-label="獨立觸控板">在這裡滑動控制滑鼠</div><p id="lazyboy-pointer-help">輕點左鍵 · 上下滑捲動 · 按住出選單</p><div class="buttons secondary"><button data-action="out" aria-label="縮小">−</button><button data-action="fit">適合視窗</button><button data-action="in" aria-label="放大">＋</button><button data-action="pan" aria-pressed="false">移動畫面</button><button data-action="clipboard">剪貼簿 / 輸入</button><button data-key="tab">Tab</button><button data-key="enter">Enter</button><button data-key="escape">Esc</button><button data-key="backspace">⌫</button><button data-action="copy">複製</button></div></div>';
+    document.body.appendChild(tools);
+    var panel = document.createElement("section");
+    panel.id = "lazyboy-clipboard";
+    panel.hidden = true;
+    panel.innerHTML = '<label for="lazyboy-clipboard-text">雙向文字剪貼簿</label><textarea id="lazyboy-clipboard-text" placeholder="貼上或輸入文字，傳送到電腦"></textarea><button data-action="send">貼到電腦</button> <button data-action="receive">複製到本機</button> <button data-action="close">關閉</button><p id="lazyboy-clipboard-status" role="status">電腦複製的文字會顯示於此。手機可在這裡輸入中文。</p>';
+    document.body.appendChild(panel);
+    var pan = document.createElement("div");
+    pan.id = "lazyboy-pan"; pan.hidden = true;
+    document.getElementById("noVNC_container").appendChild(pan);
+    var pointerControls = mountPointerControls(tools);
+    function syncMobile() {
+      var host = window;
+      try { host = window.parent; void host.innerWidth; } catch (_e) { host = window; }
+      var mobile = host.innerWidth <= 700 || (host.innerWidth <= 1100 && host.matchMedia("(pointer:coarse)").matches);
+      document.documentElement.dataset.mobile = String(mobile);
+      document.documentElement.dataset.landscape = String(host.innerWidth > host.innerHeight);
+      if (!mobile) { pointerControls.release(); pan.hidden = true; }
+      fillCanvas(rfb());
+    }
+    syncMobile();
+    window.addEventListener("resize", syncMobile);
+    try { if (window.parent !== window) window.parent.addEventListener("resize", syncMobile); } catch (_e) {}
+    window.addEventListener("pagehide", function() { try { window.parent.removeEventListener("resize", syncMobile); } catch (_e) {} });
+    var previous = null;
+    pan.onpointerdown = function(e) { previous = [e.clientX, e.clientY]; pan.setPointerCapture(e.pointerId); };
+    pan.onpointermove = function(e) {
+      var session = rfb();
+      if (!previous || !session || !session._screen) return;
+      session._screen.scrollLeft += previous[0] - e.clientX;
+      session._screen.scrollTop += previous[1] - e.clientY;
+      previous = [e.clientX, e.clientY];
+    };
+    pan.onpointerup = pan.onpointercancel = function() { previous = null; };
+    function action(e) {
+      var button = e.target.closest("button");
+      if (!button) return;
+      var name = button.dataset.action, session = rfb();
+      if (pointerControls.action(name)) return;
+      var text = document.getElementById("lazyboy-clipboard-text");
+      if (name === "in" || name === "out" || name === "fit") {
+        zoom = name === "fit" ? 1 : Math.max(1, Math.min(4, zoom + (name === "in" ? .25 : -.25)));
+        tools.querySelector('[data-action="fit"]').textContent = zoom === 1 ? "適合視窗" : Math.round(zoom * 100) + "% · 重設";
+        fillCanvas(session);
+      }
+      if (name === "pan") { pan.hidden = !pan.hidden; button.setAttribute("aria-pressed", String(!pan.hidden)); }
+      if (name === "clipboard") panel.hidden = !panel.hidden;
+      if (name === "close") panel.hidden = true;
+      if (name === "more") {
+        var more = document.getElementById("lazyboy-more");
+        more.hidden = !more.hidden;
+        button.setAttribute("aria-pressed", String(!more.hidden));
+      }
+      if (name === "keyboard") {
+        pointerControls.release();
+        panel.hidden = false;
+        if (text) text.focus();
+      }
+      if (name === "keyboard" && ui && typeof ui.toggleVirtualKeyboard === "function") ui.toggleVirtualKeyboard();
+      if (name === "send") {
+        if (!session || session._rfbConnectionState !== "connected") { status("電腦尚未連線，請稍後再試。"); return; }
+        applyHostPaste(text.value, true); status("已貼到電腦。");
+      }
+      if (name === "receive") {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text.value).then(function() { status("已複製到本機。"); }).catch(function() { text.focus(); text.select(); status("請使用系統選單複製選取的文字。"); });
+        else { text.focus(); text.select(); status("請使用系統選單複製選取的文字。"); }
+      }
+      if (name === "paste") readHostText(function(value) { if (value) applyHostPaste(value, true); else { panel.hidden = false; text.focus(); status("請在上方貼上文字，再按「貼到電腦」。"); } });
+      if (name === "copy" && session) { panel.hidden = false; sendCtrlChord(session, 0x63, "KeyC", false); setTimeout(function() { requestBoxClipboard(session); }, 150); }
+      var keys = { tab: [0xff09, "Tab"], enter: [0xff0d, "Enter"], escape: [0xff1b, "Escape"], backspace: [0xff08, "Backspace"] };
+      var key = keys[button.dataset.key];
+      if (key && session) { session.sendKey(key[0], key[1], true); session.sendKey(key[0], key[1], false); }
+    }
+    document.addEventListener("keydown", function(e) {
+      if (!e.ctrlKey || !e.altKey) return;
+      var name = { Equal:"in", Minus:"out", Digit0:"fit", KeyB:"clipboard" }[e.code];
+      if (!name) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      tools.querySelector('[data-action="' + name + '"]').click();
+    }, true);
+    tools.addEventListener("click", action);
+    panel.addEventListener("click", action);
+    window.addEventListener("resize", function() { fillCanvas(rfb()); });
+  }
+  document.addEventListener("DOMContentLoaded", function() { hideChrome(); mountTools(); });
+  if (document.readyState !== "loading") mountTools();
+  window.addEventListener("load", hideChrome);
+  // CSS already hides the controls. Observing class mutations while removing
+  // classes in the callback feeds the observer itself, starving the browser's
+  // event loop and allocating mutation records indefinitely.
+  setInterval(poll, 400);
+
+  function sendCtrlChord(session, keysym, code, shift) {
+    var CONTROL_L = 0xffe3, SHIFT_L = 0xffe1;
+    var held = [
+      [0xffe7, "MetaLeft"], [0xffe8, "MetaRight"],
+      [0xffe9, "AltLeft"], [0xffea, "AltRight"],
+      [0xffeb, "SuperLeft"], [0xffec, "SuperRight"]
+    ];
+    for (var i = 0; i < held.length; i++) {
+      try { session.sendKey(held[i][0], held[i][1], false); } catch (_e) {}
+    }
+    session.sendKey(CONTROL_L, "ControlLeft", true);
+    if (shift) session.sendKey(SHIFT_L, "ShiftLeft", true);
+    session.sendKey(keysym, code, true);
+    session.sendKey(keysym, code, false);
+    if (shift) session.sendKey(SHIFT_L, "ShiftLeft", false);
+    session.sendKey(CONTROL_L, "ControlLeft", false);
+  }
+
+  document.addEventListener("paste", function (e) {
+    if (e.target.closest && e.target.closest("#lazyboy-clipboard")) return;
+    var text = e.clipboardData && e.clipboardData.getData("text/plain");
+    if (!text) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    applyHostPaste(text, true);
+  }, true);
+
+  document.addEventListener("copy", function (e) {
+    if (e.target.closest && e.target.closest("#lazyboy-clipboard")) return;
+    var box = clipboardBox();
+    var text = box && box.value;
+    if (!text) return;
+    try {
+      e.clipboardData.setData("text/plain", text);
+      e.preventDefault();
+    } catch (_e) {}
+    writeHost(text);
+  }, true);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.target.closest && e.target.closest("#lazyboy-clipboard")) return;
+    var mac = /Mac/i.test((navigator && navigator.platform) || "");
+    var chord = mac ? e.metaKey : e.ctrlKey;
+    if (!chord) return;
+    var map = { KeyA: 0x61, KeyC: 0x63, KeyV: 0x76, KeyX: 0x78, KeyZ: 0x7a };
+    var keysym = map[e.code];
+    if (keysym === undefined) return;
+    var session = rfb();
+    if (!session || typeof session.sendKey !== "function") return;
+    e.stopImmediatePropagation();
+    if (e.code === "KeyV") {
+      pasteHost(true);
+      return;
+    }
+    e.preventDefault();
+    sendCtrlChord(session, keysym, e.code, e.shiftKey);
+    if (e.code === "KeyC" || e.code === "KeyX") {
+      setTimeout(function() { requestBoxClipboard(session); }, 150);
+      setTimeout(function () {
+        var box = clipboardBox();
+        if (box && box.value && box.value !== lastBox && box.value !== lastHost) copyBox(box.value);
+      }, 80);
+      setTimeout(function () {
+        var box = clipboardBox();
+        if (box && box.value && box.value !== lastBox && box.value !== lastHost) copyBox(box.value);
+      }, 220);
+    }
+  }, true);
+})();
+</script>

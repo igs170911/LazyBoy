@@ -1,0 +1,111 @@
+#!/bin/bash
+# Chromium on my computer. Same user-data-dir + CDP 9222 so Playwright can
+# attach to the browser the human sees (Firefox profiles cannot).
+set -euo pipefail
+export DISPLAY="${DISPLAY:-:1}"
+# Chromium reads HOME for its config/crash-report dirs; keep them on the
+# persisted /home/box volume rather than in /root.
+export HOME=/home/box
+export XDG_CONFIG_HOME=/home/box/.config
+export LANG="${LANG:-zh_TW.UTF-8}"
+export LC_ALL="${LC_ALL:-zh_TW.UTF-8}"
+export LANGUAGE="${LANGUAGE:-zh_TW:zh:en}"
+export TZ="${TZ:-Asia/Taipei}"
+export GTK_MODULES="${GTK_MODULES:-atk-bridge}"
+export GTK_A11Y="${GTK_A11Y:-atspi}"
+export GNOME_ACCESSIBILITY="${GNOME_ACCESSIBILITY:-1}"
+export NO_AT_BRIDGE=0
+# Join the desktop's session bus so Chromium registers with the same AT-SPI
+# registry that box-a11y reads (launches over `docker exec` start without it).
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -r /tmp/lazyboy/dbus.env ]]; then
+  # shellcheck disable=SC1091
+  source /tmp/lazyboy/dbus.env
+  export DBUS_SESSION_BUS_ADDRESS
+fi
+PROFILE=/home/box/chrome-profile
+CDP_PORT=9222
+LAUNCH_LOCK=/tmp/.box-chrome-launch.lock
+# Preserve the profile from the earlier Chromium build without merging accounts.
+if [[ ! -e "$PROFILE" && -d /home/box/.config/chromium ]]; then
+  ln -s /home/box/.config/chromium "$PROFILE"
+fi
+mkdir -p "$PROFILE"
+
+cdp_up() {
+  python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$CDP_PORT/json/version', timeout=1).close()" 2>/dev/null
+}
+
+profile_in_use() {
+  pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null 2>&1
+}
+
+# The desktop autostart and the agent's ensure_browser_ready can both launch
+# within the same second. Chromium's own singleton lock only exists once the
+# first instance has initialised, so two cold starts race and the loser shows
+# a "profile in use" dialog on the desktop. Hold a launch lock until the first
+# instance is listening; later launchers then just forward their URLs to it.
+exec 9>"$LAUNCH_LOCK"
+flock -w 30 9 || true
+
+if profile_in_use; then
+  flock -u 9
+  exec 9>&-
+  # This invocation only forwards its URLs to the running instance, but
+  # Chromium treats *this* command line as the startup command line when it
+  # decides whether to show the "unsupported flag: --no-sandbox" infobar in
+  # the new tab, so --test-type must be present here too.
+  exec chromium --no-sandbox --test-type --user-data-dir="$PROFILE" "$@"
+fi
+
+# The profile lives on a volume that outlives the container. Chromium's
+# SingletonLock names <hostname>-<pid>; after a container is recreated (new
+# hostname) or Chromium is killed without shutdown it points at nothing, and
+# Chromium refuses the profile with an "in use on another computer" dialog.
+# No process in this container holds the profile (checked above), so it is
+# stale by definition.
+rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonSocket" "$PROFILE/SingletonCookie"
+
+# Flags mirror lazyBoy's lazyboy-browser (the desktop that passes Shopee's
+# checks): Traditional Chinese UI + Accept-Language, maximized normal window,
+# no translate/crash bubbles. Never add --kiosk or --app.
+chromium \
+  --no-sandbox \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port="$CDP_PORT" \
+  --test-type \
+  --disable-gpu \
+  --disable-dev-shm-usage \
+  --disable-features=TranslateUI \
+  --disable-blink-features=AutomationControlled \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-session-crashed-bubble \
+  --hide-crash-restore-bubble \
+  --disable-infobars \
+  --force-renderer-accessibility \
+  --disable-background-networking \
+  --disable-component-update \
+  --renderer-process-limit=4 \
+  --password-store=basic \
+  --lang=zh-TW \
+  --accept-lang=zh-TW,zh,en-US,en \
+  --start-maximized \
+  --restore-last-session \
+  --user-data-dir="$PROFILE" \
+  "$@" 9>&- &
+pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null' TERM INT
+
+for _ in $(seq 1 60); do
+  if cdp_up; then
+    node /usr/local/bin/restore-browser.mjs || true
+    break
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.25
+done
+flock -u 9
+exec 9>&-
+wait "$pid"

@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "image": "sha256:35c307d16cae1d3ba4c8eb63a4ced182f0b1823289d4e69d31bddaf7a27f0208",
+  "model_inputs": [
+    {
+      "model": "gpt-5-fixture",
+      "images": 0,
+      "image_is_png": false,
+      "recording_notes": false,
+      "reasoning_effort": "high",
+      "reasoning": null
+    },
+    {
+      "model": "gpt-5-fixture",
+      "images": 1,
+      "image_is_png": true,
+      "recording_notes": false,
+      "reasoning_effort": "high",
+      "reasoning": null
+    },
+    {
+      "model": "gpt-5-fixture",
+      "images": 1,
+      "image_is_png": true,
+      "recording_notes": true,
+      "reasoning_effort": "high",
+      "reasoning": null
+    }
+  ],
+  "vision_change_takes_effect_on_warm_worker": true,
+  "recording_frame_reaches_native_model": true,
+  "desktop": {
+    "native_png_image": true,
+    "observed_element_click": true,
+    "desktop_navigation_in_cdp": true
+  },
+  "external_mcp": true,
+  "hermes_commit": "05eecbcd972c8737ebc7722ea08aab47fb538043",
+  "date": "2026-10-07",
+  "method": "Local deterministic providers; real Docker and unmodified Hermes. No paid API."
+}

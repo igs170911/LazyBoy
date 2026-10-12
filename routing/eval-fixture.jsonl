@@ -1,0 +1,200 @@
+{"id": "answer-0-0", "group": "answer-0", "language": "zh", "text": "請協助：解釋為什麼天空看起來是藍色", "route": "answer", "synthetic": true}
+{"id": "answer-0-1", "group": "answer-0", "language": "zh", "text": "我的需求是：解釋為什麼天空看起來是藍色", "route": "answer", "synthetic": true}
+{"id": "answer-1-0", "group": "answer-1", "language": "zh", "text": "請協助：把『今天最新消息』這句話翻譯成英文", "route": "answer", "synthetic": true}
+{"id": "answer-1-1", "group": "answer-1", "language": "zh", "text": "我的需求是：把『今天最新消息』這句話翻譯成英文", "route": "answer", "synthetic": true}
+{"id": "answer-2-0", "group": "answer-2", "language": "zh", "text": "請協助：解釋這份提供的登入說明", "route": "answer", "synthetic": true}
+{"id": "answer-2-1", "group": "answer-2", "language": "zh", "text": "我的需求是：解釋這份提供的登入說明", "route": "answer", "synthetic": true}
+{"id": "answer-3-0", "group": "answer-3", "language": "zh", "text": "請協助：用簡單例子說明函數", "route": "answer", "synthetic": true}
+{"id": "answer-3-1", "group": "answer-3", "language": "zh", "text": "我的需求是：用簡單例子說明函數", "route": "answer", "synthetic": true}
+{"id": "answer-4-0", "group": "answer-4", "language": "zh", "text": "請協助：將這段提供的內容改寫為禮貌訊息", "route": "answer", "synthetic": true}
+{"id": "answer-4-1", "group": "answer-4", "language": "zh", "text": "我的需求是：將這段提供的內容改寫為禮貌訊息", "route": "answer", "synthetic": true}
+{"id": "answer-5-0", "group": "answer-5", "language": "zh", "text": "請協助：解釋瀏覽器和搜尋引擎有何不同", "route": "answer", "synthetic": true}
+{"id": "answer-5-1", "group": "answer-5", "language": "zh", "text": "我的需求是：解釋瀏覽器和搜尋引擎有何不同", "route": "answer", "synthetic": true}
+{"id": "answer-6-0", "group": "answer-6", "language": "zh", "text": "請協助：替我想五個咖啡店名稱", "route": "answer", "synthetic": true}
+{"id": "answer-6-1", "group": "answer-6", "language": "zh", "text": "我的需求是：替我想五個咖啡店名稱", "route": "answer", "synthetic": true}
+{"id": "answer-7-0", "group": "answer-7", "language": "zh", "text": "請協助：如何理解遞迴的概念", "route": "answer", "synthetic": true}
+{"id": "answer-7-1", "group": "answer-7", "language": "zh", "text": "我的需求是：如何理解遞迴的概念", "route": "answer", "synthetic": true}
+{"id": "answer-8-0", "group": "answer-8", "language": "zh", "text": "請協助：把已貼上的文字縮短", "route": "answer", "synthetic": true}
+{"id": "answer-8-1", "group": "answer-8", "language": "zh", "text": "我的需求是：把已貼上的文字縮短", "route": "answer", "synthetic": true}
+{"id": "answer-9-0", "group": "answer-9", "language": "zh", "text": "請協助：用英文說『謝謝你的協助』", "route": "answer", "synthetic": true}
+{"id": "answer-9-1", "group": "answer-9", "language": "zh", "text": "我的需求是：用英文說『謝謝你的協助』", "route": "answer", "synthetic": true}
+{"id": "answer-10-0", "group": "answer-10", "language": "en", "text": "Please help: Explain why the sky looks blue", "route": "answer", "synthetic": true}
+{"id": "answer-10-1", "group": "answer-10", "language": "en", "text": "My request is: Explain why the sky looks blue", "route": "answer", "synthetic": true}
+{"id": "answer-11-0", "group": "answer-11", "language": "en", "text": "Please help: Translate the phrase latest news today into Chinese", "route": "answer", "synthetic": true}
+{"id": "answer-11-1", "group": "answer-11", "language": "en", "text": "My request is: Translate the phrase latest news today into Chinese", "route": "answer", "synthetic": true}
+{"id": "answer-12-0", "group": "answer-12", "language": "en", "text": "Please help: Explain this supplied login guide", "route": "answer", "synthetic": true}
+{"id": "answer-12-1", "group": "answer-12", "language": "en", "text": "My request is: Explain this supplied login guide", "route": "answer", "synthetic": true}
+{"id": "answer-13-0", "group": "answer-13", "language": "en", "text": "Please help: Explain what a function means with an example", "route": "answer", "synthetic": true}
+{"id": "answer-13-1", "group": "answer-13", "language": "en", "text": "My request is: Explain what a function means with an example", "route": "answer", "synthetic": true}
+{"id": "answer-14-0", "group": "answer-14", "language": "en", "text": "Please help: Rewrite the supplied paragraph politely", "route": "answer", "synthetic": true}
+{"id": "answer-14-1", "group": "answer-14", "language": "en", "text": "My request is: Rewrite the supplied paragraph politely", "route": "answer", "synthetic": true}
+{"id": "answer-15-0", "group": "answer-15", "language": "en", "text": "Please help: Explain the difference between a browser and a search engine", "route": "answer", "synthetic": true}
+{"id": "answer-15-1", "group": "answer-15", "language": "en", "text": "My request is: Explain the difference between a browser and a search engine", "route": "answer", "synthetic": true}
+{"id": "answer-16-0", "group": "answer-16", "language": "en", "text": "Please help: Suggest five coffee shop names", "route": "answer", "synthetic": true}
+{"id": "answer-16-1", "group": "answer-16", "language": "en", "text": "My request is: Suggest five coffee shop names", "route": "answer", "synthetic": true}
+{"id": "answer-17-0", "group": "answer-17", "language": "en", "text": "Please help: Explain recursion in plain language", "route": "answer", "synthetic": true}
+{"id": "answer-17-1", "group": "answer-17", "language": "en", "text": "My request is: Explain recursion in plain language", "route": "answer", "synthetic": true}
+{"id": "answer-18-0", "group": "answer-18", "language": "en", "text": "Please help: Shorten the text I pasted above", "route": "answer", "synthetic": true}
+{"id": "answer-18-1", "group": "answer-18", "language": "en", "text": "My request is: Shorten the text I pasted above", "route": "answer", "synthetic": true}
+{"id": "answer-19-0", "group": "answer-19", "language": "en", "text": "Please help: Translate thank you for your help", "route": "answer", "synthetic": true}
+{"id": "answer-19-1", "group": "answer-19", "language": "en", "text": "My request is: Translate thank you for your help", "route": "answer", "synthetic": true}
+{"id": "native-0-0", "group": "native-0", "language": "zh", "text": "請協助：找出今天台北的氣溫", "route": "native", "synthetic": true}
+{"id": "native-0-1", "group": "native-0", "language": "zh", "text": "我的需求是：找出今天台北的氣溫", "route": "native", "synthetic": true}
+{"id": "native-1-0", "group": "native-1", "language": "zh", "text": "請協助：搜尋剛發布的官方通知", "route": "native", "synthetic": true}
+{"id": "native-1-1", "group": "native-1", "language": "zh", "text": "我的需求是：搜尋剛發布的官方通知", "route": "native", "synthetic": true}
+{"id": "native-2-0", "group": "native-2", "language": "zh", "text": "請協助：讀取此專案的 README", "route": "native", "synthetic": true}
+{"id": "native-2-1", "group": "native-2", "language": "zh", "text": "我的需求是：讀取此專案的 README", "route": "native", "synthetic": true}
+{"id": "native-3-0", "group": "native-3", "language": "zh", "text": "請協助：執行目前專案的測試", "route": "native", "synthetic": true}
+{"id": "native-3-1", "group": "native-3", "language": "zh", "text": "我的需求是：執行目前專案的測試", "route": "native", "synthetic": true}
+{"id": "native-4-0", "group": "native-4", "language": "zh", "text": "請協助：搜尋 Google Drive 的預算試算表", "route": "native", "synthetic": true}
+{"id": "native-4-1", "group": "native-4", "language": "zh", "text": "我的需求是：搜尋 Google Drive 的預算試算表", "route": "native", "synthetic": true}
+{"id": "native-5-0", "group": "native-5", "language": "zh", "text": "請協助：查詢這家公司最近的新聞", "route": "native", "synthetic": true}
+{"id": "native-5-1", "group": "native-5", "language": "zh", "text": "我的需求是：查詢這家公司最近的新聞", "route": "native", "synthetic": true}
+{"id": "native-6-0", "group": "native-6", "language": "zh", "text": "請協助：列出工作目錄中的檔案", "route": "native", "synthetic": true}
+{"id": "native-6-1", "group": "native-6", "language": "zh", "text": "我的需求是：列出工作目錄中的檔案", "route": "native", "synthetic": true}
+{"id": "native-7-0", "group": "native-7", "language": "zh", "text": "請協助：讀取資料檔並計算總和", "route": "native", "synthetic": true}
+{"id": "native-7-1", "group": "native-7", "language": "zh", "text": "我的需求是：讀取資料檔並計算總和", "route": "native", "synthetic": true}
+{"id": "native-8-0", "group": "native-8", "language": "zh", "text": "請協助：搜尋官方軟體安裝文件", "route": "native", "synthetic": true}
+{"id": "native-8-1", "group": "native-8", "language": "zh", "text": "我的需求是：搜尋官方軟體安裝文件", "route": "native", "synthetic": true}
+{"id": "native-9-0", "group": "native-9", "language": "zh", "text": "請協助：查詢明天的天氣預報", "route": "native", "synthetic": true}
+{"id": "native-9-1", "group": "native-9", "language": "zh", "text": "我的需求是：查詢明天的天氣預報", "route": "native", "synthetic": true}
+{"id": "native-10-0", "group": "native-10", "language": "en", "text": "Please help: Look up the current temperature in Taipei", "route": "native", "synthetic": true}
+{"id": "native-10-1", "group": "native-10", "language": "en", "text": "My request is: Look up the current temperature in Taipei", "route": "native", "synthetic": true}
+{"id": "native-11-0", "group": "native-11", "language": "en", "text": "Please help: Search for the newly released official announcement", "route": "native", "synthetic": true}
+{"id": "native-11-1", "group": "native-11", "language": "en", "text": "My request is: Search for the newly released official announcement", "route": "native", "synthetic": true}
+{"id": "native-12-0", "group": "native-12", "language": "en", "text": "Please help: Read this project's README file", "route": "native", "synthetic": true}
+{"id": "native-12-1", "group": "native-12", "language": "en", "text": "My request is: Read this project's README file", "route": "native", "synthetic": true}
+{"id": "native-13-0", "group": "native-13", "language": "en", "text": "Please help: Run the tests in this repository", "route": "native", "synthetic": true}
+{"id": "native-13-1", "group": "native-13", "language": "en", "text": "My request is: Run the tests in this repository", "route": "native", "synthetic": true}
+{"id": "native-14-0", "group": "native-14", "language": "en", "text": "Please help: Find the budget spreadsheet in Google Drive", "route": "native", "synthetic": true}
+{"id": "native-14-1", "group": "native-14", "language": "en", "text": "My request is: Find the budget spreadsheet in Google Drive", "route": "native", "synthetic": true}
+{"id": "native-15-0", "group": "native-15", "language": "en", "text": "Please help: Search recent news about this company", "route": "native", "synthetic": true}
+{"id": "native-15-1", "group": "native-15", "language": "en", "text": "My request is: Search recent news about this company", "route": "native", "synthetic": true}
+{"id": "native-16-0", "group": "native-16", "language": "en", "text": "Please help: List files in the working directory", "route": "native", "synthetic": true}
+{"id": "native-16-1", "group": "native-16", "language": "en", "text": "My request is: List files in the working directory", "route": "native", "synthetic": true}
+{"id": "native-17-0", "group": "native-17", "language": "en", "text": "Please help: Read the data file and calculate its sum", "route": "native", "synthetic": true}
+{"id": "native-17-1", "group": "native-17", "language": "en", "text": "My request is: Read the data file and calculate its sum", "route": "native", "synthetic": true}
+{"id": "native-18-0", "group": "native-18", "language": "en", "text": "Please help: Find official software installation documentation", "route": "native", "synthetic": true}
+{"id": "native-18-1", "group": "native-18", "language": "en", "text": "My request is: Find official software installation documentation", "route": "native", "synthetic": true}
+{"id": "native-19-0", "group": "native-19", "language": "en", "text": "Please help: Check tomorrow's weather forecast", "route": "native", "synthetic": true}
+{"id": "native-19-1", "group": "native-19", "language": "en", "text": "My request is: Check tomorrow's weather forecast", "route": "native", "synthetic": true}
+{"id": "browser-0-0", "group": "browser-0", "language": "zh", "text": "請協助：使用瀏覽器登入會員網站", "route": "browser", "synthetic": true}
+{"id": "browser-0-1", "group": "browser-0", "language": "zh", "text": "我的需求是：使用瀏覽器登入會員網站", "route": "browser", "synthetic": true}
+{"id": "browser-1-0", "group": "browser-1", "language": "zh", "text": "請協助：在已登入的網站上填寫表單", "route": "browser", "synthetic": true}
+{"id": "browser-1-1", "group": "browser-1", "language": "zh", "text": "我的需求是：在已登入的網站上填寫表單", "route": "browser", "synthetic": true}
+{"id": "browser-2-0", "group": "browser-2", "language": "zh", "text": "請協助：打開網站的 JavaScript 選單", "route": "browser", "synthetic": true}
+{"id": "browser-2-1", "group": "browser-2", "language": "zh", "text": "我的需求是：打開網站的 JavaScript 選單", "route": "browser", "synthetic": true}
+{"id": "browser-3-0", "group": "browser-3", "language": "zh", "text": "請協助：操作網站上的日期選擇器", "route": "browser", "synthetic": true}
+{"id": "browser-3-1", "group": "browser-3", "language": "zh", "text": "我的需求是：操作網站上的日期選擇器", "route": "browser", "synthetic": true}
+{"id": "browser-4-0", "group": "browser-4", "language": "zh", "text": "請協助：切換瀏覽器中的分頁", "route": "browser", "synthetic": true}
+{"id": "browser-4-1", "group": "browser-4", "language": "zh", "text": "我的需求是：切換瀏覽器中的分頁", "route": "browser", "synthetic": true}
+{"id": "browser-5-0", "group": "browser-5", "language": "zh", "text": "請協助：在網站內新增購物車品項", "route": "browser", "synthetic": true}
+{"id": "browser-5-1", "group": "browser-5", "language": "zh", "text": "我的需求是：在網站內新增購物車品項", "route": "browser", "synthetic": true}
+{"id": "browser-6-0", "group": "browser-6", "language": "zh", "text": "請協助：從已登入的入口網站下載報表", "route": "browser", "synthetic": true}
+{"id": "browser-6-1", "group": "browser-6", "language": "zh", "text": "我的需求是：從已登入的入口網站下載報表", "route": "browser", "synthetic": true}
+{"id": "browser-7-0", "group": "browser-7", "language": "zh", "text": "請協助：查看網頁上動態更新的內容", "route": "browser", "synthetic": true}
+{"id": "browser-7-1", "group": "browser-7", "language": "zh", "text": "我的需求是：查看網頁上動態更新的內容", "route": "browser", "synthetic": true}
+{"id": "browser-8-0", "group": "browser-8", "language": "zh", "text": "請協助：操作瀏覽器網頁中的下拉選單", "route": "browser", "synthetic": true}
+{"id": "browser-8-1", "group": "browser-8", "language": "zh", "text": "我的需求是：操作瀏覽器網頁中的下拉選單", "route": "browser", "synthetic": true}
+{"id": "browser-9-0", "group": "browser-9", "language": "zh", "text": "請協助：開啟帳戶網站的個人資料頁", "route": "browser", "synthetic": true}
+{"id": "browser-9-1", "group": "browser-9", "language": "zh", "text": "我的需求是：開啟帳戶網站的個人資料頁", "route": "browser", "synthetic": true}
+{"id": "browser-10-0", "group": "browser-10", "language": "en", "text": "Please help: Log in to the member website using the browser", "route": "browser", "synthetic": true}
+{"id": "browser-10-1", "group": "browser-10", "language": "en", "text": "My request is: Log in to the member website using the browser", "route": "browser", "synthetic": true}
+{"id": "browser-11-0", "group": "browser-11", "language": "en", "text": "Please help: Fill out the form on the signed-in website", "route": "browser", "synthetic": true}
+{"id": "browser-11-1", "group": "browser-11", "language": "en", "text": "My request is: Fill out the form on the signed-in website", "route": "browser", "synthetic": true}
+{"id": "browser-12-0", "group": "browser-12", "language": "en", "text": "Please help: Open the website's JavaScript menu", "route": "browser", "synthetic": true}
+{"id": "browser-12-1", "group": "browser-12", "language": "en", "text": "My request is: Open the website's JavaScript menu", "route": "browser", "synthetic": true}
+{"id": "browser-13-0", "group": "browser-13", "language": "en", "text": "Please help: Use the website's date picker", "route": "browser", "synthetic": true}
+{"id": "browser-13-1", "group": "browser-13", "language": "en", "text": "My request is: Use the website's date picker", "route": "browser", "synthetic": true}
+{"id": "browser-14-0", "group": "browser-14", "language": "en", "text": "Please help: Switch browser tabs", "route": "browser", "synthetic": true}
+{"id": "browser-14-1", "group": "browser-14", "language": "en", "text": "My request is: Switch browser tabs", "route": "browser", "synthetic": true}
+{"id": "browser-15-0", "group": "browser-15", "language": "en", "text": "Please help: Add an item to the website shopping cart", "route": "browser", "synthetic": true}
+{"id": "browser-15-1", "group": "browser-15", "language": "en", "text": "My request is: Add an item to the website shopping cart", "route": "browser", "synthetic": true}
+{"id": "browser-16-0", "group": "browser-16", "language": "en", "text": "Please help: Download the report from the signed-in web portal", "route": "browser", "synthetic": true}
+{"id": "browser-16-1", "group": "browser-16", "language": "en", "text": "My request is: Download the report from the signed-in web portal", "route": "browser", "synthetic": true}
+{"id": "browser-17-0", "group": "browser-17", "language": "en", "text": "Please help: Inspect the dynamically rendered website content", "route": "browser", "synthetic": true}
+{"id": "browser-17-1", "group": "browser-17", "language": "en", "text": "My request is: Inspect the dynamically rendered website content", "route": "browser", "synthetic": true}
+{"id": "browser-18-0", "group": "browser-18", "language": "en", "text": "Please help: Select an option in the browser page dropdown", "route": "browser", "synthetic": true}
+{"id": "browser-18-1", "group": "browser-18", "language": "en", "text": "My request is: Select an option in the browser page dropdown", "route": "browser", "synthetic": true}
+{"id": "browser-19-0", "group": "browser-19", "language": "en", "text": "Please help: Open the profile page in the account website", "route": "browser", "synthetic": true}
+{"id": "browser-19-1", "group": "browser-19", "language": "en", "text": "My request is: Open the profile page in the account website", "route": "browser", "synthetic": true}
+{"id": "desktop-0-0", "group": "desktop-0", "language": "zh", "text": "請協助：截取目前桌面的畫面", "route": "desktop", "synthetic": true}
+{"id": "desktop-0-1", "group": "desktop-0", "language": "zh", "text": "我的需求是：截取目前桌面的畫面", "route": "desktop", "synthetic": true}
+{"id": "desktop-1-0", "group": "desktop-1", "language": "zh", "text": "請協助：點擊原生桌面程式的工具列", "route": "desktop", "synthetic": true}
+{"id": "desktop-1-1", "group": "desktop-1", "language": "zh", "text": "我的需求是：點擊原生桌面程式的工具列", "route": "desktop", "synthetic": true}
+{"id": "desktop-2-0", "group": "desktop-2", "language": "zh", "text": "請協助：操作螢幕上的繪圖應用程式", "route": "desktop", "synthetic": true}
+{"id": "desktop-2-1", "group": "desktop-2", "language": "zh", "text": "我的需求是：操作螢幕上的繪圖應用程式", "route": "desktop", "synthetic": true}
+{"id": "desktop-3-0", "group": "desktop-3", "language": "zh", "text": "請協助：查看桌面程式的對話框", "route": "desktop", "synthetic": true}
+{"id": "desktop-3-1", "group": "desktop-3", "language": "zh", "text": "我的需求是：查看桌面程式的對話框", "route": "desktop", "synthetic": true}
+{"id": "desktop-4-0", "group": "desktop-4", "language": "zh", "text": "請協助：在原生檔案管理員中拖曳圖示", "route": "desktop", "synthetic": true}
+{"id": "desktop-4-1", "group": "desktop-4", "language": "zh", "text": "我的需求是：在原生檔案管理員中拖曳圖示", "route": "desktop", "synthetic": true}
+{"id": "desktop-5-0", "group": "desktop-5", "language": "zh", "text": "請協助：操作桌面上的終端機視窗", "route": "desktop", "synthetic": true}
+{"id": "desktop-5-1", "group": "desktop-5", "language": "zh", "text": "我的需求是：操作桌面上的終端機視窗", "route": "desktop", "synthetic": true}
+{"id": "desktop-6-0", "group": "desktop-6", "language": "zh", "text": "請協助：查看螢幕上的錯誤提示", "route": "desktop", "synthetic": true}
+{"id": "desktop-6-1", "group": "desktop-6", "language": "zh", "text": "我的需求是：查看螢幕上的錯誤提示", "route": "desktop", "synthetic": true}
+{"id": "desktop-7-0", "group": "desktop-7", "language": "zh", "text": "請協助：點選原生應用程式的儲存按鈕", "route": "desktop", "synthetic": true}
+{"id": "desktop-7-1", "group": "desktop-7", "language": "zh", "text": "我的需求是：點選原生應用程式的儲存按鈕", "route": "desktop", "synthetic": true}
+{"id": "desktop-8-0", "group": "desktop-8", "language": "zh", "text": "請協助：在桌面程式中調整視窗大小", "route": "desktop", "synthetic": true}
+{"id": "desktop-8-1", "group": "desktop-8", "language": "zh", "text": "我的需求是：在桌面程式中調整視窗大小", "route": "desktop", "synthetic": true}
+{"id": "desktop-9-0", "group": "desktop-9", "language": "zh", "text": "請協助：檢查目前電腦桌面的視窗", "route": "desktop", "synthetic": true}
+{"id": "desktop-9-1", "group": "desktop-9", "language": "zh", "text": "我的需求是：檢查目前電腦桌面的視窗", "route": "desktop", "synthetic": true}
+{"id": "desktop-10-0", "group": "desktop-10", "language": "en", "text": "Please help: Capture a screenshot of the current desktop", "route": "desktop", "synthetic": true}
+{"id": "desktop-10-1", "group": "desktop-10", "language": "en", "text": "My request is: Capture a screenshot of the current desktop", "route": "desktop", "synthetic": true}
+{"id": "desktop-11-0", "group": "desktop-11", "language": "en", "text": "Please help: Click the toolbar in the native desktop app", "route": "desktop", "synthetic": true}
+{"id": "desktop-11-1", "group": "desktop-11", "language": "en", "text": "My request is: Click the toolbar in the native desktop app", "route": "desktop", "synthetic": true}
+{"id": "desktop-12-0", "group": "desktop-12", "language": "en", "text": "Please help: Use the drawing application on the screen", "route": "desktop", "synthetic": true}
+{"id": "desktop-12-1", "group": "desktop-12", "language": "en", "text": "My request is: Use the drawing application on the screen", "route": "desktop", "synthetic": true}
+{"id": "desktop-13-0", "group": "desktop-13", "language": "en", "text": "Please help: Inspect the native desktop application's dialog", "route": "desktop", "synthetic": true}
+{"id": "desktop-13-1", "group": "desktop-13", "language": "en", "text": "My request is: Inspect the native desktop application's dialog", "route": "desktop", "synthetic": true}
+{"id": "desktop-14-0", "group": "desktop-14", "language": "en", "text": "Please help: Drag the icon in the native file manager", "route": "desktop", "synthetic": true}
+{"id": "desktop-14-1", "group": "desktop-14", "language": "en", "text": "My request is: Drag the icon in the native file manager", "route": "desktop", "synthetic": true}
+{"id": "desktop-15-0", "group": "desktop-15", "language": "en", "text": "Please help: Interact with the desktop terminal window", "route": "desktop", "synthetic": true}
+{"id": "desktop-15-1", "group": "desktop-15", "language": "en", "text": "My request is: Interact with the desktop terminal window", "route": "desktop", "synthetic": true}
+{"id": "desktop-16-0", "group": "desktop-16", "language": "en", "text": "Please help: Read the error dialog on the desktop screen", "route": "desktop", "synthetic": true}
+{"id": "desktop-16-1", "group": "desktop-16", "language": "en", "text": "My request is: Read the error dialog on the desktop screen", "route": "desktop", "synthetic": true}
+{"id": "desktop-17-0", "group": "desktop-17", "language": "en", "text": "Please help: Click Save in the native application", "route": "desktop", "synthetic": true}
+{"id": "desktop-17-1", "group": "desktop-17", "language": "en", "text": "My request is: Click Save in the native application", "route": "desktop", "synthetic": true}
+{"id": "desktop-18-0", "group": "desktop-18", "language": "en", "text": "Please help: Resize the desktop application window", "route": "desktop", "synthetic": true}
+{"id": "desktop-18-1", "group": "desktop-18", "language": "en", "text": "My request is: Resize the desktop application window", "route": "desktop", "synthetic": true}
+{"id": "desktop-19-0", "group": "desktop-19", "language": "en", "text": "Please help: Inspect the windows visible on the computer desktop", "route": "desktop", "synthetic": true}
+{"id": "desktop-19-1", "group": "desktop-19", "language": "en", "text": "My request is: Inspect the windows visible on the computer desktop", "route": "desktop", "synthetic": true}
+{"id": "work-0-0", "group": "work-0", "language": "zh", "text": "請協助：完整實作帳號管理功能並驗證", "route": "work", "synthetic": true}
+{"id": "work-0-1", "group": "work-0", "language": "zh", "text": "我的需求是：完整實作帳號管理功能並驗證", "route": "work", "synthetic": true}
+{"id": "work-1-0", "group": "work-1", "language": "zh", "text": "請協助：重構資料庫介面並完成回歸測試", "route": "work", "synthetic": true}
+{"id": "work-1-1", "group": "work-1", "language": "zh", "text": "我的需求是：重構資料庫介面並完成回歸測試", "route": "work", "synthetic": true}
+{"id": "work-2-0", "group": "work-2", "language": "zh", "text": "請協助：深入研究多個架構並比較取捨", "route": "work", "synthetic": true}
+{"id": "work-2-1", "group": "work-2", "language": "zh", "text": "我的需求是：深入研究多個架構並比較取捨", "route": "work", "synthetic": true}
+{"id": "work-3-0", "group": "work-3", "language": "zh", "text": "請協助：設計並實作整個資料處理流程", "route": "work", "synthetic": true}
+{"id": "work-3-1", "group": "work-3", "language": "zh", "text": "我的需求是：設計並實作整個資料處理流程", "route": "work", "synthetic": true}
+{"id": "work-4-0", "group": "work-4", "language": "zh", "text": "請協助：修復此專案的錯誤並核對結果", "route": "work", "synthetic": true}
+{"id": "work-4-1", "group": "work-4", "language": "zh", "text": "我的需求是：修復此專案的錯誤並核對結果", "route": "work", "synthetic": true}
+{"id": "work-5-0", "group": "work-5", "language": "zh", "text": "請協助：實作帶驗證的複雜表單功能", "route": "work", "synthetic": true}
+{"id": "work-5-1", "group": "work-5", "language": "zh", "text": "我的需求是：實作帶驗證的複雜表單功能", "route": "work", "synthetic": true}
+{"id": "work-6-0", "group": "work-6", "language": "zh", "text": "請協助：深入研究三種技術方案並交付報告", "route": "work", "synthetic": true}
+{"id": "work-6-1", "group": "work-6", "language": "zh", "text": "我的需求是：深入研究三種技術方案並交付報告", "route": "work", "synthetic": true}
+{"id": "work-7-0", "group": "work-7", "language": "zh", "text": "請協助：重構所有路由程式並檢查相容性", "route": "work", "synthetic": true}
+{"id": "work-7-1", "group": "work-7", "language": "zh", "text": "我的需求是：重構所有路由程式並檢查相容性", "route": "work", "synthetic": true}
+{"id": "work-8-0", "group": "work-8", "language": "zh", "text": "請協助：完整實作後端 API 與測試", "route": "work", "synthetic": true}
+{"id": "work-8-1", "group": "work-8", "language": "zh", "text": "我的需求是：完整實作後端 API 與測試", "route": "work", "synthetic": true}
+{"id": "work-9-0", "group": "work-9", "language": "zh", "text": "請協助：調查效能瓶頸並完成修正及驗證", "route": "work", "synthetic": true}
+{"id": "work-9-1", "group": "work-9", "language": "zh", "text": "我的需求是：調查效能瓶頸並完成修正及驗證", "route": "work", "synthetic": true}
+{"id": "work-10-0", "group": "work-10", "language": "en", "text": "Please help: Implement the complete account management feature and verify it", "route": "work", "synthetic": true}
+{"id": "work-10-1", "group": "work-10", "language": "en", "text": "My request is: Implement the complete account management feature and verify it", "route": "work", "synthetic": true}
+{"id": "work-11-0", "group": "work-11", "language": "en", "text": "Please help: Refactor the database interface and complete regression tests", "route": "work", "synthetic": true}
+{"id": "work-11-1", "group": "work-11", "language": "en", "text": "My request is: Refactor the database interface and complete regression tests", "route": "work", "synthetic": true}
+{"id": "work-12-0", "group": "work-12", "language": "en", "text": "Please help: Research multiple architectures and compare tradeoffs in depth", "route": "work", "synthetic": true}
+{"id": "work-12-1", "group": "work-12", "language": "en", "text": "My request is: Research multiple architectures and compare tradeoffs in depth", "route": "work", "synthetic": true}
+{"id": "work-13-0", "group": "work-13", "language": "en", "text": "Please help: Design and implement the full data processing pipeline", "route": "work", "synthetic": true}
+{"id": "work-13-1", "group": "work-13", "language": "en", "text": "My request is: Design and implement the full data processing pipeline", "route": "work", "synthetic": true}
+{"id": "work-14-0", "group": "work-14", "language": "en", "text": "Please help: Fix this project's bug and verify the result", "route": "work", "synthetic": true}
+{"id": "work-14-1", "group": "work-14", "language": "en", "text": "My request is: Fix this project's bug and verify the result", "route": "work", "synthetic": true}
+{"id": "work-15-0", "group": "work-15", "language": "en", "text": "Please help: Implement the complex form validation feature", "route": "work", "synthetic": true}
+{"id": "work-15-1", "group": "work-15", "language": "en", "text": "My request is: Implement the complex form validation feature", "route": "work", "synthetic": true}
+{"id": "work-16-0", "group": "work-16", "language": "en", "text": "Please help: Research three approaches deeply and deliver a report", "route": "work", "synthetic": true}
+{"id": "work-16-1", "group": "work-16", "language": "en", "text": "My request is: Research three approaches deeply and deliver a report", "route": "work", "synthetic": true}
+{"id": "work-17-0", "group": "work-17", "language": "en", "text": "Please help: Refactor all routing code and check compatibility", "route": "work", "synthetic": true}
+{"id": "work-17-1", "group": "work-17", "language": "en", "text": "My request is: Refactor all routing code and check compatibility", "route": "work", "synthetic": true}
+{"id": "work-18-0", "group": "work-18", "language": "en", "text": "Please help: Implement the complete backend API and its tests", "route": "work", "synthetic": true}
+{"id": "work-18-1", "group": "work-18", "language": "en", "text": "My request is: Implement the complete backend API and its tests", "route": "work", "synthetic": true}
+{"id": "work-19-0", "group": "work-19", "language": "en", "text": "Please help: Investigate the performance bottleneck and implement and verify the fix", "route": "work", "synthetic": true}
+{"id": "work-19-1", "group": "work-19", "language": "en", "text": "My request is: Investigate the performance bottleneck and implement and verify the fix", "route": "work", "synthetic": true}

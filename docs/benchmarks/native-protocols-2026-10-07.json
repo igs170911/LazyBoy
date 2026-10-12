@@ -1,0 +1,74 @@
+{
+  "passed": true,
+  "image": "sha256:35c307d16cae1d3ba4c8eb63a4ced182f0b1823289d4e69d31bddaf7a27f0208",
+  "requests": [
+    {
+      "protocol": "responses",
+      "model": "gpt-5-fixture",
+      "path": "/v1/responses",
+      "image": true,
+      "tool_results": 0,
+      "x_api_key": null,
+      "provider_credential_verified": true,
+      "messages_api_key_verified": null
+    },
+    {
+      "protocol": "responses",
+      "model": "gpt-5-fixture",
+      "path": "/v1/responses",
+      "image": true,
+      "tool_results": 1,
+      "x_api_key": null,
+      "provider_credential_verified": true,
+      "messages_api_key_verified": null
+    },
+    {
+      "protocol": "responses",
+      "model": "gpt-5-fixture",
+      "path": "/v1/responses",
+      "image": true,
+      "tool_results": 2,
+      "x_api_key": null,
+      "provider_credential_verified": true,
+      "messages_api_key_verified": null
+    },
+    {
+      "protocol": "messages",
+      "model": "claude-fixture",
+      "path": "/v1/messages",
+      "image": true,
+      "tool_results": 0,
+      "provider_credential_verified": true,
+      "messages_api_key_verified": true
+    },
+    {
+      "protocol": "messages",
+      "model": "claude-fixture",
+      "path": "/v1/messages",
+      "image": true,
+      "tool_results": 1,
+      "provider_credential_verified": true,
+      "messages_api_key_verified": true
+    },
+    {
+      "protocol": "messages",
+      "model": "claude-fixture",
+      "path": "/v1/messages",
+      "image": true,
+      "tool_results": 2,
+      "provider_credential_verified": true,
+      "messages_api_key_verified": true
+    }
+  ],
+  "auxiliary_requests": 1,
+  "checks": [
+    "web adds provider/manual model/API protocol and persists settings",
+    "Responses native tool loop and image input",
+    "Messages native tool loop and image input",
+    "warm worker switches protocol/provider/model",
+    "actual downloaded artifact verifies each transport"
+  ],
+  "hermes_commit": "05eecbcd972c8737ebc7722ea08aab47fb538043",
+  "date": "2026-10-07",
+  "method": "Local deterministic providers; real Docker and unmodified Hermes. No paid API."
+}

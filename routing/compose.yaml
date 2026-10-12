@@ -1,0 +1,20 @@
+services:
+  classifier:
+    build: .
+    image: lazyhermes-classifier:local
+    ports:
+      - "127.0.0.1:${LAZYHERMES_CLASSIFIER_PORT:-8778}:8768"
+    environment:
+      HF_HOME: /models/huggingface
+      LAYA_THREADS: "2"
+      OMP_NUM_THREADS: "2"
+      LAYA_BACKEND: ${LAYA_BACKEND:-auto}
+      LAYA_MODEL_PATH: ${LAYA_MODEL_PATH:-convaiinnovations/laya-multilingual}
+      LAYA_ONNX_PATH: ${LAYA_ONNX_PATH:-/models/laya.onnx}
+    volumes:
+      - models:/models
+    mem_limit: 5g
+    cpus: 2
+    restart: unless-stopped
+volumes:
+  models:

@@ -1,0 +1,461 @@
+{
+  "audited_on": "2026-10-07",
+  "sample_type": "three historical Shopee tasks",
+  "method": "full persisted events, read-only SQLite; task transcript may be compacted",
+  "caveats": [
+    "timing sums may overlap and are not a wall-clock decomposition",
+    "helper spans are nested/background and excluded from tool totals",
+    "cancelled cases are censored observations, not completion times",
+    "retained models describe remaining transcript, not every historical model call",
+    "time outside agent_turn includes intermission and other overhead"
+  ],
+  "cases": [
+    {
+      "case": "A",
+      "started_at_taipei": "2026-10-05T22:53:06.497322+08:00",
+      "ended_at_taipei": "2026-10-05T23:21:39.153605+08:00",
+      "research_mode": null,
+      "state": "terminal",
+      "verdict": "answer",
+      "model_requests": 168,
+      "http_attempt_events": 168,
+      "wall_ms": 1712656,
+      "timing": {
+        "agent_turn": {
+          "count": 3,
+          "sum_ms": 1637970,
+          "max_ms": 976504
+        },
+        "model_response": {
+          "count": 168,
+          "sum_ms": 1392812,
+          "max_ms": 40517,
+          "median_ms": 5619.0,
+          "mean_ms": 8290.55,
+          "p95_nearest_rank_ms": 24047
+        },
+        "model_round_including_queue": {
+          "count": 168,
+          "sum_ms": 1405410,
+          "max_ms": 40604
+        },
+        "request_preparation": {
+          "count": 168,
+          "sum_ms": 8604,
+          "max_ms": 183
+        },
+        "worker_model_queue": {
+          "count": 168,
+          "sum_ms": 0,
+          "max_ms": 0
+        },
+        "tool_execution": {
+          "count": 181,
+          "sum_ms": 195112,
+          "max_ms": 15072
+        }
+      },
+      "model_response_percent_of_active": 85.03,
+      "tool_sum_percent_of_active": 11.91,
+      "retained_transcript_models": [
+        {
+          "provider": "opencode-go",
+          "model": "deepseek-v4.1-flash"
+        }
+      ],
+      "runtime_counts": {
+        "tool_started": 181,
+        "tool_finished": 181,
+        "question": 2,
+        "steering": 2,
+        "turn_ended": 3
+      },
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "calls": 58,
+          "sum_ms": 103689,
+          "failed": 10
+        },
+        {
+          "name": "browser_click",
+          "calls": 17,
+          "sum_ms": 30364,
+          "failed": 3
+        },
+        {
+          "name": "browser_wait",
+          "calls": 4,
+          "sum_ms": 25311,
+          "failed": 4
+        },
+        {
+          "name": "browser_type",
+          "calls": 4,
+          "sum_ms": 10350,
+          "failed": 1
+        },
+        {
+          "name": "browser_eval",
+          "calls": 35,
+          "sum_ms": 8055,
+          "failed": 1
+        },
+        {
+          "name": "web_fetch",
+          "calls": 10,
+          "sum_ms": 7451,
+          "failed": 0
+        },
+        {
+          "name": "browser_snapshot",
+          "calls": 13,
+          "sum_ms": 3751,
+          "failed": 3
+        },
+        {
+          "name": "browser_read_page",
+          "calls": 6,
+          "sum_ms": 2832,
+          "failed": 0
+        },
+        {
+          "name": "browser_press",
+          "calls": 2,
+          "sum_ms": 947,
+          "failed": 0
+        },
+        {
+          "name": "browser_tabs",
+          "calls": 10,
+          "sum_ms": 774,
+          "failed": 0
+        },
+        {
+          "name": "screenshot",
+          "calls": 1,
+          "sum_ms": 418,
+          "failed": 0
+        },
+        {
+          "name": "shell",
+          "calls": 1,
+          "sum_ms": 325,
+          "failed": 0
+        },
+        {
+          "name": "register_deliverable",
+          "calls": 1,
+          "sum_ms": 212,
+          "failed": 0
+        },
+        {
+          "name": "read_tool_output",
+          "calls": 8,
+          "sum_ms": 162,
+          "failed": 0
+        },
+        {
+          "name": "send_message",
+          "calls": 2,
+          "sum_ms": 121,
+          "failed": 0
+        },
+        {
+          "name": "web_search",
+          "calls": 3,
+          "sum_ms": 87,
+          "failed": 3
+        },
+        {
+          "name": "report_progress",
+          "calls": 1,
+          "sum_ms": 79,
+          "failed": 0
+        },
+        {
+          "name": "browser_release",
+          "calls": 1,
+          "sum_ms": 60,
+          "failed": 0
+        },
+        {
+          "name": "request_secret",
+          "calls": 1,
+          "sum_ms": 55,
+          "failed": 0
+        },
+        {
+          "name": "load_tool_group",
+          "calls": 2,
+          "sum_ms": 42,
+          "failed": 0
+        },
+        {
+          "name": "publish_research",
+          "calls": 1,
+          "sum_ms": 27,
+          "failed": 1
+        }
+      ]
+    },
+    {
+      "case": "B",
+      "started_at_taipei": "2026-10-06T10:20:29.877309+08:00",
+      "ended_at_taipei": "2026-10-06T10:44:02.835221+08:00",
+      "research_mode": null,
+      "state": "terminal",
+      "verdict": "cancelled",
+      "model_requests": 109,
+      "http_attempt_events": 109,
+      "wall_ms": 1412958,
+      "timing": {
+        "agent_turn": {
+          "count": 1,
+          "sum_ms": 1412790,
+          "max_ms": 1412790
+        },
+        "model_response": {
+          "count": 109,
+          "sum_ms": 826042,
+          "max_ms": 24521,
+          "median_ms": 5282,
+          "mean_ms": 7578.37,
+          "p95_nearest_rank_ms": 17348
+        },
+        "model_round_including_queue": {
+          "count": 109,
+          "sum_ms": 834774,
+          "max_ms": 24600
+        },
+        "request_preparation": {
+          "count": 109,
+          "sum_ms": 5932,
+          "max_ms": 202
+        },
+        "worker_model_queue": {
+          "count": 109,
+          "sum_ms": 0,
+          "max_ms": 0
+        },
+        "tool_execution": {
+          "count": 119,
+          "sum_ms": 551820,
+          "max_ms": 30752
+        }
+      },
+      "model_response_percent_of_active": 58.47,
+      "tool_sum_percent_of_active": 39.06,
+      "retained_transcript_models": [
+        {
+          "provider": "opencode-go",
+          "model": "deepseek-v4.1-flash"
+        }
+      ],
+      "runtime_counts": {
+        "tool_started": 119,
+        "tool_finished": 119,
+        "question": 0,
+        "steering": 0,
+        "turn_ended": 1
+      },
+      "tools": [
+        {
+          "name": "computer",
+          "calls": 73,
+          "sum_ms": 309957,
+          "failed": 2
+        },
+        {
+          "name": "browser_tabs",
+          "calls": 5,
+          "sum_ms": 150997,
+          "failed": 5
+        },
+        {
+          "name": "browser_eval",
+          "calls": 1,
+          "sum_ms": 30056,
+          "failed": 1
+        },
+        {
+          "name": "browser_navigate",
+          "calls": 1,
+          "sum_ms": 30052,
+          "failed": 1
+        },
+        {
+          "name": "shell",
+          "calls": 21,
+          "sum_ms": 28721,
+          "failed": 1
+        },
+        {
+          "name": "web_fetch",
+          "calls": 6,
+          "sum_ms": 1780,
+          "failed": 3
+        },
+        {
+          "name": "read_tool_output",
+          "calls": 8,
+          "sum_ms": 139,
+          "failed": 0
+        },
+        {
+          "name": "web_search",
+          "calls": 2,
+          "sum_ms": 79,
+          "failed": 2
+        },
+        {
+          "name": "report_progress",
+          "calls": 1,
+          "sum_ms": 27,
+          "failed": 0
+        },
+        {
+          "name": "load_tool_group",
+          "calls": 1,
+          "sum_ms": 12,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "case": "C",
+      "started_at_taipei": "2026-10-06T15:57:24.372253+08:00",
+      "ended_at_taipei": "2026-10-06T16:08:52.741245+08:00",
+      "research_mode": null,
+      "state": "terminal",
+      "verdict": "cancelled",
+      "model_requests": 81,
+      "http_attempt_events": 81,
+      "wall_ms": 688369,
+      "timing": {
+        "agent_turn": {
+          "count": 1,
+          "sum_ms": 688225,
+          "max_ms": 688225
+        },
+        "model_response": {
+          "count": 81,
+          "sum_ms": 342239,
+          "max_ms": 9883,
+          "median_ms": 3695,
+          "mean_ms": 4225.17,
+          "p95_nearest_rank_ms": 8228
+        },
+        "model_round_including_queue": {
+          "count": 81,
+          "sum_ms": 347684,
+          "max_ms": 9942
+        },
+        "request_preparation": {
+          "count": 81,
+          "sum_ms": 3381,
+          "max_ms": 76
+        },
+        "worker_model_queue": {
+          "count": 81,
+          "sum_ms": 0,
+          "max_ms": 0
+        },
+        "tool_execution": {
+          "count": 80,
+          "sum_ms": 325456,
+          "max_ms": 31459
+        }
+      },
+      "model_response_percent_of_active": 49.73,
+      "tool_sum_percent_of_active": 47.29,
+      "retained_transcript_models": [
+        {
+          "provider": "opencode-go",
+          "model": "deepseek-v4.1-flash"
+        }
+      ],
+      "runtime_counts": {
+        "tool_started": 80,
+        "tool_finished": 80,
+        "question": 0,
+        "steering": 0,
+        "turn_ended": 1
+      },
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "calls": 10,
+          "sum_ms": 101640,
+          "failed": 6
+        },
+        {
+          "name": "await_shell",
+          "calls": 3,
+          "sum_ms": 90978,
+          "failed": 0
+        },
+        {
+          "name": "shell",
+          "calls": 13,
+          "sum_ms": 47083,
+          "failed": 0
+        },
+        {
+          "name": "browser_tabs",
+          "calls": 7,
+          "sum_ms": 30519,
+          "failed": 1
+        },
+        {
+          "name": "browser_snapshot",
+          "calls": 5,
+          "sum_ms": 30505,
+          "failed": 2
+        },
+        {
+          "name": "browser_click",
+          "calls": 9,
+          "sum_ms": 21371,
+          "failed": 5
+        },
+        {
+          "name": "browser_eval",
+          "calls": 23,
+          "sum_ms": 2386,
+          "failed": 1
+        },
+        {
+          "name": "browser_read_page",
+          "calls": 6,
+          "sum_ms": 659,
+          "failed": 1
+        },
+        {
+          "name": "browser_press",
+          "calls": 1,
+          "sum_ms": 149,
+          "failed": 0
+        },
+        {
+          "name": "browser_wait",
+          "calls": 1,
+          "sum_ms": 122,
+          "failed": 0
+        },
+        {
+          "name": "web_search",
+          "calls": 1,
+          "sum_ms": 31,
+          "failed": 1
+        },
+        {
+          "name": "load_tool_group",
+          "calls": 1,
+          "sum_ms": 13,
+          "failed": 0
+        }
+      ]
+    }
+  ]
+}
