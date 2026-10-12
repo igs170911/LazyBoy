@@ -5,7 +5,7 @@ import { deferDialog } from "../deferred-dialog";
 import type { PreviewFile } from "../markdown";
 import type { SettingsSectionId } from "../settings";
 import { readStorage, writeStorage } from "../storage";
-import { Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, Video, Import } from "../ui/icons";
+import { Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, GraduationCap, Import } from "../ui/icons";
 import { ConfirmDialog, toast, Toaster, type MenuItem } from "../ui/overlay";
 import { ComputerPane } from "./ComputerPane";
 import { Conversation, type PanelTab } from "./Conversation";
@@ -13,11 +13,11 @@ import { appendDraft, draftKey } from "./drafts";
 import { FilesPane } from "./FilesPane";
 import { Sidebar } from "./Sidebar";
 import { GroupEditor, MoveDialog } from "./TeamDialogs";
+import { TeachStartDialog } from "./Teaching";
 import { useSwipeBack } from "./swipe-back";
 import { useAgents } from "./useAgents";
 import { BUSY_STATES, useSession } from "./useSession";
 
-const RecordingLesson = deferDialog<Parameters<typeof import("../recording-lesson").RecordingLesson>[0]>(() => import("../recording-lesson").then(m => ({ default: m.RecordingLesson })), "RecordingLesson");
 const RoutinesDialog = deferDialog<Parameters<typeof import("../routines").RoutinesDialog>[0]>(() => import("../routines").then(m => ({ default: m.RoutinesDialog })), "RoutinesDialog");
 const AgentShareDialog = deferDialog<Parameters<typeof import("../agent-template").AgentShareDialog>[0]>(() => import("../agent-template").then(m => ({ default: m.AgentShareDialog })), "AgentShareDialog");
 const TemplateImportDialog = deferDialog<Parameters<typeof import("../agent-template").TemplateImportDialog>[0]>(() => import("../agent-template").then(m => ({ default: m.TemplateImportDialog })), "TemplateImportDialog");
@@ -38,7 +38,7 @@ type Dialog =
   | { kind: "routines"; id: string }
   | { kind: "share"; agent: AgentRow }
   | { kind: "import" }
-  | { kind: "record"; agent: AgentRow }
+  | { kind: "teach"; agent: AgentRow }
   | { kind: "group"; group?: AgentGroup }
   | { kind: "move"; agent: AgentRow }
   | { kind: "confirm"; title: string; body: string; label: string; danger?: boolean; run: () => Promise<void> };
@@ -140,7 +140,7 @@ export function Workspace() {
     { label: "技能", icon: <Brain />, onSelect: () => setDialog({ kind: "agent", id: agent.id, section: "skills" }) },
     ...(!inChat ? [{ label: "定時任務", icon: <CalendarClock />, onSelect: () => setDialog({ kind: "routines", id: agent.id }) }] : []),
     { label: "分享 Bot", icon: <Share2 />, onSelect: () => setDialog({ kind: "share", agent }) },
-    { label: "錄製示範", icon: <Video />, onSelect: () => setDialog({ kind: "record", agent }) },
+    { label: "教它一件事", icon: <GraduationCap />, onSelect: () => setDialog({ kind: "teach", agent }) },
     ...(groups.length ? [{ label: "移到群組", icon: <Users />, onSelect: () => setDialog({ kind: "move", agent }) }] : []),
     "separator",
     { label: "清除對話", icon: <Eraser />, onSelect: () => {
@@ -228,7 +228,7 @@ export function Workspace() {
           <Conversation agent={active} session={session} mobile={mobile} panel={panel} onBack={back}
             onTogglePanel={togglePanel} onOpenFile={openFile}
             onRoutines={() => setDialog({ kind: "routines", id: active.id })}
-            onRecord={() => setDialog({ kind: "record", agent: active })}
+            onTeach={() => setDialog({ kind: "teach", agent: active })}
             onPick={text => appendDraft(draftKey(active.id, session.threadId), text)}
             onOpenSettings={() => setDialog({ kind: "agent", id: active.id, section: "profile" })}
             menuItems={agentActions(active, true)} />
@@ -264,7 +264,12 @@ export function Workspace() {
                 {!mobile ? <button type="button" className="icon-btn" aria-label="收起面板" title="收起面板" onClick={() => setPanel({ open: false })}><PanelRightClose /></button> : null}
               </header>
               <ComputerPane key={active.id} agent={active} visible={panel.tab === "computer"} mobile={mobile} botWorking={botWorking}
-                question={session.activity.question || null} onSend={session.send} onAnswered={() => void session.refreshActivity(active.id)} />
+                question={session.activity.question || null} lesson={session.lesson} onTeach={async body => {
+                  const result = await session.teach(body);
+                  // On a phone the computer covers the chat; the bot's questions and report appear there.
+                  if (mobile && (body.action === "finish" || body.action === "cancel")) back();
+                  return result;
+                }} onSend={session.send} onAnswered={() => void session.refreshActivity(active.id)} />
               {panel.tab === "files" ? (
                 <FilesPane agentId={active.id} files={session.files} preview={preview} onPreview={setPreview} onReload={() => void session.reloadFiles(active.id)} />
               ) : null}
@@ -290,8 +295,15 @@ export function Workspace() {
       {dialog?.kind === "import" ? (
         <TemplateImportDialog onCreated={() => void refresh()} onClose={() => setDialog(null)} onImported={row => { setDialog(null); upsert(row); void refresh(); select(row.id); }} />
       ) : null}
-      {dialog?.kind === "record" ? (
-        <RecordingLesson agent={dialog.agent} onClose={() => setDialog(null)} onAttach={text => { appendDraft(dialog.agent.id === activeId ? draftKey(dialog.agent.id, session.threadId) : dialog.agent.id, text); setDialog(null); if (dialog.agent.id !== activeId) select(dialog.agent.id); }} />
+      {dialog?.kind === "teach" ? (
+        <TeachStartDialog agent={dialog.agent} mobile={mobile} onClose={() => setDialog(null)} onStart={async (goal, trial) => {
+          const agent = dialog.agent;
+          // The demonstration happens on the bot's computer, in the conversation it was started from.
+          const thread = agent.id === activeId ? session.threadId : agent.id;
+          if (agent.id === activeId) await session.teach({ action: "start", goal, trial, thread });
+          else { await api.teach(agent.id, { action: "start", goal, trial, thread }); select(agent.id); }
+          togglePanel("computer", true);
+        }} />
       ) : null}
       {dialog?.kind === "group" ? <GroupEditor group={dialog.group} agents={agents} onClose={() => setDialog(null)} onSaved={applyTeam} /> : null}
       {dialog?.kind === "move" ? <MoveDialog agent={dialog.agent} groups={groups} onClose={() => setDialog(null)} onSaved={applyTeam} /> : null}

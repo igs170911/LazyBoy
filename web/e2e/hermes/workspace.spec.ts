@@ -24,6 +24,8 @@ function setup() {
     threads: [{ id: AGENT, title: "主要對話", main: true, preview: "", message_count: 2, running: false, queued: false }] as Json[],
     threadTranscripts: {} as Record<string, Json[]>,
     requests: [] as { method: string; path: string; body?: Json }[],
+    lesson: null as Json | null,
+    lessons: {} as Record<string, Json>,
   };
   const row = () => ({ id: AGENT, name: "測試 Bot", title: "驗收用", avatar_color: "#9159FE", avatar_shape: "round", last_at: "2026-10-08T01:01:00Z", preview: "好的", activity: state.activity, skill_count: 0 });
   async function handle(route: Route) {
@@ -59,6 +61,22 @@ function setup() {
     if (path.startsWith("/api/tasks/")) return json(state.tasks[path.split("/").pop()!] || {}, state.tasks[path.split("/").pop()!] ? 200 : 404);
     if (path === "/api/media") return json({ model: "m", capabilities: { images: true, pdf: true } });
     if (path === `/api/agents/${AGENT}/messages`) return json({ steered: state.activity.running ? "t1" : undefined, queued: state.activity.running ? undefined : "t2" });
+    if (path === `/api/agents/${AGENT}/teach`) {
+      if (request.method() === "GET") return json({ lesson: state.lesson });
+      const body = JSON.parse(request.postData() || "{}");
+      if (body.action === "start") state.lesson = { id: "L1", agent_id: AGENT, goal: body.goal, trial: body.trial, state: "recording", steps: [], base_url: `/api/agents/${AGENT}/files/content?path=lessons/L1/` };
+      else if (body.action === "pause" || body.action === "resume") state.lesson = { ...state.lesson, state: body.action === "pause" ? "paused" : "recording" };
+      else if (body.action === "note") state.lesson = { ...state.lesson, steps: [...(state.lesson!.steps as Json[]), { id: "n1", at: 3, source: "user", kind: "note", text: `使用者補充：${body.text}` }] };
+      else if (body.action === "drop") state.lesson = { ...state.lesson, steps: (state.lesson!.steps as Json[]).filter(step => step.id !== body.step) };
+      else if (body.action === "finish") {
+        state.lessons.L1 = { ...state.lesson, state: "finished" };
+        state.lesson = null;
+        state.transcript = [...state.transcript, { id: "m9", role: "user", content: "我示範了「查訂單」，共 2 步，請學起來", lesson_id: "L1", at: "2026-10-08T01:10:00Z" }];
+        return json({ lesson: null, queued: "t5" });
+      } else if (body.action === "cancel") state.lesson = null;
+      return json({ lesson: state.lesson });
+    }
+    if (path.startsWith(`/api/agents/${AGENT}/lessons/`)) return json({ lesson: state.lessons[path.split("/").pop()!] });
     if (path === `/api/agents/${AGENT}/computer`) return json({ ready: false, viewer_url: "", error: "測試環境沒有電腦" });
     if (path.startsWith(`/api/agents/${AGENT}/`)) return json({ ok: true });
     return json({});
@@ -370,5 +388,59 @@ test("background work shows on the reply that started it, can be stopped, and it
   fixture.state.transcript = [...fixture.state.transcript, { id: "delta:t9", role: "assistant", content: "兩組研究都回來了。", at: "2026-10-08T01:09:00Z" }];
   await emit(page, [{ kind: "reply", task_id: "t9", payload: {} }]);
   await expect(page.locator(".msg.assistant", { hasText: "兩組研究都回來了" }).locator(".background-origin")).toHaveText("背景工作回報");
+  expect(errors).toEqual([]);
+});
+
+test("teaching: demonstrate on the bot's computer, edit the steps, and hand it over to learn", async ({ page }) => {
+  const fixture = setup();
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await open(page, fixture);
+  await page.getByRole("button", { name: "加入檔案或教它一件事" }).click();
+  await page.getByRole("button", { name: "教它一件事", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "教它一件事" });
+  await expect(dialog).toContainText("密碼欄位只會記成 ••••");
+  await dialog.getByLabel("你要教它做什麼？（選填）").fill("查訂單");
+  await dialog.getByRole("button", { name: "開始示範" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(fixture.state.posts.find(post => post.path.endsWith("/teach"))?.body).toMatchObject({ action: "start", goal: "查訂單", trial: true, thread: AGENT });
+
+  const bar = page.getByRole("region", { name: "教學" });
+  await expect(bar).toContainText("教學中 · 第 0 步");
+  await expect(bar.getByRole("button", { name: "完成，請它學起來" })).toBeDisabled();
+  fixture.state.activity = { ...IDLE, teaching: "L1" };
+  const steps = [
+    { id: "b1", at: 1, source: "browser", kind: "click", text: "點擊連結「訂單」", shot: "shots/b-1.jpg", target: { role: "link", name: "訂單", box: [10, 10, 40, 20], viewport: [1280, 600] } },
+    { id: "b2", at: 2, source: "browser", kind: "click", text: "點擊按鈕「點錯了」" },
+  ];
+  await emit(page, [{ kind: "teaching", payload: { lesson: { ...fixture.state.lesson, steps } } }]);
+  fixture.state.lesson = { ...fixture.state.lesson, steps };
+  await expect(bar).toContainText("第 2 步");
+  await expect(bar).toContainText("最新：點擊按鈕「點錯了」");
+  await expect(page.locator(".chat-status")).toContainText("教學中");
+
+  await bar.getByRole("button", { name: /步驟/ }).click();
+  await expect(bar.locator(".teach-steps li")).toHaveCount(2);
+  await expect(bar.locator(".teach-steps li").first().locator(".teach-mark")).toHaveCount(1);
+  await bar.getByRole("button", { name: "刪除這一步：點擊按鈕「點錯了」" }).click();
+  await expect(bar.locator(".teach-steps li")).toHaveCount(1);
+  await bar.getByRole("button", { name: "補充說明" }).click();
+  await bar.getByLabel("補充說明").fill("只看已完成的訂單");
+  await bar.getByRole("button", { name: "加入" }).click();
+  await expect(bar.locator(".teach-steps li.is-note")).toContainText("只看已完成的訂單");
+  await bar.getByRole("button", { name: "暫停" }).click();
+  await expect(bar).toContainText("已暫停");
+  await bar.getByRole("button", { name: "繼續" }).click();
+  await expect(bar).toContainText("教學中");
+
+  await bar.getByRole("button", { name: "完成，請它學起來" }).click();
+  await expect(bar).toHaveCount(0);
+  const demo = page.locator(".msg.user .demo-card");
+  await expect(demo.locator("summary")).toContainText("我示範了「查訂單」，共 2 步");
+  await demo.locator("summary").click();
+  await expect(demo.locator(".teach-steps li")).toHaveCount(2);
+  await expect(demo.getByRole("button", { name: /刪除這一步/ })).toHaveCount(0);
+  const actions = fixture.state.posts.filter(post => post.path.endsWith("/teach")).map(post => post.body.action);
+  expect(actions).toEqual(["start", "drop", "note", "pause", "resume", "finish"]);
   expect(errors).toEqual([]);
 });

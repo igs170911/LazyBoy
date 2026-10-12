@@ -38,7 +38,7 @@ export function FilesPane({ agentId, files, preview, onPreview, onReload }: {
       // Searching looks through everything; browsing shows only results worth opening.
       .filter(file => needle ? file.path.toLowerCase().includes(needle) : all || file.important !== false)
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-    const titles: Record<string, string> = { outputs: "成果", uploads: "你上傳的", lessons: "示範錄影" };
+    const titles: Record<string, string> = { outputs: "成果", uploads: "你上傳的", lessons: "示範教學" };
     return ["outputs", "uploads", "lessons"]
       .map(key => ({ key, title: titles[key], files: hits.filter(file => groupOf(file.path) === key) }))
       .filter(group => group.files.length);

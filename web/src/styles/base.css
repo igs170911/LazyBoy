@@ -66,6 +66,8 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; }
+/* No rubber-band drag of the whole page; scrolling areas still bounce inside themselves. */
+html, body { overscroll-behavior: none; }
 body {
   margin: 0;
   background: var(--bg);

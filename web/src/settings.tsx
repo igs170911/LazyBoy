@@ -722,7 +722,7 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
       </section>
       <section id="settings-mcp" className="lb-settings-group" aria-label="工具串接">
         <h3>工具串接</h3>
-        <McpSettings agentId={agentId} />
+        <McpSettings everywhere agentId={agentId} />
       </section>
       <UpdatesPanel computer={computer} />
       {onAbout ? <button type="button" className="shell-action settings-about" onClick={onAbout}>{t.about}</button> : null}
@@ -772,7 +772,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
           </button>
           <h2 id={headingId}>{sectionLabel}</h2>
           <div className="lb-settings-body">
-            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "mcp" ? <McpSettings agentId={agentId} /> : <UpdatesPanel computer={computer} />}
+            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "mcp" ? <McpSettings everywhere agentId={agentId} /> : <UpdatesPanel computer={computer} />}
           </div>
         </section>
       </div>

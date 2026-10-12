@@ -38,6 +38,8 @@ def important(rel: str) -> bool:
     name = parts[-1].lower()
     if any(part.lower() in NOISE_DIRS for part in parts[:-1]): return False
     if name in NOISE_NAMES or any(name.endswith(suffix) for suffix in NOISE_SUFFIXES): return False
+    # A demonstration's raw recording and screenshots; its steps.json is what a person opens.
+    if parts[0] == "lessons" and ("shots" in parts or name.endswith(".jsonl")): return False
     return True
 
 

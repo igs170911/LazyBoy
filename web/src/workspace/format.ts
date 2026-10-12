@@ -43,7 +43,8 @@ export function duration(seconds: number) {
 export function bytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10240 ? 1 : 0)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value < 1024 ** 3) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${(value / 1024 ** 3).toFixed(2)} GB`;
 }
 
 /** Punycode (RFC 3492) labels such as `xn--rsso55b` back to Unicode, for showing domain names. */
@@ -78,4 +79,15 @@ export function unicodeHost(host: string) {
       return String.fromCodePoint(...out);
     } catch { return label; }
   }).join(".");
+}
+
+/** "剛剛", "5 分鐘前", "3 小時前", then the date. */
+export function ago(iso?: string | null, now = Date.now()) {
+  const at = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(at)) return "";
+  const minutes = Math.round((now - at) / 60000);
+  if (minutes < 1) return "剛剛";
+  if (minutes < 60) return `${minutes} 分鐘前`;
+  if (minutes < 24 * 60) return `${Math.round(minutes / 60)} 小時前`;
+  return listTime(iso);
 }

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 import { defineConfig, loadEnv, type Plugin, type ServerOptions } from "vite";
 import react from "@vitejs/plugin-react";
+import type { AcceptedPlugin, Rule } from "postcss";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -39,6 +40,29 @@ function modernFontSources(): Plugin {
   };
 }
 
+/**
+ * Touch screens fire :hover on tap and keep it until the next tap elsewhere, so a tapped button stays lit — the most
+ * obvious "this is a web page" tell on a phone. Every :hover selector only applies where a real pointer can hover.
+ */
+const hoverOnlyWithPointer: AcceptedPlugin = {
+  postcssPlugin: "hover-only-with-pointer",
+  Once(root, { AtRule }) {
+    root.walkRules((rule: Rule) => {
+      if (!rule.selector.includes(":hover")) return;
+      for (let parent = rule.parent; parent; parent = parent.parent) {
+        if (parent.type === "atrule" && (parent as unknown as { params: string }).params.includes("hover: hover")) return;
+      }
+      const hovering = rule.selectors.filter(selector => selector.includes(":hover"));
+      const others = rule.selectors.filter(selector => !selector.includes(":hover"));
+      const media = new AtRule({ name: "media", params: "(hover: hover)" });
+      media.append(rule.clone({ selectors: hovering }));
+      rule.after(media);
+      if (others.length) rule.selectors = others;
+      else rule.remove();
+    });
+  },
+};
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, rootDir, "");
   // Prefer .env / loadEnv over stale shell process.env (ai often pins LAZYBOY_VERSION).
@@ -60,6 +84,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [modernFontSources(), react(), compressedAssets()],
     resolve: { dedupe: ["react", "react-dom"] },
+    css: { postcss: { plugins: [hoverOnlyWithPointer] } },
     define: {
       "import.meta.env.LAZYBOY_VERSION": JSON.stringify(version),
       "import.meta.env.LAZYBOY_BUILD": JSON.stringify(build),

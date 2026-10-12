@@ -45,6 +45,8 @@ RUN mkdir -p /usr/share/fonts/truetype/huninn \
     && echo '9d5bf4932d31fe94c18cd8cfddc98bc1b14ce10f4e354c682179db290a99c825  /usr/share/fonts/truetype/huninn/jf-openhuninn-2.1.ttf' | sha256sum -c \
     && fc-cache -f
 COPY --from=node:22-bookworm-slim /usr/local/ /usr/local/
+# X RECORD bindings for box-teach-desktop (recording a human's demonstration).
+RUN apt-get update && apt-get install -y --no-install-recommends python3-xlib && rm -rf /var/lib/apt/lists/*
 # Tools that should track upstream go below this line. `make box-latest` passes a new
 # BOX_REFRESH each time, which invalidates Docker's cache from here on so they are
 # downloaded again; `make box` keeps the cache and the pinned versions.
@@ -57,7 +59,7 @@ ARG GROK_CLI_VERSION=1.0.50
 RUN npm install -g "@xai-official/grok@${GROK_CLI_VERSION}" && npm cache clean --force
 RUN mkdir -p /workspace /home/box /usr/share/lazyboy/xfce-skel /etc/xdg/xfce4 /usr/share/xfce4/helpers /etc/gtk-3.0 /etc/fonts/conf.d /usr/share/licenses/huninn \
     && chmod 1777 /workspace
-COPY --chmod=755 start-desktop.sh keep-desktop-awake desktop-probe.py stop-browser.py stop-browser.mjs restore-browser.mjs box-chrome box-terminal box-a11y /usr/local/bin/
+COPY --chmod=755 start-desktop.sh keep-desktop-awake desktop-probe.py stop-browser.py stop-browser.mjs restore-browser.mjs box-chrome box-terminal box-a11y box-teach-browser.mjs box-teach-desktop /usr/local/bin/
 COPY --chmod=644 welcome.html /usr/share/lazyboy/welcome.html
 COPY --chmod=644 xfce/wallpaper.svg /usr/share/lazyboy/wallpaper.svg
 COPY --chmod=644 xfce/xfce4-panel.xml xfce/xfwm4.xml xfce/xfce4-desktop.xml /usr/share/lazyboy/xfce-skel/

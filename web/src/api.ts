@@ -43,6 +43,38 @@ export type AgentActivity = {
   /** delegate_task children still working, often after the turn that started them ended. */
   background?: number;
   background_task_ids?: string[];
+  /** The lesson being demonstrated on the bot's computer; queued work waits for it. */
+  teaching?: string | null;
+};
+
+/** One thing the human did while teaching, described by what was acted on rather than where. */
+export type LessonStep = {
+  id: string;
+  at: number;
+  source: "browser" | "desktop" | "user";
+  kind: string;
+  text: string;
+  shot?: string;
+  url?: string;
+  window?: string;
+  target?: { role?: string; name?: string; box?: number[] | null; viewport?: number[] } | null;
+  point?: number[];
+  screen?: number[];
+  result?: { url?: string; title?: string; shot?: string };
+};
+export type Lesson = {
+  id: string;
+  agent_id: string;
+  goal: string;
+  trial: boolean;
+  state: "recording" | "paused" | "finished" | "cancelled";
+  started_at?: string;
+  ended_at?: string;
+  task_id?: string;
+  thread_id?: string | null;
+  steps: LessonStep[];
+  /** Prefix for a step's `shot` to load its screenshot. */
+  base_url: string;
 };
 
 export type Artifact = {
@@ -143,7 +175,7 @@ export type AgentProfile = {
   model?: string;
 };
 
-export type TranscriptItem = { id?: string; role: "user" | "assistant"; content: string; at?: string; streaming?: boolean; narration?: string[]; routine_id?: string; routine_title?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
+export type TranscriptItem = { id?: string; role: "user" | "assistant"; content: string; at?: string; streaming?: boolean; narration?: string[]; routine_id?: string; routine_title?: string; lesson_id?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
 
 export type ModelProtocol = "chat_completions" | "responses" | "messages";
 export type ModelCheck = { status: "ok" | "protocol" | "unavailable" | "auth" | "busy" | "unknown"; message: string; detail?: string; at?: number; v?: number; protocol?: ModelProtocol | null };
@@ -212,6 +244,9 @@ export type AgentDetail = AgentRow & {
 };
 
 /** `important` is false for build output, caches and lock files; they stay behind "顯示全部". */
+/** Bytes a bot uses on disk, by kind. */
+export type StorageUsage = { workspace: number; uploads: number; caches: number; browser: number; tools: number; other: number; total: number };
+
 export type AgentFile = { path: string; title: string; media_type: string; bytes: number; updated_at: string; important?: boolean };
 
 export type TeamEvent = {
@@ -249,13 +284,14 @@ export type RoutineSchedule = { frequency: "once" | "daily" | "weekdays" | "week
 export type Routine = { id: string; agent_id: string; title: string; instructions: string; schedule: RoutineSchedule; enabled: boolean; next_run_at: string | null; last_run_at: string | null; last_task_id: string | null; last_error: string | null; retry_at?: string | null; last_run?: { state: string; verdict?: string | null; at: string } | null };
 export type RoutineRun = { started_at: string; task_id: string; state: string; verdict?: string; result?: {summary?: string} | null };
 export type MediaCapabilities = { images: boolean; pdf: boolean; text: boolean };
+export type UploadLimits = { files: number; file_bytes: number; image_bytes: number; total_bytes: number };
 export const api = {
   answerQuestion: (id: string, body: Record<string, unknown>) => request(`/api/agents/${encodeURIComponent(id)}/questions`, {method:"POST",body:JSON.stringify(body)}),
   routingHealth: () => request<{ready: boolean; supported?: boolean; engines?: {semantic?: string; laya?: string}; backend?: string}>("/api/settings/routing/health"),
   routines: (id: string) => request<{routines: Routine[]}>(`/api/agents/${encodeURIComponent(id)}/routines`),
   manageRoutine: (id: string, body: Record<string, unknown>) => request<{routine?: Routine; task_id?: string; runs?: RoutineRun[]}>(`/api/agents/${encodeURIComponent(id)}/routines`, {method:"POST",body:JSON.stringify(body)}),
-  mcp: (body: Record<string, unknown>) => request<{servers: McpServer[];scope?:string}>("/api/mcp", {method:"POST",body:JSON.stringify(body)}, 30000),
-  media: (id?: string) => request<{model: string; capabilities: MediaCapabilities}>("/api/media" + (id ? `?agent_id=${encodeURIComponent(id)}` : "")),
+  mcp: (body: Record<string, unknown>, timeout = 30000) => request<{servers: McpServer[];scope?:string;skipped?:boolean}>("/api/mcp", {method:"POST",body:JSON.stringify(body)}, timeout),
+  media: (id?: string) => request<{model: string; capabilities: MediaCapabilities; limits?: UploadLimits}>("/api/media" + (id ? `?agent_id=${encodeURIComponent(id)}` : "")),
   avatarModels: () => request<{provider: string; models: string[]}>("/api/avatar/models", undefined, 25000),
   generateAvatar: (model: string, prompt: string, signal?: AbortSignal) => request<{data_url: string}>("/api/avatar/generate", {method:"POST", body:JSON.stringify({model,prompt}), signal}, 160000),
   upload: async (id: string, file: File): Promise<Upload> => {
@@ -284,7 +320,10 @@ export const api = {
   },
   exportTemplate: (id: string) => request<AgentTemplate>(`/api/agents/${encodeURIComponent(id)}/template`),
   importTemplate: (id: string, template: AgentTemplate, name: string, group_id: string) => request<AgentRow>(`/api/templates/${id}`, {method:"PUT",body:JSON.stringify({template,name,group_id})},60000),
-  saveLesson: (id: string, body: Record<string, unknown>) => request<{id:string;video_url:string;manifest_path?:string}>(`/api/agents/${encodeURIComponent(id)}/lessons`, {method:"POST",body:JSON.stringify(body)},60000),
+  teaching: (id: string) => request<{ lesson: Lesson | null }>(`/api/agents/${encodeURIComponent(id)}/teach`, undefined, 8000),
+  lesson: (id: string, lesson: string) => request<{ lesson: Lesson }>(`/api/agents/${encodeURIComponent(id)}/lessons/${encodeURIComponent(lesson)}`),
+  teach: (id: string, body: { action: "start"; goal?: string; trial?: boolean; thread?: string | null } | { action: "pause" | "resume" | "finish" | "cancel"; lesson_id: string } | { action: "note"; lesson_id: string; text: string } | { action: "drop"; lesson_id: string; step: string }) =>
+    request<{ lesson: Lesson | null; queued?: string }>(`/api/agents/${encodeURIComponent(id)}/teach`, { method: "POST", body: JSON.stringify(body) }, 60000),
   manageTeam: (body: Record<string, unknown>) => request<{groups?: AgentGroup[]; group?: AgentGroup; agents?: AgentRow[]}>("/api/team", {method:"POST",body:JSON.stringify(body)}),
   skills: (id: string, body: Record<string, unknown> = {action:"list"}) => request<{skills: AgentSkill[]}>(`/api/agents/${encodeURIComponent(id)}/skills`, {method:"POST",body:JSON.stringify(body)}),
   createAgent: (profile: AgentProfile) =>
@@ -318,6 +357,8 @@ export const api = {
     request<ThreadRow>(`/api/agents/${encodeURIComponent(id)}/threads/${encodeURIComponent(thread)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteThread: (id: string, thread: string) =>
     request<{ ok: boolean }>(`/api/agents/${encodeURIComponent(id)}/threads/${encodeURIComponent(thread)}`, { method: "DELETE" }),
+  storage: (id: string) => request<StorageUsage>(`/api/agents/${encodeURIComponent(id)}/storage`, undefined, 30000),
+  cleanStorage: (id: string) => request<{ freed: number; usage: StorageUsage }>(`/api/agents/${encodeURIComponent(id)}/storage/clean`, { method: "POST" }, 90000),
   agentFiles: (id: string) => request<{ files: AgentFile[] }>(`/api/agents/${encodeURIComponent(id)}/files`, undefined, 8000),
   activity: (id: string) => request<AgentActivity>(`/api/agents/${id}/activity`, undefined, 8000),
   send: (id: string, text: string, thread?: string | null) =>
@@ -365,4 +406,5 @@ export const api = {
 
 export type AgentTemplate = {format:"lazyboy.agent-template";version:1;profile:AgentProfile;skills:Pick<AgentSkill,"name"|"description"|"instructions"|"enabled">[];mcp:{mcpServers:Record<string,{command?:string;args?:string[];url?:string;headers?:Record<string,string>;env?:Record<string,string>;enabled?:boolean}>};avatar_png?:string;notes:string[]};
 
-export type McpServer = { enabled?:boolean; missing_fields?:string[]; server: string; transport: string; url?: string; command?: string; args?: string[]; header_names?: string[]; env_names?: string[]; status?: string; serverStatus?: string; serverError?: string; tools?: {name: string; description?: string}[] };
+export type McpTest = { ok: boolean; error?: string | null; tools?: {name: string; description?: string}[]; at: string };
+export type McpServer = { scope?: string; scope_name?: string; last_test?: McpTest | null; enabled?:boolean; missing_fields?:string[]; server: string; transport: string; url?: string; command?: string; args?: string[]; header_names?: string[]; env_names?: string[]; status?: string; serverStatus?: string; serverError?: string; tools?: {name: string; description?: string}[] };

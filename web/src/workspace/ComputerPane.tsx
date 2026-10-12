@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AgentRow, type HumanQuestion } from "../api";
+import { api, type AgentRow, type HumanQuestion, type Lesson } from "../api";
 import { useComputerRecovery } from "../computer-recovery";
 import { Ellipsis, ExternalLink, Hand, LoaderCircle, Monitor, MousePointerClick, RotateCw, Sparkles } from "../ui/icons";
 import { ConfirmDialog, MenuButton, toast } from "../ui/overlay";
+import { TeachBar } from "./Teaching";
 
 type Action = "start" | "restart" | "update";
 const BUSY_LABEL: Record<Action, string> = {
@@ -26,12 +27,14 @@ export function isHandover(question?: HumanQuestion | null) {
   return question?.kind === "handoff" || question?.kind === "box_help";
 }
 
-export function ComputerPane({ agent, visible, mobile, botWorking, question, onSend, onAnswered }: {
+export function ComputerPane({ agent, visible, mobile, botWorking, question, lesson, onTeach, onSend, onAnswered }: {
   agent: AgentRow;
   visible: boolean;
   mobile: boolean;
   botWorking: boolean;
   question: HumanQuestion | null;
+  lesson: Lesson | null;
+  onTeach: (body: Parameters<typeof api.teach>[1]) => Promise<unknown>;
   onSend: (text: string) => Promise<void>;
   onAnswered: () => void;
 }) {
@@ -44,6 +47,7 @@ export function ComputerPane({ agent, visible, mobile, botWorking, question, onS
   const [confirm, setConfirm] = useState<Action | null>(null);
   const running = useRef<Promise<unknown> | null>(null);
   const handover = isHandover(question);
+  const teaching = lesson && (lesson.state === "recording" || lesson.state === "paused") ? lesson : null;
 
   const run = useCallback(async (action: Action, reload = false) => {
     if (running.current && action === "start") { await running.current; return; }
@@ -123,7 +127,7 @@ export function ComputerPane({ agent, visible, mobile, botWorking, question, onS
   }
 
   const state = op ? "busy" : url && connected && !issue ? "ok" : url && !issue ? "busy" : "off";
-  const label = op ? BUSY_LABEL[op] : issue || status || (url ? (connected ? (control ? "你正在操作" : botWorking ? `${agent.name} 正在使用` : "已連線") : "正在連線畫面…") : "電腦未啟動");
+  const label = op ? BUSY_LABEL[op] : issue || status || (url ? (connected ? (teaching ? "你正在示範" : control ? "你正在操作" : botWorking ? `${agent.name} 正在使用` : "已連線") : "正在連線畫面…") : "電腦未啟動");
   const shield = !!url && botWorking && !control;
 
   return (
@@ -131,7 +135,7 @@ export function ComputerPane({ agent, visible, mobile, botWorking, question, onS
       <div className="pane-toolbar">
         <span className={`dot ${state}`} aria-hidden="true" />
         <span className="pane-status" role="status">{label}</span>
-        {control && url ? (
+        {control && url && !teaching ? (
           <button type="button" className="btn small primary" disabled={returning} onClick={() => void handBack()}>
             {returning ? <LoaderCircle className="spin" /> : <Sparkles />}{handover ? "完成，交還給 Bot" : "交還給 Bot"}
           </button>
@@ -145,6 +149,7 @@ export function ComputerPane({ agent, visible, mobile, botWorking, question, onS
           { label: "更新電腦環境", icon: <Sparkles />, onSelect: () => setConfirm("update"), disabled: !!op },
         ]} />
       </div>
+      {teaching ? <TeachBar lesson={teaching} onAction={onTeach} /> : null}
       {handover && question ? (
         <div className="handover-banner" role="alert">
           <Hand aria-hidden="true" />

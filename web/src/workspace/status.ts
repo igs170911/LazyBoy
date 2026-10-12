@@ -3,6 +3,8 @@ import type { AgentActivity } from "../api";
 export type Tone = "idle" | "busy" | "attention" | "queued";
 
 export function activityStatus(activity?: AgentActivity | null): { tone: Tone; label: string } {
+  // The human is demonstrating on the bot's computer; anything queued waits for them.
+  if (activity?.teaching && (activity.state === "idle" || activity.state === "queued")) return { tone: "attention", label: "教學中" };
   switch (activity?.state) {
     case "running": return { tone: "busy", label: "工作中" };
     case "stopping": return { tone: "busy", label: "正在停止" };

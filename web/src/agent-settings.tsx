@@ -1,6 +1,7 @@
 import { useDialogFocus } from "./dialog-focus";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { SkillsPanel } from "./skills-panel";
+import { StoragePanel } from "./storage-panel";
 import { api, type AgentGroup, type AgentProfile, type AgentRow, type SettingsProvider } from "./api";
 import { X } from "./ui/icons";
 import {
@@ -545,6 +546,7 @@ export function AgentSettingsDialog({
               <option value="detailed">詳細：完整說明</option>
             </select></label>
             <label>{t.persona}<textarea required={creating} value={persona} maxLength={8000} rows={4} onChange={e=>setPersona(e.target.value)} placeholder={t.personaPlaceholder} /></label>
+            {!creating && agent ? <StoragePanel agentId={agent.id} /> : null}
             </div>
             {!creating && agent ? <div id="agent-skills-panel" role="tabpanel" aria-labelledby="agent-skills-tab" hidden={section!=="skills"}><SkillsPanel agentId={agent.id} onEditingChange={setSkillEditing}/></div> : <small>建立後即可加入技能與教學流程。</small>}
             {!creating && agent && onShare ? <button type="button" className="outline" disabled={busy || !ready || skillEditing} onClick={async()=>{if(live.current.busy)return;setBusy(true);setError("");try{let row=await api.updateAgent(agent.id,profileFrom());if(live.current.clearedPhoto&&agent.avatar_url)row=await api.clearAvatar(agent.id);onSaved(row);onShare(row);}catch(e){setError(e instanceof Error?e.message:t.settingsFailed);}finally{setBusy(false);}}}>儲存並分享 Bot</button> : null}

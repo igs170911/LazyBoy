@@ -30,7 +30,7 @@ class Model(BaseHTTPRequestHandler):
             user = next(m for m in reversed(body["messages"]) if m["role"] == "user")
             parts = user.get("content", [])
             images = [part["image_url"]["url"] for part in parts if isinstance(part, dict) and part.get("type") == "image_url"]
-            wire.append({"model":body["model"], "images":len(images), "image_is_png":bool(images) and base64.b64decode(images[0].partition(",")[2]).startswith(b"\x89PNG"), "recording_notes":"RECORDING_NOTES_VERIFIED" in str(parts), "reasoning_effort":body.get("reasoning_effort"), "reasoning":body.get("reasoning")})
+            wire.append({"model":body["model"], "images":len(images), "image_is_png":bool(images) and base64.b64decode(images[0].partition(",")[2]).startswith(b"\x89PNG"), "reasoning_effort":body.get("reasoning_effort"), "reasoning":body.get("reasoning")})
         message = {"role":"assistant", "content":"MEDIA_INPUT_VERIFIED"}
         self.send_response(200)
         if body.get("stream"):
@@ -135,17 +135,6 @@ def main():
             assert len(wire)==2 and wire[-1]["images"]==1 and wire[-1]["image_is_png"],wire
             assert wire[-1]["reasoning_effort"]=="high" or (wire[-1]["reasoning"] or {}).get("effort")=="high",wire
             print("Native image bytes and reasoning choice reached the model",flush=True)
-            lesson=client.post(f"/api/agents/{agent}/lessons",json={"id":"c20eb97c-a065-4b4e-bbe3-6de2dc01b91d","video":base64.b64encode(b"fixture-video").decode(),"notes":"RECORDING_NOTES_VERIFIED","frames":[{"at_ms":0,"data_url":"data:image/png;base64,"+base64.b64encode(PNG).decode()}]})
-            lesson.raise_for_status()
-            response=client.post(f"/api/agents/{agent}/messages",json={"text":"請依照示範資料學習："+lesson.json()["manifest_path"],"request_id":"recording-proof"});response.raise_for_status()
-            deadline=time.monotonic()+60
-            while True:
-                state=client.get("/api/tasks/"+response.json()["queued"]).json()
-                if state["state"]=="terminal":break
-                if time.monotonic()>deadline:raise RuntimeError("Native recording turn timed out")
-                time.sleep(.2)
-            assert state["verdict"]=="answer",state
-            assert len(wire)==3 and wire[-1]["images"]==1 and wire[-1]["image_is_png"] and wire[-1]["recording_notes"],wire
             desktop=subprocess.run(["docker","exec","--user",f"{os.getuid()}:{os.getgid()}","lazyhermes-bot-"+agent,"/opt/hermes/.venv/bin/python","-c",DESKTOP_PROBE],capture_output=True,text=True,timeout=90)
             (directory/"desktop-probe.log").write_text(desktop.stderr)
             assert desktop.returncode==0,desktop.stderr[-3500:]
@@ -156,7 +145,7 @@ def main():
             server=response.json()["servers"][0]
             assert server["serverStatus"]=="connected" and server["tools"],server
             client.post("/api/mcp",json={"agent":agent,"server":"readonly-probe","action":"remove"}).raise_for_status()
-            report={"passed":True,"image":image,"model_inputs":wire,"vision_change_takes_effect_on_warm_worker":True,"recording_frame_reaches_native_model":True,"desktop":json.loads(desktop.stdout),"external_mcp":True,"fixture_directory":str(directory)}
+            report={"passed":True,"image":image,"model_inputs":wire,"vision_change_takes_effect_on_warm_worker":True,"desktop":json.loads(desktop.stdout),"external_mcp":True,"fixture_directory":str(directory)}
             (directory/"report.json").write_text(json.dumps(report,indent=2)+"\n"); print(json.dumps(report),flush=True)
     finally:
         process.terminate()

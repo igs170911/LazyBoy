@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import { I18nProvider } from "./i18n";
 import { applyTheme, readTheme, watchSystemTheme } from "./theme";
 import { watchViewport } from "./viewport";
+import { watchForUpdates } from "./update-check";
 import { Workspace } from "./workspace/Workspace";
 import "@fontsource/huninn";
 import "blobatar/motion.css";
@@ -17,6 +18,7 @@ applyTheme(readTheme());
 function ThemeRoot({ children }: { children: ReactNode }) {
   useEffect(() => watchSystemTheme(), []);
   useEffect(() => watchViewport(), []);
+  useEffect(() => watchForUpdates(), []);
   return children;
 }
 

@@ -5,7 +5,7 @@ import { ArrowUp, Square } from "../ui/icons";
 import { toast } from "../ui/overlay";
 import { onDraftChange, readDraft, writeDraft } from "./drafts";
 
-export function Composer({ agentId, draft, agentName, busy, elsewhere, stopping, blocked, answering, onSend, onStop, onRecord, autoFocus }: {
+export function Composer({ agentId, draft, agentName, busy, elsewhere, stopping, blocked, answering, onSend, onStop, onTeach, autoFocus }: {
   agentId: string;
   draft: string;
   agentName: string;
@@ -16,7 +16,7 @@ export function Composer({ agentId, draft, agentName, busy, elsewhere, stopping,
   answering: boolean;
   onSend: (text: string) => Promise<void>;
   onStop: () => Promise<void>;
-  onRecord: () => void;
+  onTeach: () => void;
   autoFocus: boolean;
 }) {
   const [text, setText] = useState(() => readDraft(draft).text);
@@ -31,7 +31,8 @@ export function Composer({ agentId, draft, agentName, busy, elsewhere, stopping,
     const el = area.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+    // CSS max-height caps the growth; past it the field scrolls.
+    el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
   const update = (value: string) => { setText(value); writeDraft(draft, { text: value }); };
@@ -67,7 +68,7 @@ export function Composer({ agentId, draft, agentName, busy, elsewhere, stopping,
           }} />
         <div className="composer-bar">
           <AttachmentPicker key={agentId} agentId={agentId} files={files} busy={uploading} disabled={disabled || sending}
-            onChange={updateFiles} onBusy={setUploading} onRecord={onRecord} />
+            onChange={updateFiles} onBusy={setUploading} onTeach={onTeach} />
           <span className="composer-hint">{busy ? "Enter 送出補充 · Shift+Enter 換行" : "Enter 送出 · Shift+Enter 換行"}</span>
           {busy ? (
             <button type="button" className="composer-stop" aria-label="停止工作" title="停止工作" disabled={stopping} onClick={() => void onStop().catch(err => toast(err instanceof Error ? err.message : String(err), "error"))}>

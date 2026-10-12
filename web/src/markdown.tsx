@@ -90,9 +90,14 @@ function fileTitle(path: string): string {
   return name || path;
 }
 
+/** Spans that already are links — `[label](url)`, `![alt](src)`, `<url>` or a bare web URL — and must not be re-linked. */
+const LINKED = /!?\[[^\]\n]*\]\([^)\s]*\)|<[a-z]+:[^>\s]*>|https?:\/\/[^\s<>)\]]+/gi;
+
 function linkifyText(text: string, known: readonly string[]): string {
   type Hit = { start: number; end: number; path: string };
   const hits: Hit[] = [];
+  const linked = [...text.matchAll(LINKED)].map(match => [match.index!, match.index! + match[0].length] as const);
+  const insideLink = (start: number, end: number) => linked.some(([from, to]) => start < to && end > from);
   for (const match of text.matchAll(new RegExp(BOX_PATH.source, BOX_PATH.flags))) {
     if (match.index === undefined) continue;
     const trimmed = trimPath(match[0]);
@@ -117,6 +122,8 @@ function linkifyText(text: string, known: readonly string[]): string {
       from = start + path.length;
     }
   }
+  // An attachment's own link names its path inside the URL; rewriting it there corrupts the link.
+  hits.splice(0, hits.length, ...hits.filter(hit => !insideLink(hit.start, hit.end)));
   hits.sort((a, b) => a.start - b.start);
   let out = "";
   let cursor = 0;
@@ -332,6 +339,31 @@ export function FileChip({ file, onOpen }: { file: PreviewFile; onOpen: () => vo
   );
 }
 
+/** The bot's own file API link (what an attachment is sent as) → its /workspace path. */
+function workspacePathFromApi(href: string, agentId: string): string | null {
+  try {
+    const url = new URL(href, window.location.origin);
+    if (url.origin !== window.location.origin || url.pathname !== `/api/agents/${agentId}/files/content`) return null;
+    const path = url.searchParams.get("path") || "";
+    return normalizeChatPath(path.startsWith("/") ? path : `/workspace/${path}`);
+  } catch {
+    return null;
+  }
+}
+
+/** An uploaded picture shown in its message; attachments expire, so a missing one says so instead of a broken image. */
+function AttachedImage({ file, onOpen }: { file: PreviewFile; onOpen: () => void }) {
+  const [gone, setGone] = useState(false);
+  if (gone) return <span className="md-attachment-gone">{file.title}（附件已不存在）</span>;
+  return (
+    <button type="button" className="md-attached-image" aria-label={`開啟 ${file.title}`} onClick={onOpen}>
+      <img src={file.url} alt={file.title} loading="lazy" decoding="async" onError={() => setGone(true)} />
+    </button>
+  );
+}
+
+const IMAGE_FILE = /\.(png|jpe?g|webp|gif)$/i;
+
 function MarkdownLink({
   href,
   children,
@@ -346,6 +378,13 @@ function MarkdownLink({
   const linked = href ? filePathFromHref(href) : null;
   if (linked && agentId && onOpenPath) {
     return <FileChip file={previewFromPath(agentId, linked)} onOpen={() => onOpenPath(linked)} />;
+  }
+  // Attachments open inside the app: a home-screen app would send a plain link out to Safari.
+  const attached = href && agentId && onOpenPath ? workspacePathFromApi(href, agentId) : null;
+  if (attached && agentId && onOpenPath) {
+    const file = previewFromPath(agentId, attached);
+    if (IMAGE_FILE.test(attached)) return <AttachedImage file={file} onOpen={() => onOpenPath(attached)} />;
+    return <FileChip file={file} onOpen={() => onOpenPath(attached)} />;
   }
   const box = href ? normalizeChatPath(href) : null;
   if (box && onOpenPath) {

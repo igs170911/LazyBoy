@@ -14,6 +14,7 @@ import { activityStatus } from "./status";
 import { savedSteps, stepDetail, stepLabel } from "./steps";
 import { ThreadBar, ThreadRenameDialog } from "./Threads";
 import type { LiveTask, Message, Step } from "./useSession";
+import { DemoCard } from "./Teaching";
 import { useSession } from "./useSession";
 
 type Session = ReturnType<typeof useSession>;
@@ -322,7 +323,7 @@ const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPath
   if (item.role === "user") {
     return (
       <div className={`msg user${item.pending ? " pending" : ""}`}>
-        {item.routine_id ? <RoutineBubble item={item} agentId={agent.id} knownPaths={knownPaths} onOpen={onOpen} /> : <div className="bubble"><ChatMessageBody content={item.content} agentId={agent.id} knownPaths={knownPaths} onOpen={onOpen} /></div>}
+        {item.lesson_id ? <DemoCard agentId={agent.id} lessonId={item.lesson_id} text={item.content} /> : item.routine_id ? <RoutineBubble item={item} agentId={agent.id} knownPaths={knownPaths} onOpen={onOpen} /> : <div className="bubble"><ChatMessageBody content={item.content} agentId={agent.id} knownPaths={knownPaths} onOpen={onOpen} /></div>}
         <time className="msg-time">{item.pending ? "傳送中…" : clock(item.at)}</time>
       </div>
     );
@@ -368,7 +369,7 @@ function EmptyChat({ agent, thread, onPick }: { agent: AgentRow; thread: ThreadR
   );
 }
 
-export function Conversation({ agent, session, mobile, panel, onBack, onTogglePanel, onOpenFile, onRoutines, onRecord, onPick, menuItems, onOpenSettings }: {
+export function Conversation({ agent, session, mobile, panel, onBack, onTogglePanel, onOpenFile, onRoutines, onTeach, onPick, menuItems, onOpenSettings }: {
   agent: AgentRow;
   session: Session;
   mobile: boolean;
@@ -377,7 +378,7 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
   onTogglePanel: (tab: PanelTab, force?: boolean) => void;
   onOpenFile: (file: PreviewFile) => void;
   onRoutines: () => void;
-  onRecord: () => void;
+  onTeach: () => void;
   onPick: (text: string) => void;
   menuItems: MenuItem[];
   onOpenSettings: () => void;
@@ -406,6 +407,8 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
     if (!el) return;
     const observer = new ResizeObserver(() => { if (pinned.current) toBottom(); });
     observer.observe(el);
+    // The keyboard (or a growing composer) shortens the conversation: keep the latest message in view.
+    if (scroller.current) observer.observe(scroller.current);
     return () => observer.disconnect();
   }, [toBottom]);
 
@@ -414,6 +417,13 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
   const fail = (err: unknown) => toast(err instanceof Error ? err.message : String(err), "error");
   const newThread = () => { void session.createThread().catch(fail); };
   const steering = busy && session.here !== "queued";
+  // A phone header keeps three actions so the name and status get room; the rest move into the menu.
+  const headerMenu: MenuItem[] = mobile ? [
+    ...(threads.length <= 1 ? [{ label: "新對話", icon: <MessageSquarePlus />, onSelect: newThread }] : []),
+    { label: "定時任務", icon: <CalendarClock />, onSelect: onRoutines },
+    "separator",
+    ...menuItems,
+  ] : menuItems;
   const color = botColor(agent.name, agent.avatar_color);
   const tint = useMemo(() => { const tone = bubbleTone(color); return { "--bot": tone.fill, "--bot-ink": tone.ink } as CSSProperties; }, [color]);
 
@@ -429,11 +439,11 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
           </span>
         </button>
         <div className="chat-actions">
-          {threads.length <= 1 ? <button type="button" className="icon-btn" aria-label="新對話" title="開新對話" onClick={newThread}><MessageSquarePlus /></button> : null}
-          <button type="button" className="icon-btn" aria-label="定時任務" title="定時任務" onClick={onRoutines}><CalendarClock /></button>
+          {!mobile && threads.length <= 1 ? <button type="button" className="icon-btn" aria-label="新對話" title="開新對話" onClick={newThread}><MessageSquarePlus /></button> : null}
+          {!mobile ? <button type="button" className="icon-btn" aria-label="定時任務" title="定時任務" onClick={onRoutines}><CalendarClock /></button> : null}
           <button type="button" className="icon-btn" aria-label="檔案" title="檔案" aria-pressed={panel.open && panel.tab === "files"} onClick={() => onTogglePanel("files")}><FolderOpen /></button>
           <button type="button" className="icon-btn" aria-label="電腦" title="電腦" aria-pressed={computerOpen} onClick={() => onTogglePanel("computer")}><Monitor /></button>
-          <MenuButton label="更多" icon={<Ellipsis />} items={menuItems} />
+          <MenuButton label="更多" icon={<Ellipsis />} items={headerMenu} />
         </div>
       </header>
       {threads.length > 1 ? (
@@ -473,9 +483,9 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
             computerOpen={computerOpen} onOpenComputer={() => onTogglePanel("computer", true)} onStop={session.elsewhere ? undefined : stop} /> : null}
         </div>
       </div>
-      {showJump ? <button type="button" className="jump-latest" onClick={() => { pinned.current = true; toBottom(true); }}><ChevronDown />最新訊息</button> : null}
 
       <div className="chat-bottom">
+        {showJump ? <button type="button" className="jump-latest" onClick={() => { pinned.current = true; toBottom(true); }}><ChevronDown />最新訊息</button> : null}
         {session.elsewhere ? (
           <button type="button" className="elsewhere-bar" onClick={() => activity.thread_id && session.openThread(activity.thread_id)}>
             <LoaderCircle className="spin" aria-hidden="true" />
@@ -486,7 +496,7 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
         {question ? <QuestionCard agentId={agent.id} question={question} onDone={() => { void session.refreshActivity(agent.id); }} onOpenComputer={() => onTogglePanel("computer", true)} /> : null}
         <Composer key={draftKey(agent.id, threadId)} agentId={agent.id} draft={draftKey(agent.id, threadId)} agentName={agent.name} busy={steering} elsewhere={session.elsewhere}
           stopping={!session.elsewhere && activity.state === "stopping"} blocked={blocked}
-          answering={!!question && !blocked} onSend={session.send} onStop={session.stop} onRecord={onRecord} autoFocus={!mobile} />
+          answering={!!question && !blocked} onSend={session.send} onStop={session.stop} onTeach={onTeach} autoFocus={!mobile} />
       </div>
       {threadDialog?.kind === "rename" ? (
         <ThreadRenameDialog thread={threadDialog.thread} onClose={() => setThreadDialog(null)} onSave={title => session.renameThread(threadDialog.thread.id, title)} />

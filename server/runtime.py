@@ -16,6 +16,10 @@ from .files import important, rank, walk
 from .skills import Skills
 from .model_check import friendly
 from .store import now, uid
+from .teaching import key_shots, lesson_prompt
+
+# A follow-up that points back at a picture: re-attach the thread's recent uploads.
+PHOTO_WORDS = re.compile(r"照片|圖片|相片|截圖|這張|那張|張圖|photo|image|picture|screenshot", re.I)
 
 log = logging.getLogger(__name__)
 TERMINAL = {"terminal"}
@@ -108,6 +112,8 @@ class Runtime:
         self.listeners = {}
         self.adopted = {}
         self.worker_owner = {}
+        # Bot id -> lesson id while the human demonstrates on its computer.
+        self.teaching = {}
         self.router = Router(settings)
         self.computers.task_binding = lambda id: self.provider_bindings.get(self.active.get(id))
         self.closed = False
@@ -152,7 +158,7 @@ class Runtime:
         question = next((t.get("question") for t in working if t.get("question")), None)
         state = working[0]["state"] if working else "queued" if queued else "idle"
         background = [t for t in tasks if live_workers(t)]
-        return {"state": state, "background": sum(len(live_workers(t)) for t in background),
+        return {"state": state, "teaching": self.teaching.get(id), "background": sum(len(live_workers(t)) for t in background),
                 "background_task_ids": [t["id"] for t in background], "running": bool(working), "queued": bool(queued), "observed_at_ms": int(time.time()*1000),
                 "active_task_ids": [t["id"] for t in working], "queued_task_ids": [t["id"] for t in queued],
                 "thread_id": self.task_thread(working[0]) if working else None,
@@ -160,9 +166,9 @@ class Runtime:
                 "latest_task_id": latest["id"] if latest else None, "question": question, "questions": [question] if question else []}
 
     def busy(self, id):
-        """A turn or delegated background work is running: the connection (and its session) must stay."""
+        """A turn, delegated background work or a demonstration is using the bot: its connection and computer must stay."""
         activity = self.activity(id)
-        return activity["running"] or activity["background"] > 0
+        return activity["running"] or activity["background"] > 0 or bool(activity["teaching"])
 
     def emit(self, id, kind, payload, task=None):
         if task and "thread_id" not in payload:
@@ -244,11 +250,11 @@ class Runtime:
             self._client_cache(client, "product_sessions")[thread_id] = sid
         return sid
 
-    async def submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None):
+    async def submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None):
         async with self.admission_locks.setdefault(id, asyncio.Lock()):
-            return await self._submit(id, text, request_id, force_queue=force_queue, routine=routine, thread=thread)
+            return await self._submit(id, text, request_id, force_queue=force_queue, routine=routine, thread=thread, lesson=lesson)
 
-    async def _submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None):
+    async def _submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None):
         thread_id = self.thread(id, thread)["id"]
         if not isinstance(text,str) or not text.strip(): raise ValueError("請輸入要做的工作")
         if len(text)>64000: raise ValueError("訊息最多 64000 字元")
@@ -260,7 +266,7 @@ class Runtime:
         active = self.active.get(id)
         # Steering and answers only apply inside the thread that owns the running task;
         # other threads queue behind it because the bot has one computer.
-        if active and not force_queue and self.task_thread(self.task(active)) == thread_id:
+        if active and not force_queue and not lesson and self.task_thread(self.task(active)) == thread_id:
             task = self.task(active)
             if task.get("question"):
                 return await self.answer(id, task["question"]["question_id"], text=text)
@@ -276,9 +282,10 @@ class Runtime:
                     return {"steered":active}
         task_id=uid()
         task={"id":task_id,"agent_id":id,"thread_id":thread_id,"goal":text,"state":"queued","verdict":None,"created_at":now(),
-              "result":None,"artifacts":[],"milestones":[],"request_id":request_id,"routine_id":routine}
+              "result":None,"artifacts":[],"milestones":[],"request_id":request_id,"routine_id":routine,**({"lesson_id":lesson} if lesson else {})}
         # Persist admission + task + user message together, before any executor starts.
         origin = {"routine_id": routine, "routine_title": (self.store.get("routines", routine) or {}).get("title", "")} if routine else {}
+        if lesson: origin["lesson_id"] = lesson
         with self.store.transaction():
             self.store.admit(id,request_id,task_id,text)
             self.store.put("tasks",task_id,task)
@@ -306,7 +313,8 @@ class Runtime:
     async def _queue(self,id):
         while not self.closed:
             task=next((t for t in self.store.all("tasks") if t["agent_id"]==id and t["state"]=="queued"),None)
-            if not task: return
+            # The human is demonstrating on this computer; queued work starts when they finish.
+            if not task or self.teaching.get(id): return
             turn=self.adopted.get(id)
             if turn and not turn.done():
                 # Hermes is running a turn of its own (background results); queued work follows it.
@@ -317,7 +325,7 @@ class Runtime:
             self.store.patch("tasks",task_id,state="running",started_at=now())
             self.emit(id,"m0.progress",{"message":"正在準備 Bot 的電腦與工作環境"},task_id)
             try:
-                route = await self.router.select(self.agent(id), task["goal"], routine=bool(task.get("routine_id")), vision=bool(self._images(id, task["goal"])), emit=lambda kind, payload: self.emit(id, kind, payload, task_id))
+                route = await self.router.select(self.agent(id), task["goal"], routine=bool(task.get("routine_id")), vision=bool(self._images(id, task["goal"], task)), emit=lambda kind, payload: self.emit(id, kind, payload, task_id))
                 self.routes[task_id] = route
                 provider, model, selected = route.primary()
                 self.provider_bindings[task_id] = (provider, model, copy.deepcopy(selected))
@@ -356,12 +364,12 @@ class Runtime:
                 self.store.patch("tasks",task_id,session_id=sid)
                 self.file_baselines[task_id] = {f["path"]: (f["bytes"], f["updated_at"]) for f in await self.refresh_files(id)}
                 self.skill_baselines[id] = self.skill_state(id)
-                text=self._prompt(id,task["goal"])
+                text=self._prompt(id,task["goal"],task)
                 if self.task(task_id)["state"] in {"stopping", "terminal"}:
                     self.finish(id,task_id,"cancelled","")
                     continue
                 if self.settings.model_row(selected, model).get("vision"):
-                    for path in self._images(id, task["goal"]):
+                    for path in self._images(id, task["goal"], task):
                         await client.call("image.attach", {"session_id": sid, "path": path})
                 response = await client.call("prompt.submit",{"session_id":sid,"text":text})
                 if response.get("stored_session_id"):
@@ -450,24 +458,34 @@ class Runtime:
     def _uploads(self,id,text):
         return [v for v in self.store.all("uploads") if v["agent_id"]==id and (v["id"] in text or v["name"] in text or v["path"] in text)]
 
-    def _lessons(self,id,text):
-        return [v for v in self.store.all("lessons") if v["agent_id"]==id and (v["manifest_path"] in text or v["video"].removeprefix("/workspace/") in text)]
+    def _lesson(self,task):
+        lesson = self.store.get("lessons", task.get("lesson_id")) if task and task.get("lesson_id") else None
+        return lesson if lesson and lesson["agent_id"]==task["agent_id"] else None
 
-    def _images(self,id,text):
+    def _recent_images(self,id,task,limit=3):
+        """Images uploaded earlier in this thread, for a follow-up like 「你看我傳的照片」 that carries none itself."""
+        if not task: return []
+        recent=[m for m in self.store.transcript(id,self.task_thread(task)) if m.get("role")=="user"][-6:]
+        found=[]
+        for message in reversed(recent):
+            found.extend("/workspace/"+v["path"] for v in self._uploads(id,message.get("content","")) if v["media_type"].startswith("image/"))
+        return list(dict.fromkeys(found))[:limit]
+
+    def _images(self,id,text,task=None):
         paths = ["/workspace/"+v["path"] for v in self._uploads(id,text) if v["media_type"].startswith("image/")]
-        for lesson in self._lessons(id,text):
-            frames = lesson["frames"]
-            indexes = range(len(frames)) if len(frames)<=4 else [round(i*(len(frames)-1)/3) for i in range(4)]
-            paths.extend(frames[i]["path"] for i in indexes)
+        if not paths and PHOTO_WORDS.search(text): paths = self._recent_images(id,task)
+        if lesson := self._lesson(task): paths.extend(key_shots(lesson))
         return list(dict.fromkeys(paths))
 
-    def _prompt(self,id,text):
+    def _prompt(self,id,text,task=None):
+        if lesson := self._lesson(task): return lesson_prompt(lesson)
         uploads=self._uploads(id,text)
         if uploads:
             text += "\n\n使用者附加的檔案已放在這台電腦的工作目錄：\n"+"\n".join("/workspace/"+u["path"] for u in uploads)
-        for lesson in self._lessons(id,text):
-            text += "\n\n使用者的操作示範資料：" + lesson["manifest_path"] + "\n說明：" + lesson.get("notes", "")
-            text += "\n按時間排列的畫面：\n" + "\n".join(str(f["at_ms"]) + " ms: " + f["path"] for f in lesson["frames"])
+            if any(u["media_type"].startswith("image/") for u in uploads):
+                text += "\n圖片也直接附在這則訊息裡；先看圖回答這則訊息。"
+        elif PHOTO_WORDS.search(text) and (earlier := self._recent_images(id,task)):
+            text += "\n\n使用者提到的圖片是這段對話稍早上傳的，已重新附上：\n"+"\n".join(earlier)
         return text
 
     def skill_state(self, id):

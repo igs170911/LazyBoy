@@ -44,4 +44,9 @@ export {
   Video,
   Wrench,
   X,
+  GraduationCap,
+  ListOrdered,
+  MessageSquareText,
+  Pause,
+  Play,
 } from "lucide-react";

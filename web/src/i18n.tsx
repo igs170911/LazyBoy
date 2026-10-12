@@ -164,7 +164,6 @@ const zhHant = {
   createGroup: "建立新分組",
   deleteItem: "刪除",
   jumpToLatest: "回到最新訊息",
-  screenRecord: "螢幕錄影",
   hiddenFromSidebar: "側欄已隱藏",
   avatarAppearance: "頭像",
   avatarAppearanceHint: "選 Blobatar 的 10 種形狀，或上傳自己的照片。",

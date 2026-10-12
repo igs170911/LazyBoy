@@ -26,14 +26,14 @@
   animation: pop-in .2s var(--ease);
 }
 .dialog > form { display: grid; gap: 14px; }
-.dialog-title, .routines-dialog > header, .recording-lesson > .skills-heading:first-child {
+.dialog-title, .routines-dialog > header {
   display: flex;
   align-items: center;
   gap: 12px;
   margin: -4px -8px 2px 0;
 }
-.dialog-title h2, .routines-dialog > header h2, .recording-lesson > .skills-heading:first-child h2 { flex: 1; min-width: 0; font-size: 17px; }
-.dialog-title button, .routines-dialog > header button, .recording-lesson > .skills-heading:first-child button {
+.dialog-title h2, .routines-dialog > header h2 { flex: 1; min-width: 0; font-size: 17px; }
+.dialog-title button, .routines-dialog > header button {
   display: grid !important;
   place-items: center;
   width: 34px;
@@ -45,7 +45,7 @@
   color: var(--muted);
   font-size: 20px !important;
 }
-.dialog-title button:hover:not(:disabled), .routines-dialog > header button:hover, .recording-lesson > .skills-heading:first-child button:hover { background: var(--hover) !important; color: var(--text); }
+.dialog-title button:hover:not(:disabled), .routines-dialog > header button:hover { background: var(--hover) !important; color: var(--text); }
 .dialog-title svg, .routines-dialog > header svg { width: 18px; height: 18px; }
 .dialog-lead { color: var(--muted); font-size: 14.5px; }
 .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
@@ -243,6 +243,14 @@
 .mcp-actions button, .mcp-actions a { min-height: 30px !important; padding: 4px 11px !important; font-size: 13px !important; }
 .mcp-actions a { color: var(--accent-strong); text-decoration: none; }
 .mcp-missing { color: var(--warn); }
+.mcp-scope { margin-left: 8px; padding: 1px 8px; border-radius: 99px; background: var(--elev); color: var(--muted); font-size: 11.5px; font-weight: 500; vertical-align: 1px; }
+.mcp-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.mcp-status i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.mcp-card[data-tone="ok"] .mcp-status { color: var(--ok); }
+.mcp-card[data-tone="ok"] .mcp-status i { background: var(--ok); }
+.mcp-card[data-tone="error"] .mcp-status { color: var(--danger); }
+.mcp-card[data-tone="error"] .mcp-status i { background: var(--danger); }
+.mcp-card[data-tone="testing"] .mcp-status i { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 .mcp-editor { padding: 14px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
 .mcp-enable { display: flex !important; align-items: center; gap: 8px; color: var(--text) !important; }
 
@@ -279,11 +287,6 @@
 .template-dropzone:hover, .template-dropzone.over, .template-dropzone[data-dragging] { border-color: var(--accent); background: var(--accent-soft); }
 
 /* Recording */
-.recording-lesson { width: min(560px, 100%); }
-.recording-hint { color: var(--muted); font-size: 13.5px; }
-.recording-live { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--radius-s); background: var(--danger-soft); }
-.recording-live span { flex: 1; color: var(--danger); font-weight: 600; }
-.lesson-preview { width: 100%; max-height: 300px; border-radius: var(--radius); background: #000; }
 
 /* ---------- Phone ---------- */
 @media (max-width: 860px) {
@@ -299,4 +302,29 @@
   .dialog-actions > button { flex: 1; }
   .routine-time-grid { grid-template-columns: 1fr; }
   .lb-settings-dialog { width: 100%; height: 100%; border-radius: 0; }
+}
+
+/* Storage usage in bot settings */
+.storage-panel { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.storage-head { display: flex; align-items: baseline; justify-content: space-between; }
+.storage-head strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.storage-bar { display: flex; gap: 2px; height: 8px; overflow: hidden; border-radius: 99px; background: var(--elev); }
+.storage-bar i { min-width: 3px; }
+.storage-rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
+.storage-rows li { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; }
+.storage-rows li > i { width: 10px; height: 10px; border-radius: 3px; }
+.storage-rows span { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+.storage-rows small { color: var(--faint); font-size: 12px; }
+.storage-rows b { font-weight: 550; font-variant-numeric: tabular-nums; }
+.storage-panel [data-kind="workspace"] > i, .storage-bar [data-kind="workspace"] { background: var(--accent); }
+.storage-panel [data-kind="uploads"] > i, .storage-bar [data-kind="uploads"] { background: #3b93f0; }
+.storage-panel [data-kind="caches"] > i, .storage-bar [data-kind="caches"] { background: var(--warn); }
+.storage-panel [data-kind="browser"] > i, .storage-bar [data-kind="browser"] { background: var(--ok); }
+.storage-panel [data-kind="tools"] > i, .storage-bar [data-kind="tools"] { background: var(--muted); }
+.storage-panel [data-kind="other"] > i, .storage-bar [data-kind="other"] { background: var(--line-strong); }
+.storage-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.storage-actions small { color: var(--faint); font-size: 12px; }
+
+@media (pointer: coarse) {
+  .mood-preview button { min-height: 34px !important; padding: 4px 13px !important; }
 }

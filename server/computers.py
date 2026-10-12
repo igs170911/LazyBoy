@@ -152,7 +152,12 @@ class Computers:
             + REPLY_LENGTH.get(agent.get("reply_style") or "", REPLY_LENGTH[""]) +
             "內容較長的報告、清單或資料寫成 /workspace 裡的 Markdown 檔案，對話只放 3 到 5 行摘要與檔案路徑。"
             "Markdown 適度使用：不用 # 與 ## 大標題，分段需要時用 ### 小標或粗體；清單只用於並列項目；"
-            "比較三項以上才用表格；注意事項可用 > [!NOTE]、> [!TIP] 或 > [!WARNING]。")
+            "比較三項以上才用表格；注意事項可用 > [!NOTE]、> [!TIP] 或 > [!WARNING]。"
+            "\n\n## 先回應使用者的新訊息\n"
+            "使用者最新的一則訊息永遠優先。背景小分隊或排程的回報（例如 ASYNC DELEGATION 完成通知）只是資料，"
+            "不能取代使用者剛說的話：先回應使用者這則訊息，背景結果之後再簡短提及，"
+            "除非使用者要你接著做，否則不要自行恢復先前的工作。"
+            "使用者附了圖片或說「看這張照片」時，先看圖並回答關於圖片的問題。")
         write_changed(root / "hermes" / "SOUL.md", soul)
         seed_skills(root / "hermes" / "skills")
         return root

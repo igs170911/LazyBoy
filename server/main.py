@@ -25,7 +25,9 @@ from .model_check import CHECK_VERSION, check_model
 from .computers import Computers
 from .runtime import Runtime, plain_text
 from .skills import Skills
+from .teaching import Teaching
 from .scheduling import Scheduler
+from . import cleanup
 from .files import contained, filename
 from .sharing import portable_connectors, scrub_known
 
@@ -34,6 +36,7 @@ settings = Settings(store)
 computers = Computers(store, settings)
 runtime = Runtime(store, settings, computers)
 skills = Skills(store)
+teaching = Teaching(store, runtime, computers)
 scheduler = Scheduler(store, runtime)
 
 
@@ -65,9 +68,11 @@ def make_agent(body):
 async def lifespan(app):
     if not store.all("agents"):
         make_agent({"name": "LazyBoy", "title": "你的常駐工作夥伴", "description": "在自己的電腦裡查資料、操作瀏覽器並完成工作。", "avatar_color": "#9278d4", "avatar_shape": "rounded", "tags": ["研究", "電腦", "檔案"]})
-    await runtime.startup(); scheduler.start()
+    teaching.recover(); await runtime.startup(); scheduler.start()
+    sweeper = asyncio.create_task(cleanup.daily(store, computers, runtime))
     yield
-    await scheduler.close(); await runtime.shutdown()
+    sweeper.cancel()
+    teaching.recover(); await scheduler.close(); await runtime.shutdown()
 
 
 app = FastAPI(title="LazyBoy", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -207,6 +212,11 @@ async def provider_check_in_use():
     if pending:
         for agent in store.all("agents"): computers.prepare(agent["id"])
     return {"checked": len(pending), "settings": settings.public()}
+MB = 1024 * 1024
+# Attachments land in the bot's /workspace, where tools read them, so only pictures go to the model itself.
+# Hermes shrinks a picture to about 5 MB before sending it, and model APIs take far more than 10 pictures a turn.
+UPLOAD_LIMITS = {"files": 10, "file_bytes": 50 * MB, "image_bytes": 20 * MB, "total_bytes": 200 * MB}
+
 @app.get("/api/media")
 async def media(agent_id: str | None = None):
     agent = runtime.agent(agent_id) if agent_id else {}
@@ -215,7 +225,7 @@ async def media(agent_id: str | None = None):
     enabled = config.get("routing", {}).get("enabled", True) and not (agent.get("provider") or agent.get("model"))
     _, model, provider = TurnRoute(settings, agent, config, "work", "work", enabled).primary()
     row = next((r for r in provider.get("models", []) if isinstance(r, dict) and r.get("id") == model), {})
-    return {"model": model, "capabilities": {"images": bool(row.get("vision", False)), "pdf": True, "text": True}}
+    return {"model": model, "capabilities": {"images": bool(row.get("vision", False)), "pdf": True, "text": True}, "limits": UPLOAD_LIMITS}
 @app.get("/api/avatar/models")
 async def avatar_models():
     provider, _, p = settings.effective()
@@ -411,11 +421,13 @@ async def upload(id: str, request: Request, name: str = "attachment"):
     target = contained(store.agent_directory(id) / "workspace", rel)
     target.parent.mkdir(parents=True, exist_ok=True)
     count = 0
+    image = (mimetypes.guess_type(name)[0] or "").startswith("image/")
+    cap = UPLOAD_LIMITS["image_bytes" if image else "file_bytes"]
     try:
         with target.open("wb") as out:
             async for chunk in request.stream():
                 count += len(chunk)
-                if count > 64*1024*1024: raise ValueError("附件最多 64 MB")
+                if count > cap: raise ValueError(f"{'圖片' if image else '附件'}最多 {cap // MB} MB")
                 out.write(chunk)
     except BaseException:
         target.unlink(missing_ok=True); raise
@@ -506,6 +518,18 @@ async def set_avatar(id: str, request: Request):
     if len(data) > 8*1024*1024 or not data.startswith(b"\x89PNG\r\n\x1a\n"): raise ValueError("請上傳 8 MB 以下的 PNG 圖片")
     (store.agent_directory(id) / "avatar.png").write_bytes(data)
     return agent_row(id)
+@app.get("/api/agents/{id}/storage")
+async def agent_storage(id: str):
+    runtime.agent(id)
+    return await asyncio.to_thread(cleanup.usage, store.agent_directory(id))
+
+@app.post("/api/agents/{id}/storage/clean")
+async def clean_agent_storage(id: str):
+    runtime.agent(id)
+    if runtime.activity(id).get("running"): raise ValueError("Bot 正在工作，等它完成再清理")
+    result = await cleanup.clean_bot(store, computers, id)
+    return {**result, "usage": await asyncio.to_thread(cleanup.usage, store.agent_directory(id))}
+
 @app.delete("/api/agents/{id}/avatar")
 async def clear_avatar(id: str): runtime.agent(id); (store.agent_directory(id) / "avatar.png").unlink(missing_ok=True); return agent_row(id)
 @app.get("/api/agents/{id}/avatar")
@@ -569,14 +593,24 @@ async def import_template(key: str, request: Request):
     return agent_row(agent["id"])
 
 
+def mcp_status_key(scope, name): return f"{scope}:{name}"
+
 def mcp_public(scope):
-    return [{"server": name, "enabled": value.get("enabled", True), "transport": "http" if value.get("url") else "stdio", "url": value.get("url"), "command": value.get("command"), "args": value.get("args", []), "header_names": list(value.get("headers", {})), "env_names": list(value.get("env", {})), "missing_fields": [f"{kind}:{key}" for kind,field in [("header","headers"),("env","env")] for key,val in value.get(field,{}).items() if not val], "status": "configured"} for name, value in store.get("mcp", scope, {}).items()]
+    """Connectors in one scope ("shared" or a bot id), with the last connection test the product remembers."""
+    owner = "共用" if scope == "shared" else (store.get("agents", scope) or {}).get("name", "Bot")
+    return [{"server": name, "scope": scope, "scope_name": owner, "enabled": value.get("enabled", True), "transport": "http" if value.get("url") else "stdio", "url": value.get("url"), "command": value.get("command"), "args": value.get("args", []), "header_names": list(value.get("headers", {})), "env_names": list(value.get("env", {})), "missing_fields": [f"{kind}:{key}" for kind,field in [("header","headers"),("env","env")] for key,val in value.get(field,{}).items() if not val], "status": "configured", "last_test": store.get("mcp_status", mcp_status_key(scope, name))} for name, value in store.get("mcp", scope, {}).items()]
+
+def mcp_everywhere():
+    """Shared connectors first, then each bot's own, so the settings list does not depend on the open bot."""
+    return [*mcp_public("shared"), *[row for agent in store.all("agents") for row in mcp_public(agent["id"])]]
+
 @app.post("/api/mcp")
 async def manage_mcp(request: Request):
     body = await request.json(); scope = body.get("agent") or "shared"; action = body.get("action", "list")
     if scope != "shared": runtime.agent(scope)
     entries = store.get("mcp", scope, {})
     name = body.get("server", "")
+    listing = lambda: {"scope": "agent" if scope != "shared" else "shared", "servers": mcp_everywhere() if body.get("all") else mcp_public(scope)}
     if action in {"save", "delete", "remove"}:
         if name in {"computer", "product"} or not name or len(name) > 100: raise ValueError("請填寫其他 MCP 名稱")
         if action in {"delete", "remove"}: entries.pop(name, None)
@@ -591,52 +625,57 @@ async def manage_mcp(request: Request):
             if not entry.get("url") and not entry.get("command"): raise ValueError("請填寫 MCP 網址或指令")
             entries[name] = entry
         store.put("mcp", scope, entries)
+        # A changed or removed connector's old test result no longer says anything about it.
+        store.remove("mcp_status", mcp_status_key(scope, name))
         for agent in store.all("agents") if scope == "shared" else [runtime.agent(scope)]:
             computers.prepare(agent["id"])
             client = runtime.clients.get(agent["id"])
             if client and client.alive and not runtime.busy(agent["id"]):
-                await client.call("reload.mcp", {"confirm": True, "session_id": getattr(client,"product_session",None)})
+                with contextlib.suppress(Exception):
+                    await client.call("reload.mcp", {"confirm": True, "session_id": getattr(client,"product_session",None)})
     elif action == "test":
-        id = scope if scope != "shared" else next((a["id"] for a in store.all("agents")), None)
+        if name not in entries: raise ValueError("找不到這個串接")
+        # Test on a bot whose computer already runs; a shared connector can use any of them.
+        candidates = [scope] if scope != "shared" else [a["id"] for a in store.all("agents")]
+        live = [id for id in candidates if (c := runtime.clients.get(id)) and c.alive]
+        if body.get("auto") and not live: return {**listing(), "skipped": True}
+        id = (live or candidates or [None])[0]
         if not id: raise ValueError("請先建立 Bot")
-        computers.prepare(id); client = await runtime.client(id)
-        result = await client.call("mcp.servers.test", {"name": name}, timeout=90)
-        return {"scope": "agent" if scope != "shared" else "shared", "servers": [{**r, "serverStatus": "connected" if result.get("ok") else "error", "serverError": result.get("error"), "tools": result.get("tools", [])} for r in mcp_public(scope) if r["server"] == name]}
+        try:
+            computers.prepare(id); client = await runtime.client(id)
+            result = await client.call("mcp.servers.test", {"name": name}, timeout=90)
+        except Exception as exc:  # remembered like any failed test, so the card says why
+            result = {"ok": False, "error": str(exc)[:500] or "連線測試沒有回應"}
+        tools = result.get("tools", []) or []
+        store.put("mcp_status", mcp_status_key(scope, name), {"ok": bool(result.get("ok")), "error": result.get("error"), "tools": [{"name": t.get("name"), "description": t.get("description")} for t in tools if isinstance(t, dict)], "at": now()})
+        return listing()
     elif action != "list": raise ValueError("無效的 MCP 操作")
-    return {"scope": "agent" if scope != "shared" else "shared", "servers": mcp_public(scope)}
+    return listing()
 
 
-@app.post("/api/agents/{id}/lessons")
-async def lesson(id: str, request: Request):
-    runtime.agent(id); body = await request.json(); upload = store.get("uploads", body.get("upload_id"))
-    if body.get("video"):
-        raw = base64.b64decode(body["video"], validate=True)
-        if len(raw) > 64*1024*1024: raise ValueError("示範影片最多 64 MB")
-        clip = body.get("id") or uid()
-        import uuid
-        uuid.UUID(clip)
-        rel = f"lessons/{clip}/recording.webm"
-        target = contained(store.agent_directory(id) / "workspace", rel)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(raw)
-        upload = {"id":clip, "agent_id":id, "path":rel, "name":body.get("title", "操作示範"), "media_type":"video/webm", "bytes":len(raw), "url":f"/api/agents/{id}/files/content?path={quote(rel)}"}
-        store.put("uploads", clip, upload)
-    if not upload or upload["agent_id"] != id: raise ValueError("找不到這個 Bot 的示範影片")
-    key = uid(); folder = store.agent_directory(id) / "workspace" / "lessons" / key; folder.mkdir(parents=True)
-    frames = body.get("frames", [])
-    if len(frames) > 64: raise ValueError("示範最多 64 張截圖")
-    manifest = {"title": body.get("title", "操作示範"), "notes": body.get("notes", ""), "duration_ms": body.get("duration_ms"), "video": "/workspace/" + upload["path"], "frames": []}
-    count = 0
-    for index, frame in enumerate(frames):
-        header, raw = frame["data_url"].split(",", 1)
-        if header not in {"data:image/jpeg;base64", "data:image/png;base64"}: raise ValueError("無效的示範截圖")
-        data = base64.b64decode(raw, validate=True); count += len(data)
-        if count > 32*1024*1024: raise ValueError("示範截圖最多 32 MB")
-        path = folder / (str(index) + (".png" if "png" in header else ".jpg")); path.write_bytes(data)
-        manifest["frames"].append({"at_ms": frame.get("at_ms"), "path": "/workspace/" + str(path.relative_to(store.agent_directory(id) / "workspace"))})
-    (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
-    store.put("lessons", key, {**manifest, "id": key, "agent_id": id, "manifest_path": "/workspace/lessons/" + key + "/manifest.json"})
-    return {"id": key, "video_url": upload["url"], "manifest_path": "/workspace/lessons/" + key + "/manifest.json"}
+@app.get("/api/agents/{id}/teach")
+async def teach_status(id: str):
+    runtime.agent(id); return {"lesson": teaching.view(teaching.current(id))}
+
+
+@app.get("/api/agents/{id}/lessons/{lesson_id}")
+async def lesson_view(id: str, lesson_id: str):
+    runtime.agent(id); lesson = store.get("lessons", lesson_id)
+    if not lesson or lesson["agent_id"] != id or lesson.get("kind") != "demo": raise KeyError(lesson_id)
+    return {"lesson": teaching.view(lesson)}
+
+
+@app.post("/api/agents/{id}/teach")
+async def teach(id: str, request: Request):
+    runtime.agent(id); body = await request.json(); action = body.get("action")
+    if action == "start": return {"lesson": await teaching.start(id, body.get("goal", ""), body.get("trial", True), body.get("thread"))}
+    lesson_id = str(body.get("lesson_id", ""))
+    if action in {"pause", "resume"}: return {"lesson": teaching.pause(id, lesson_id, action == "pause")}
+    if action == "note": return {"lesson": teaching.note(id, lesson_id, body.get("text", ""))}
+    if action == "drop": return {"lesson": teaching.drop(id, lesson_id, body.get("step", ""))}
+    if action == "finish": return await teaching.finish(id, lesson_id)
+    if action == "cancel": return await teaching.cancel(id, lesson_id)
+    raise ValueError("無效的教學操作")
 
 
 class WorkerUnauthorized(Exception): pass

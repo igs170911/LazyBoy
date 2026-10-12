@@ -87,6 +87,7 @@ chromium \
   --force-renderer-accessibility \
   --disable-background-networking \
   --disable-component-update \
+  --disk-cache-size=157286400 \
   --renderer-process-limit=4 \
   --password-store=basic \
   --lang=zh-TW \

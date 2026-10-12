@@ -433,12 +433,12 @@ async def test_http_group_deselection_releases_previous_member(api_client):
 
 
 @pytest.mark.asyncio
-async def test_http_recording_matches_frontend_payload(api_client):
+async def test_http_teaching_reports_nothing_until_a_demonstration_starts(api_client):
     client, agent=api_client
-    import base64
-    response=await client.post(f"/api/agents/{agent}/lessons", json={"id":uid(),"title":"Demo","notes":"Steps","duration_ms":1000,"frames":[],"video":base64.b64encode(b"\x1aE\xdf\xa3fixture").decode()})
-    assert response.status_code==200
-    assert (await client.get(response.json()["video_url"])).content==b"\x1aE\xdf\xa3fixture"
+    assert (await client.get(f"/api/agents/{agent}/teach")).json()=={"lesson":None}
+    assert (await client.post(f"/api/agents/{agent}/teach", json={"action":"note","lesson_id":"missing","text":"x"})).status_code==400
+    assert (await client.post(f"/api/agents/{agent}/teach", json={"action":"bogus"})).status_code==400
+    assert (await client.post(f"/api/agents/{agent}/lessons", json={})).status_code in {404,405}
 
 
 @pytest.mark.asyncio
@@ -503,3 +503,47 @@ async def test_text_before_a_tool_call_is_folded_into_narration(product):
     final=product.store.transcript(agent)[-1]
     assert final["content"]=="找到三則新聞。"
     assert final["narration"]==["我先搜尋一下。"]
+
+
+def test_follow_up_about_a_photo_reattaches_the_threads_recent_upload(product):
+    agent=bot(product)
+    upload={"id":"u1","agent_id":agent,"name":"IMG_1.jpeg","path":"uploads/u1/IMG_1.jpeg","media_type":"image/jpeg","bytes":10,"url":"x"}
+    product.store.put("uploads","u1",upload)
+    product.store.message(agent,"user","這是什麼照片\n\n[IMG_1.jpeg](/api/agents/a/files/content?path=uploads/u1/IMG_1.jpeg)",thread=agent)
+    product.store.message(agent,"assistant","已停止",thread=agent)
+    task={"id":"t","agent_id":agent,"thread_id":agent}
+    text="我要你看我傳給你的照片"
+    assert product.runtime._images(agent,text,task)==["/workspace/uploads/u1/IMG_1.jpeg"]
+    assert "/workspace/uploads/u1/IMG_1.jpeg" in product.runtime._prompt(agent,text,task)
+    assert product.runtime._images(agent,"今天天氣如何",task)==[]
+    fresh=product.runtime._prompt(agent,"看這張 [IMG_1.jpeg](x)",task)
+    assert "圖片也直接附在這則訊息" in fresh
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_covers_every_scope_and_remembers_tests(api_client, product, monkeypatch):
+    client, agent=api_client
+    calls=[]
+    async def call(method, params, timeout=None):
+        calls.append((method, params))
+        if params.get("name")=="broken": raise RuntimeError("MCP 連線逾時")
+        return {"ok": True, "tools": [{"name": "query-docs", "description": "Docs"}]}
+    fake=SimpleNamespace(alive=True, call=call)
+    async def connect(id): return fake
+    monkeypatch.setattr(product.runtime, "client", connect)
+    await client.post("/api/mcp", json={"action":"save","server":"docs","url":"http://example.test/mcp"})
+    await client.post("/api/mcp", json={"action":"save","agent":agent,"server":"broken","url":"http://broken.test/mcp"})
+    # No computer is running yet: a background check does not start one.
+    skipped=(await client.post("/api/mcp", json={"action":"test","server":"docs","all":True,"auto":True})).json()
+    assert skipped["skipped"] and not calls
+    product.runtime.clients[agent]=fake
+    listing=(await client.post("/api/mcp", json={"action":"test","server":"docs","all":True})).json()["servers"]
+    assert [(r["server"], r["scope_name"]) for r in listing]==[("docs","共用"),("broken","API Test")]
+    assert listing[0]["last_test"]["ok"] and listing[0]["last_test"]["tools"][0]["name"]=="query-docs"
+    failed=(await client.post("/api/mcp", json={"action":"test","agent":agent,"server":"broken","all":True})).json()["servers"]
+    assert failed[1]["last_test"]["ok"] is False and "逾時" in failed[1]["last_test"]["error"]
+    # Reopening settings shows the remembered results; changing a connector clears its result.
+    again=(await client.post("/api/mcp", json={"action":"list","all":True})).json()["servers"]
+    assert again[0]["last_test"]["ok"] and again[1]["last_test"]["ok"] is False
+    edited=(await client.post("/api/mcp", json={"action":"save","server":"docs","url":"http://example.test/v2","all":True})).json()["servers"]
+    assert edited[0]["last_test"] is None

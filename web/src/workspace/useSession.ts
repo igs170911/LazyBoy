@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AgentActivity, type AgentFile, type PlanItem, type TaskDetail, type TeamEvent, type ThreadRow, type TranscriptItem, type Worker } from "../api";
+import { api, type AgentActivity, type AgentFile, type Lesson, type PlanItem, type TaskDetail, type TeamEvent, type ThreadRow, type TranscriptItem, type Worker } from "../api";
 import { readStorage, writeStorage } from "../storage";
 import { randomUUID } from "../uuid";
 import { stepDetail, stepLabel } from "./steps";
@@ -55,6 +55,7 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [threads, setThreads] = useState<ThreadRow[]>([]);
+  const [lesson, setLesson] = useState<Lesson | null>(null);
   const [selection, setSelection] = useState<Record<string, string>>(storedThreads);
   const threadId = agentId ? selection[agentId] || agentId : "";
   const current = useRef(agentId);
@@ -119,7 +120,7 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   const refreshActivity = useCallback(async (id: string) => {
     try {
       const next = await api.activity(id);
-      if (current.current === id) setActivity(previous => JSON.stringify(previous.question) === JSON.stringify(next.question) && previous.state === next.state && previous.latest_task_id === next.latest_task_id && previous.queued === next.queued && previous.background === next.background ? previous : next);
+      if (current.current === id) setActivity(previous => JSON.stringify(previous.question) === JSON.stringify(next.question) && previous.state === next.state && previous.latest_task_id === next.latest_task_id && previous.queued === next.queued && previous.background === next.background && previous.teaching === next.teaching ? previous : next);
     } catch { /* the next event or poll retries */ }
   }, []);
 
@@ -256,6 +257,11 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
         debounce("threads", () => void reloadThreads(id), 100);
         changed.current();
         break;
+      case "teaching":
+        // The step list grows while the human demonstrates; null once it ends.
+        if (current.current === id) setLesson(p.lesson && typeof p.lesson === "object" ? p.lesson as Lesson : null);
+        debounce("activity", () => void refreshActivity(id), 300);
+        break;
       case "skills_changed":
         window.dispatchEvent(new CustomEvent("lazyboy-skills-changed", { detail: { agent: id, saved: p.saved === true, changed: p.changed === true, at: typeof p.at === "string" ? p.at : "" } }));
         if (p.saved === true && Array.isArray(p.skill_ids) && p.skill_ids.length) window.dispatchEvent(new CustomEvent("lazyboy-skills-saved", { detail: { agent: id, count: p.skill_ids.length } }));
@@ -288,6 +294,8 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
     setLiveState(lives.get(id) || null);
     setFiles([]);
     setThreads([]);
+    setLesson(null);
+    void api.teaching(id).then(data => { if (current.current === id) setLesson(data.lesson); }).catch(() => undefined);
     void reloadFiles(id);
     void reloadThreads(id);
     let source: EventSource | null = null;
@@ -360,6 +368,16 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
     finally { void refreshActivity(id); }
   }, [refreshActivity]);
 
+  const teach = useCallback(async (body: Parameters<typeof api.teach>[1]) => {
+    const id = current.current;
+    if (!id) return null;
+    const result = await api.teach(id, body);
+    if (current.current === id) setLesson(result.lesson);
+    void refreshActivity(id);
+    if (result.queued) await reloadTranscript(id);
+    return result;
+  }, [refreshActivity, reloadTranscript]);
+
   const refresh = useCallback(() => {
     const id = current.current;
     if (!id) return;
@@ -412,6 +430,6 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   return {
     transcript, activity, busy, here: placement.here, elsewhere: placement.elsewhere, live, tasks, files, loading, loadError,
     threadId, thread, threads, workingThread, openThread, createThread, renameThread, deleteThread, clear,
-    send, stop, refresh, refreshActivity, reloadFiles,
+    send, stop, refresh, refreshActivity, reloadFiles, lesson, teach,
   };
 }
