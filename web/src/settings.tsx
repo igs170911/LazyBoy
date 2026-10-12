@@ -1,10 +1,11 @@
 import { HermesSettings } from "./hermes-settings";
 import { RoutingPanel } from "./routing-settings";
+import { SearchPanel } from "./search-settings";
 import { useDialogFocus } from "./dialog-focus";
 import { McpSettings } from "./mcp-settings";
 import { useEffect, useRef, useState } from "react";
-import { api, type AppSettings, type ModelProtocol, type ProviderPreset, type SettingsModel } from "./api";
-import { mergeProviderModels, providerModelProtocol } from "./model-settings";
+import { api, type AppSettings, type ModelCheck, type ModelProtocol, type ProviderPreset, type SettingsModel } from "./api";
+import { mergeProviderModels, presetModel } from "./model-settings";
 import { useI18n } from "./i18n";
 import { persistTheme, readTheme, THEME_PREFS, type ThemePref } from "./theme";
 
@@ -169,10 +170,27 @@ function GeneralPanel() {
   );
 }
 
-function modelChoices(models: SettingsModel[], current: string): string[] {
-  const ids = models.map((item) => item.id).filter(Boolean);
-  if (current && !ids.includes(current)) ids.unshift(current);
-  return ids;
+const BROKEN = new Set(["unavailable", "auth", "protocol"]);
+const ALL_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const PROTOCOL_LABEL: Record<ModelProtocol, string> = { chat_completions: "Chat Completions", responses: "Responses", messages: "Anthropic Messages" };
+
+/** Models that failed their check sink to the bottom; the current choice always stays listed. */
+function modelChoices(models: SettingsModel[], current: string): SettingsModel[] {
+  const rows = models.filter((item) => item.id);
+  if (current && !rows.some((item) => item.id === current)) rows.unshift({ id: current });
+  const broken = (row: SettingsModel) => BROKEN.has(row.check?.status || "");
+  return [...rows.filter((row) => !broken(row)), ...rows.filter(broken)];
+}
+
+function CheckBadge({ check, checking }: { check?: ModelCheck; checking: boolean }) {
+  if (checking) return <small className="model-check">檢查中…</small>;
+  if (!check) return null;
+  if (check.status === "ok") return <small className="model-check ok">✓ 可以使用</small>;
+  // Busy or unreadable errors are not proof the model is broken: show the provider's own words.
+  const soft = check.status === "busy" || check.status === "unknown";
+  return <small className={`model-check ${soft ? "warn" : "bad"}`} title={check.detail || ""}>
+    {soft ? "⚠" : "✗"} {check.message}{soft && check.detail ? `：${check.detail.slice(0, 120)}` : ""}
+  </small>;
 }
 
 function ModelPanel() {
@@ -190,13 +208,16 @@ function ModelPanel() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [writing, setWriting] = useState(false);
-  const [probing, setProbing] = useState(false);
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [editUrl, setEditUrl] = useState(false);
   const draftRef = useRef({ providerId: "", baseUrl: "", apiKey: "", models: [] as SettingsModel[] });
   draftRef.current = { providerId, baseUrl, apiKey, models };
   const loadedProvider = useRef("");
   const modelsRequest = useRef(0);
+  const checkRequest = useRef(0);
+  const lastChecked = useRef("");
+  const handPicked = useRef(new Set<string>());
+  const [checking, setChecking] = useState("");
 
   const apply = (data: AppSettings) => {
     const providers = data?.providers || [];
@@ -217,7 +238,20 @@ function ModelPanel() {
     let alive = true;
     api
       .settings()
-      .then((data) => { if (alive) apply(data); })
+      .then((data) => {
+        if (!alive) return;
+        apply(data);
+        // Fix models already in use (default and per-Bot) that were never checked, without disturbing edits.
+        void api.checkModelsInUse().then((done) => {
+          if (!alive || !done.checked) return;
+          const draft = draftRef.current;
+          const loaded = (data.providers || []).find((p) => p.id === draft.providerId);
+          if (draft.apiKey || draft.baseUrl !== (loaded?.base_url || "")) return;
+          setSettings({ ...done.settings, providers: done.settings.providers || [] });
+          const saved = new Map((done.settings.providers || []).find((p) => p.id === draftRef.current.providerId)?.models.map((m) => [m.id, m]) || []);
+          setModels((list) => list.map((row) => !row.check && saved.get(row.id)?.check ? { ...row, protocol: saved.get(row.id)!.protocol, check: saved.get(row.id)!.check } : row));
+        }).catch(() => {});
+      })
       .catch((e) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
     api.providerPresets()
       .then((data) => { if (alive) setPresets(Array.isArray(data?.presets) ? data.presets : []); })
@@ -233,6 +267,7 @@ function ModelPanel() {
   const onProviderChange = (id: string) => {
     if (id === CUSTOM_PROVIDER) return addProvider();
     modelsRequest.current++;
+    handPicked.current.clear();
     setBusy(false);
     setError("");
     setStatus("");
@@ -244,7 +279,7 @@ function ModelPanel() {
     const provider = settings?.providers?.find((p) => p.id === id);
     const template = presets.find((p) => p.id === id);
     if (!provider && template) {
-      const listed = template.models.map((model) => ({ id: model, protocol: providerModelProtocol(template.id, model, template.protocol) }));
+      const listed = template.models.map((model) => presetModel(template.id, model, template));
       setProviderLabel(template.label);
       setBaseUrl(template.base_url);
       setModels(listed);
@@ -274,7 +309,7 @@ function ModelPanel() {
   const addModel = () => {
     const id = manualModel?.trim();
     if (!id) return;
-    setModels(list => list.some(item => item.id === id) ? list : [...list, {id, protocol: preset?.protocol || "chat_completions"}]);
+    setModels(list => list.some(item => item.id === id) ? list : [...list, presetModel(providerId, id, preset || { base_url: baseUrl })]);
     setModel(id); setManualModel(null);
   };
 
@@ -299,7 +334,7 @@ function ModelPanel() {
         if (announce || draft.models.length === 0) setError(t.noModelsFound);
         return;
       }
-      const next = mergeProviderModels(found, draft.models, id, presets.find((p) => p.id === id)?.protocol);
+      const next = mergeProviderModels(found, draft.models, id, presets.find((p) => p.id === id) || { base_url: draft.baseUrl });
       setModels(next);
       setModel((current) => next.some((item) => item.id === current) ? current : next[0].id);
     } catch (e) {
@@ -317,7 +352,7 @@ function ModelPanel() {
     return () => { alive = false; };
   }, [settings, providerId]);
 
-  const payload = () => ({
+  const payload = (rows: SettingsModel[] = models) => ({
     active: providerId.trim(),
     model,
     provider: {
@@ -325,11 +360,57 @@ function ModelPanel() {
       label: providerLabel.trim() || providerId.trim(),
       base_url: baseUrl.trim(),
       api_key: apiKey,
-      models: model && !models.some((item) => item.id === model)
-        ? [{ id: model, protocol: preset?.protocol || "chat_completions" }, ...models]
-        : models,
+      models: model && !rows.some((item) => item.id === model)
+        ? [presetModel(providerId, model, preset || { base_url: baseUrl }), ...rows]
+        : rows,
     },
   });
+
+  /** One tiny real request per protocol: confirms the model answers and fixes its protocol. */
+  const runCheck = async (id: string, rows: SettingsModel[] = draftRef.current.models): Promise<SettingsModel[]> => {
+    const pid = providerId.trim();
+    if (!pid || !id) return rows;
+    const draft = draftRef.current;
+    const row = rows.find((item) => item.id === id) || presetModel(pid, id, preset || { base_url: draft.baseUrl });
+    const version = ++checkRequest.current;
+    setChecking(id);
+    try {
+      // A provider not saved yet, or with a new key or URL, is checked with what is on screen.
+      const fresh = !selected || !!draft.apiKey || draft.baseUrl.trim() !== (selected.base_url || "");
+      // The server picks which protocol to try first (the stored one may be the very mistake),
+      // unless the user chose one by hand in the advanced settings.
+      const data = await api.checkModel({ provider: pid, model: id, ...(handPicked.current.has(id) ? { protocol: row.protocol } : {}),
+        ...(fresh ? { base_url: draft.baseUrl.trim(), api_key: draft.apiKey } : {}) });
+      const patch = (item: SettingsModel) => item.id === id ? { ...item, protocol: data.result.protocol || item.protocol, check: data.result } : item;
+      const next = rows.some((item) => item.id === id) ? rows.map(patch) : [patch(row), ...rows];
+      const now = draftRef.current;
+      // A result for credentials no longer on screen is dropped; edits made meanwhile are kept.
+      if (now.providerId === pid && now.apiKey === draft.apiKey && now.baseUrl === draft.baseUrl) {
+        setModels((list) => list.some((item) => item.id === id) ? list.map(patch) : [patch(row), ...list]);
+      }
+      if (data.stored) setSettings({ ...data.settings, providers: data.settings.providers || [] });
+      return next;
+    } catch (e) {
+      if (checkRequest.current === version) setError(e instanceof Error ? e.message : String(e));
+      return rows;
+    } finally {
+      if (checkRequest.current === version) setChecking("");
+    }
+  };
+
+  // Choosing a model is enough: check it as soon as there is a key to check it with.
+  useEffect(() => {
+    if (!settings || !model || writing || !baseUrl.trim()) return;
+    if (models.find((item) => item.id === model)?.check) return;
+    if (!(selected?.has_key || apiKey || preset?.local || newProvider)) return;
+    const key = [providerId, model, apiKey, baseUrl].join("|");
+    if (lastChecked.current === key) return;
+    const timer = window.setTimeout(() => { lastChecked.current = key; void runCheck(model); }, 600);
+    return () => window.clearTimeout(timer);
+  }, [settings, providerId, model, apiKey, baseUrl, models, writing]);
+
+  // A new key or URL voids earlier checks.
+  const dropChecks = () => setModels((list) => list.some((item) => item.check) ? list.map(({ check: _, ...item }) => item) : list);
 
   const save = async () => {
     if (!providerId.trim()) return;
@@ -339,33 +420,15 @@ function ModelPanel() {
     setError("");
     setStatus("");
     try {
-      apply(await api.saveSettings(payload()));
-      setStatus(t.settingsSaved);
+      let rows = models;
+      if (model && !rows.find((item) => item.id === model)?.check) rows = await runCheck(model, rows);
+      const check = rows.find((item) => item.id === model)?.check;
+      apply(await api.saveSettings(payload(rows)));
+      setStatus(check && BROKEN.has(check.status) ? `已儲存，但這個模型目前無法使用：${check.message}` : t.settingsSaved);
       window.dispatchEvent(new Event("lazyboy:model-changed"));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
-      setWriting(false);
-    }
-  };
-
-  const detectReasoning = async () => {
-    if (!providerId.trim() || !model) return;
-    modelsRequest.current++;
-    setBusy(true);
-    setWriting(true);
-    setProbing(true);
-    setError("");
-    setStatus("");
-    try {
-      await api.saveSettings(payload());
-      apply(await api.providerReasoning({ provider: providerId.trim(), model }));
-      window.dispatchEvent(new Event("lazyboy:model-changed"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setProbing(false);
       setBusy(false);
       setWriting(false);
     }
@@ -373,7 +436,13 @@ function ModelPanel() {
 
   const current = models.find((item) => item.id === model);
   const hermes = settings?.engine === "hermes";
-  const levels = hermes ? ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] : current?.reasoning_levels;
+  const info = preset?.model_info?.[model];
+  const levels = hermes ? (info?.efforts ?? ALL_EFFORTS) : current?.reasoning_levels;
+  // Only what is actually known about the model; unknown reasoning support is not shown as a range.
+  const summary = current ? [PROTOCOL_LABEL[current.protocol || "chat_completions"], current.vision ? "可讀圖片" : "",
+    info?.efforts?.length ? `推理 ${info.efforts[0]}–${info.efforts[info.efforts.length - 1]}` : info?.efforts ? "不支援推理強度" : ""].filter(Boolean).join(" · ") : "";
+  // Base URL is something to fill in only when no preset supplies it.
+  const urlUpFront = newProvider || !preset?.base_url || !!preset?.local;
   const setEffort = (effort: string) =>
     setModels((list) => list.map((item) => item.id === model ? { ...item, reasoning_effort: effort || null } : item));
 
@@ -416,13 +485,13 @@ function ModelPanel() {
           <span className="lb-settings-copy">供應商名稱</span>
           <input className="lb-settings-select" value={providerLabel} disabled={writing} onChange={e => setProviderLabel(e.target.value)} placeholder="例如：我的本機模型" />
         </label> : null}
-        {preset && preset.base_url && !preset.local && !editUrl && baseUrl.trim() === preset.base_url ? <div className="lb-settings-row">
+        {urlUpFront ? (preset && preset.base_url && !preset.local && !editUrl && baseUrl.trim() === preset.base_url ? <div className="lb-settings-row">
           <span className="lb-settings-copy">{t.baseUrl}<small className="lb-settings-url">{baseUrl}</small></span>
           <button type="button" className="outline" disabled={writing} onClick={() => setEditUrl(true)}>修改</button>
         </div> : <label className="lb-settings-row">
           <span className="lb-settings-copy">{t.baseUrl}</span>
-          <input className="lb-settings-select" aria-label={t.baseUrl} value={baseUrl} disabled={writing} onChange={(e) => setBaseUrl(e.target.value)} placeholder={preset?.base_url || "https://api.example.com/v1"} />
-        </label>}
+          <input className="lb-settings-select" aria-label={t.baseUrl} value={baseUrl} disabled={writing} onChange={(e) => { setBaseUrl(e.target.value); dropChecks(); }} placeholder={preset?.base_url || "https://api.example.com/v1"} />
+        </label>) : null}
         <label className="lb-settings-row">
           <span className="lb-settings-copy">
             {t.apiKey}
@@ -436,90 +505,111 @@ function ModelPanel() {
             aria-label={t.apiKey}
             disabled={writing}
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            onBlur={() => { if (apiKey && preset && !selected) void loadModels(false); }}
+            onChange={(e) => { setApiKey(e.target.value); dropChecks(); }}
+            onBlur={() => { if (apiKey && (preset || selected)) void loadModels(false); }}
             placeholder={selected?.has_key ? t.apiKeyKeep : preset?.local ? "本機服務可留空" : "貼上 API 金鑰"}
             autoComplete="off"
           />
         </label>
         <label className="lb-settings-row">
-          <span className="lb-settings-copy">{t.modelId}</span>
+          <span className="lb-settings-copy">
+            {t.modelId}
+            {checking === model ? <small className="model-check">檢查中…</small>
+              : current?.check?.status === "ok" ? <small><span className="model-check ok">✓ 可以使用</span>{summary ? ` · ${summary}` : ""}</small>
+              : <CheckBadge check={current?.check} checking={false} />}
+          </span>
           <span className="lb-settings-control">
             <select className="lb-settings-select" aria-label={t.modelId} value={model} onChange={(e) => setModel(e.target.value)} disabled={writing || !modelChoices(models, model).length}>
-              {modelChoices(models, model).map((id) => <option key={id} value={id}>{id}</option>)}
+              {modelChoices(models, model).map((row) => <option key={row.id} value={row.id}>
+                {row.id}{row.check && BROKEN.has(row.check.status) ? "（無法使用）" : ""}
+              </option>)}
             </select>
-            <button type="button" className="outline" disabled={busy || writing || !providerId.trim()} onClick={() => void loadModels(true)}>
-              {t.loadModels}
-            </button>
-            {hermes ? <button type="button" className="outline" disabled={writing} onClick={() => setManualModel("")}>手動加入模型</button> : null}
+            {current?.check && current.check.status !== "ok" && checking !== model
+              ? <button type="button" className="outline" disabled={writing} onClick={() => void runCheck(model)}>再檢查</button> : null}
           </span>
         </label>
-        {hermes && manualModel !== null ? <label className="lb-settings-row">
-          <span className="lb-settings-copy">新模型 ID<small>使用供應商提供的模型名稱。</small></span>
-          <span className="lb-settings-control">
-            <input className="lb-settings-select" value={manualModel} disabled={writing} onChange={e => setManualModel(e.target.value)} />
-            <button type="button" className="outline" disabled={writing || !manualModel.trim()} onClick={addModel}>加入模型</button>
-          </span>
-        </label> : null}
-        {hermes ? <label className="lb-settings-row">
-          <span className="lb-settings-copy">API 介面<small>依模型服務的文件選擇。</small></span>
-          <select className="lb-settings-select" value={current?.protocol || "chat_completions"} disabled={writing || !current}
-            onChange={e => setModels(list => list.map(item => item.id === model ? {...item, protocol:e.target.value as ModelProtocol} : item))}>
-            <option value="chat_completions">Chat Completions</option>
-            <option value="responses">Responses</option>
-            <option value="messages">Anthropic Messages</option>
-          </select>
-        </label> : null}
-        <label className="lb-settings-row">
-          <span className="lb-settings-copy">
-            {t.reasoningEffort}
-            {hermes ? <small>模型支援時套用；未指定時使用 medium。</small> : !levels ? <small>{t.reasoningUnprobed}</small> : levels.length === 0 ? <small>{t.reasoningUnsupported}</small> : null}
-          </span>
-          <span className="lb-settings-control">
+        <details className="lb-settings-advanced" open={newProvider || manualModel !== null || undefined}>
+          <summary>進階設定</summary>
+          {!urlUpFront ? (preset && preset.base_url && !preset.local && !editUrl && baseUrl.trim() === preset.base_url ? <div className="lb-settings-row">
+          <span className="lb-settings-copy">{t.baseUrl}<small className="lb-settings-url">{baseUrl}</small></span>
+          <button type="button" className="outline" disabled={writing} onClick={() => setEditUrl(true)}>修改</button>
+        </div> : <label className="lb-settings-row">
+          <span className="lb-settings-copy">{t.baseUrl}</span>
+          <input className="lb-settings-select" aria-label={t.baseUrl} value={baseUrl} disabled={writing} onChange={(e) => { setBaseUrl(e.target.value); dropChecks(); }} placeholder={preset?.base_url || "https://api.example.com/v1"} />
+        </label>) : null}
+          <div className="lb-settings-row">
+            <span className="lb-settings-copy">模型清單<small>貼上金鑰後會自動載入。</small></span>
+            <span className="lb-settings-control">
+              <button type="button" className="outline" disabled={busy || writing || !providerId.trim()} onClick={() => void loadModels(true)}>
+                {t.loadModels}
+              </button>
+              {hermes ? <button type="button" className="outline" disabled={writing} onClick={() => setManualModel("")}>手動加入模型</button> : null}
+            </span>
+          </div>
+          {hermes && manualModel !== null ? <label className="lb-settings-row">
+            <span className="lb-settings-copy">新模型 ID<small>使用供應商提供的模型名稱。</small></span>
+            <span className="lb-settings-control">
+              <input className="lb-settings-select" value={manualModel} disabled={writing} onChange={e => setManualModel(e.target.value)} />
+              <button type="button" className="outline" disabled={writing || !manualModel.trim()} onClick={addModel}>加入模型</button>
+            </span>
+          </label> : null}
+          {hermes ? <label className="lb-settings-row">
+            <span className="lb-settings-copy">API 介面<small>選模型時會自動檢查並設定，通常不用改。</small></span>
+            <select className="lb-settings-select" value={current?.protocol || "chat_completions"} disabled={writing || !current}
+              onChange={e => { handPicked.current.add(model); setModels(list => list.map(item => item.id === model ? {...item, protocol:e.target.value as ModelProtocol, check: undefined} : item)); }}>
+              <option value="chat_completions">Chat Completions</option>
+              <option value="responses">Responses</option>
+              <option value="messages">Anthropic Messages</option>
+            </select>
+          </label> : null}
+          {levels?.length ? <label className="lb-settings-row">
+            <span className="lb-settings-copy">
+              {t.reasoningEffort}
+              {hermes ? <small>只列出這個模型支援的等級；未指定時使用 medium。</small> : null}
+            </span>
             <select
               className="lb-settings-select"
               aria-label={t.reasoningEffort}
               value={current?.reasoning_effort || ""}
               onChange={(e) => setEffort(e.target.value)}
-              disabled={writing || !current || !levels?.length}
+              disabled={writing || !current}
             >
               <option value="">{hermes ? "預設（medium）" : t.reasoningDefault}</option>
-              {(levels || []).map((level) => <option key={level} value={level}>{level}</option>)}
+              {levels.map((level) => <option key={level} value={level}>{level}</option>)}
             </select>
-            {!hermes ? <button type="button" className="outline" disabled={busy || !providerId.trim() || !model} onClick={() => void detectReasoning()}>
-              {probing ? t.reasoningDetecting : t.detectReasoning}
-            </button> : null}
-          </span>
-        </label>
-        {hermes ? <label className="lb-settings-row">
-          <span className="lb-settings-copy">讀取圖片<small>請依選定模型的能力開啟，圖片會隨訊息送給模型。</small></span>
-          <input type="checkbox" aria-label="讀取圖片" checked={!!current?.vision} disabled={writing || !current}
-            onChange={e => setModels(list => list.map(item => item.id === model ? {...item, vision:e.target.checked} : item))}/>
-        </label> : null}
-        {hermes ? <label className="lb-settings-row">
-          <span className="lb-settings-copy">產生圖片<small>供應商提供生圖介面時開啟，可用來製作 Bot 頭像。</small></span>
-          <input type="checkbox" aria-label="產生圖片" checked={!!current?.image_generation} disabled={writing || !current}
-            onChange={e => setModels(list => list.map(item => item.id === model ? {...item, image_generation:e.target.checked} : item))}/>
-        </label> : null}
-      </SettingsGroup>
-      <SettingsGroup title={t.currentModel}>
-        <div className="lb-settings-row">
-          <span className="lb-settings-copy">
-            <strong>{settings.active} · {settings.model}</strong>
-            <small>{settings.protocol} · {settings.config_path}</small>
-          </span>
-        </div>
+          </label> : null}
+          {hermes ? <label className="lb-settings-row">
+            <span className="lb-settings-copy">讀取圖片<small>{info ? (info.vision ? "這個模型可以讀圖片，已自動開啟。" : "這個模型不能讀圖片。") : "請依模型能力開啟，圖片會隨訊息送給模型。"}</small></span>
+            <input type="checkbox" aria-label="讀取圖片" checked={!!current?.vision} disabled={writing || !current}
+              onChange={e => setModels(list => list.map(item => item.id === model ? {...item, vision:e.target.checked} : item))}/>
+          </label> : null}
+          {hermes ? <label className="lb-settings-row">
+            <span className="lb-settings-copy">產生圖片<small>供應商提供生圖介面時開啟，可用來製作 Bot 頭像。</small></span>
+            <input type="checkbox" aria-label="產生圖片" checked={!!current?.image_generation} disabled={writing || !current}
+              onChange={e => setModels(list => list.map(item => item.id === model ? {...item, image_generation:e.target.checked} : item))}/>
+          </label> : null}
+          <div className="lb-settings-row">
+            <span className="lb-settings-copy">
+              {t.currentModel}
+              <small>{settings.active} · {settings.model} · {settings.protocol}</small>
+            </span>
+          </div>
+        </details>
       </SettingsGroup>
       {error ? <p className="computer-settings-status" role="alert">{error}</p> : null}
       {status ? <p className="computer-settings-status" role="status">{status}</p> : null}
       <div className="lb-settings-row">
         <span />
-        <button type="button" className="outline" disabled={busy || writing || !providerId.trim()} onClick={() => void save()}>
-          {busy ? t.saving : t.saveSettings}
+        <button type="button" className="outline" disabled={busy || writing || !providerId.trim() || !!checking} onClick={() => void save()}>
+          {busy ? (checking ? "檢查模型中…" : t.saving) : t.saveSettings}
         </button>
       </div>
-      <HermesSettings settings={settings} />
-      <RoutingPanel settings={settings} onSaved={setSettings} disabled={busy || writing} onWriting={setWriting} />
+      <SearchPanel settings={settings} onSaved={setSettings} disabled={busy || writing} />
+      <details className="lb-settings-advanced">
+        <summary>進階：執行核心與對話／工作分流</summary>
+        <HermesSettings settings={settings} />
+        <RoutingPanel settings={settings} onSaved={setSettings} disabled={busy || writing} onWriting={setWriting} />
+      </details>
     </div>
   );
 }

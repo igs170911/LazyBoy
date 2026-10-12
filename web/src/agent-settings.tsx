@@ -115,10 +115,26 @@ export function AgentSettingsDialog({
   useEffect(()=>{ void api.agents().then(data=>setGroups(data.groups)).catch(()=>{}); },[]);
   useEffect(() => {
     void api.settings().then((data) => {
-      const keyed = data.providers.filter((provider) => provider.selectable);
+      // Only providers that can answer: a saved key, or a local service that needs none.
+      // The provider this Bot already uses always stays listed, keyed or not.
+      const keyed = data.providers.filter((provider) => provider.selectable && (provider.has_key || provider.id === agent?.provider || /^http:\/\/(127\.|localhost)/.test(provider.base_url)));
       setProviders(keyed);
     }).catch(() => {});
   }, []);
+  const [modelChecking, setModelChecking] = useState(false);
+  const chosenRow = providers.find((item) => item.id === chatProvider)?.models.find((item) => item.id === chatModel);
+  // A model nobody has tried yet is checked when picked, so a broken choice shows up here, not mid-task.
+  useEffect(() => {
+    if (!chatProvider || !chatModel || chosenRow?.check || !chosenRow) { setModelChecking(false); return; }
+    let alive = true;
+    setModelChecking(true);
+    void api.checkModel({ provider: chatProvider, model: chatModel }).then((data) => {
+      if (!alive) return;
+      setProviders((list) => list.map((provider) => provider.id !== chatProvider ? provider : { ...provider,
+        models: provider.models.map((item) => item.id === chatModel ? { ...item, protocol: data.result.protocol || item.protocol, check: data.result } : item) }));
+    }).catch(() => {}).finally(() => { if (alive) setModelChecking(false); });
+    return () => { alive = false; setModelChecking(false); };
+  }, [chatProvider, chatModel, !!chosenRow?.check, !!chosenRow]);
   const [title, setTitle] = useState(agent?.title || "");
   const [color, setColor] = useState(agent?.avatar_color ? defaultColor(agent.avatar_color) : initialLook.color);
   const [eyes, setEyes] = useState<AvatarTraits>(() => cleanTraits(agent?.avatar_traits));
@@ -516,7 +532,13 @@ export function AgentSettingsDialog({
               const model = provider?.models.some((item) => item.id === chatModel) ? chatModel : provider?.models[0]?.id || "";
               setChatModel(model);
             }}><option value="">使用全域設定</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.label || provider.id}</option>)}</select></label>
-            {chatProvider ? <label>模型<select value={chatModel} onChange={(event) => setChatModel(event.target.value)}>{(providers.find((provider) => provider.id === chatProvider)?.models || []).map((item) => <option key={item.id} value={item.id}>{item.label || item.id}</option>)}</select></label> : null}
+            {chatProvider ? <label>模型<select value={chatModel} onChange={(event) => setChatModel(event.target.value)}>{(providers.find((provider) => provider.id === chatProvider)?.models || []).map((item) => {
+              const broken = ["unavailable", "auth", "protocol"].includes(item.check?.status || "");
+              return <option key={item.id} value={item.id} disabled={broken && item.id !== chatModel}>{item.label || item.id}{broken ? "（無法使用）" : ""}</option>;
+            })}</select>
+              {modelChecking ? <small className="model-check">檢查中…</small>
+                : chosenRow?.check ? <small className={`model-check ${chosenRow.check.status === "ok" ? "ok" : ["busy", "unknown"].includes(chosenRow.check.status) ? "warn" : "bad"}`} title={chosenRow.check.detail || ""}>{chosenRow.check.status === "ok" ? "✓ 可以使用" : `${["busy", "unknown"].includes(chosenRow.check.status) ? "⚠" : "✗"} ${chosenRow.check.message}`}</small> : null}
+            </label> : null}
             <label>回覆長度<select value={replyStyle} onChange={e => setReplyStyle(e.target.value)}>
               <option value="brief">精簡：1 到 3 行</option>
               <option value="">標準：先結論，約 8 行內</option>

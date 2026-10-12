@@ -11,6 +11,31 @@
    "accounts/fireworks/models/glm-5p2",
    "accounts/fireworks/models/kimi-k2p7-code"
   ],
+  "model_info": {
+   "accounts/fireworks/models/kimi-k2p6": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "accounts/fireworks/models/glm-5p2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "accounts/fireworks/models/kimi-k2p7-code": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   }
+  },
   "local": false
  },
  {
@@ -28,6 +53,38 @@
    "google/gemini-3.7-flash",
    "qwen/qwen3-plus"
   ],
+  "model_info": {
+   "anthropic/claude-sonnet-4.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "openai/gpt-5.4": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "deepseek/deepseek-chat": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": []
+   },
+   "google/gemini-3.8-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "google/gemini-3.7-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen/qwen3-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -45,6 +102,42 @@
    "deepseek/deepseek-r1-0528",
    "qwen/qwen3-235b-a22b-fp8"
   ],
+  "model_info": {
+   "moonshotai/kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "minimax/minimax-m2.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "zai-org/glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek/deepseek-v3-0324": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek/deepseek-r1-0528": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen/qwen3-235b-a22b-fp8": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -55,6 +148,7 @@
   "protocol": "chat_completions",
   "signup_url": "",
   "models": [],
+  "model_info": {},
   "local": true
  },
  {
@@ -80,6 +174,78 @@
    "claude-sonnet-4-20250514",
    "claude-haiku-4-5-20251001"
   ],
+  "model_info": {
+   "claude-fable-5.1": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "claude-fable-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-5-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-sonnet-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-8": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-7": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-6": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-sonnet-4-6": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-5-20251101": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-sonnet-4-5-20250929": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-20250514": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "claude-sonnet-4-20250514": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "claude-haiku-4-5-20251001": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -113,6 +279,242 @@
    "gpt-4o",
    "gpt-4o-mini"
   ],
+  "model_info": {
+   "gpt-6.1-sol": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-6.1-sol-pro": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-6-sol": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-6-sol-pro": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-6-luna": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-6-luna-pro": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-sol": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-sol-pro": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-terra": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-terra-pro": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-luna": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-luna-pro": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.5": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.5-pro": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.4": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.4-mini": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.4-nano": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5-mini": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.3-codex": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-4.1": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": []
+   },
+   "gpt-4o": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": []
+   },
+   "gpt-4o-mini": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": []
+   }
+  },
   "local": false
  },
  {
@@ -139,6 +541,97 @@
    "deepseek-v4-flash-0731",
    "MiniMax-M2.5"
   ],
+  "model_info": {
+   "qwen3.8-max": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen3.7-max": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-plus": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen3.6-plus": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen3.6-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "qwen3.5-plus": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen3-coder-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": []
+   },
+   "qwen3-coder-next": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-4.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-v4-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek-v4-flash-0731": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "MiniMax-M2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -158,6 +651,48 @@
    "mimo-v2-omni",
    "mimo-v2-flash"
   ],
+  "model_info": {
+   "mimo-v2.6-pro": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "mimo-v2.6-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "mimo-v2.6-pro-ultraspeed": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "mimo-v2.5-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "mimo-v2.5": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "mimo-v2-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "mimo-v2-omni": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "mimo-v2-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -172,6 +707,23 @@
    "hy3",
    "hy3-preview"
   ],
+  "model_info": {
+   "hy4-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "hy3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "hy3-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -186,6 +738,23 @@
    "hy3",
    "hy3-preview"
   ],
+  "model_info": {
+   "hy4-preview": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "hy3": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "hy3-preview": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -205,6 +774,57 @@
    "moonshotai/kimi-k2.6",
    "minimaxai/minimax-m3"
   ],
+  "model_info": {
+   "nvidia/nemotron-3-ultra-550b-a55b": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "nvidia/nemotron-3-super-120b-a12b": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "nvidia/nemotron-3.5-lightning-30b-a3b": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "z-ai/glm-5.3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "z-ai/glm-5.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "moonshotai/kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "minimaxai/minimax-m3": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -225,6 +845,65 @@
    "moonshotai/Kimi-K2-Thinking",
    "moonshotai/Kimi-K2.6"
   ],
+  "model_info": {
+   "moonshotai/Kimi-K2.5": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "Qwen/Qwen3.5-397B-A17B": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "Qwen/Qwen3.5-35B-A3B": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "deepseek-ai/DeepSeek-V3.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMaxAI/MiniMax-M2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "zai-org/GLM-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "XiaomiMiMo/MiMo-V2-Flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "moonshotai/Kimi-K2-Thinking": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "moonshotai/Kimi-K2.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   }
+  },
   "local": false
  },
  {
@@ -242,6 +921,38 @@
    "gemini-3.6-flash",
    "gemini-3.1-flash-lite-preview"
   ],
+  "model_info": {
+   "gemini-3.8-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.7-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.1-pro-preview": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3-pro-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "gemini-3.6-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.1-flash-lite-preview": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -255,6 +966,23 @@
    "deepseek-flash",
    "deepseek-v4-pro"
   ],
+  "model_info": {
+   "deepseek-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "deepseek-v4-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   }
+  },
   "local": false
  },
  {
@@ -274,6 +1002,77 @@
    "grok-4.20-0309-non-reasoning",
    "grok-4.20-multi-agent-0309"
   ],
+  "model_info": {
+   "grok-4.6": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "grok-composer-2.5-fast": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "grok-build-0.1": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "grok-4.5": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "grok-4.3": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "grok-4.20-0309-reasoning": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "grok-4.20-0309-non-reasoning": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": []
+   },
+   "grok-4.20-multi-agent-0309": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   }
+  },
   "local": false
  },
  {
@@ -295,6 +1094,68 @@
    "glm-4.5",
    "glm-4.5-flash"
   ],
+  "model_info": {
+   "glm-5.3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "glm-5.3-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "glm-5.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5.1": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5v-turbo": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "glm-5-turbo": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-4.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-4.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-4.5-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -316,6 +1177,98 @@
    "kimi-k2-turbo-preview",
    "kimi-k2-0905-preview"
   ],
+  "model_info": {
+   "kimi-k3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "kimi-k2.7-code": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-for-coding": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-for-coding-highspeed": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2-thinking": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2-thinking-turbo": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2-turbo-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2-0905-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   }
+  },
   "local": false
  },
  {
@@ -335,6 +1288,80 @@
    "kimi-k2-turbo-preview",
    "kimi-k2-0905-preview"
   ],
+  "model_info": {
+   "kimi-k3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "kimi-k2.7-code": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.7-code-highspeed": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2-thinking": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2-turbo-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2-0905-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   }
+  },
   "local": false
  },
  {
@@ -349,6 +1376,23 @@
    "step-3.5-flash",
    "step-3.5-flash-2603"
   ],
+  "model_info": {
+   "step-3.7-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "step-3.5-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "step-3.5-flash-2603": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -365,6 +1409,33 @@
    "MiniMax-M2.1",
    "MiniMax-M2"
   ],
+  "model_info": {
+   "MiniMax-M3": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "MiniMax-M2.7": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2.5": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2.1": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -381,6 +1452,33 @@
    "MiniMax-M2.1",
    "MiniMax-M2"
   ],
+  "model_info": {
+   "MiniMax-M3": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "MiniMax-M2.7": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2.5": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2.1": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -391,6 +1489,7 @@
   "protocol": "chat_completions",
   "signup_url": "",
   "models": [],
+  "model_info": {},
   "local": false
  },
  {
@@ -405,6 +1504,23 @@
    "trinity-large-preview",
    "trinity-mini"
   ],
+  "model_info": {
+   "trinity-large-thinking": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "trinity-large-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "trinity-mini": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -423,6 +1539,47 @@
    "anthropic/claude-sonnet-4.6",
    "openai/gpt-5.4"
   ],
+  "model_info": {
+   "zai-org/GLM-5.1-FP8": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-ai/DeepSeek-V3.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "moonshotai/Kimi-K2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "google/gemini-3.1-flash-lite-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "anthropic/claude-sonnet-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "anthropic/claude-sonnet-4.6": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "openai/gpt-5.4": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -439,6 +1596,33 @@
    "google/gemini-3-pro-preview",
    "google/gemini-3-flash-preview"
   ],
+  "model_info": {
+   "anthropic/claude-opus-4.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "anthropic/claude-sonnet-4.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "openai/gpt-5.4": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "google/gemini-3-pro-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "google/gemini-3-flash-preview": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -490,6 +1674,343 @@
    "gemini-3.5-flash",
    "gemini-3.5-flash-lite"
   ],
+  "model_info": {
+   "x-preview-f-free": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "kimi-k3": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "gpt-5.6-sol": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-terra": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.6-luna": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "gpt-5.5": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.5-pro": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.4-pro": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.4": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.4-mini": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.4-nano": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.3-codex": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.3-codex-spark": {
+    "protocol": "responses",
+    "vision": false,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.2": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.2-codex": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.1": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.1-codex": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.1-codex-max": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5.1-codex-mini": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5-codex": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "gpt-5-nano": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   "claude-fable-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-sonnet-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-8": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-7": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-6": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-opus-4-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-sonnet-4-6": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-sonnet-4-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-sonnet-4": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "claude-haiku-4-5": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.8-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.7-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.6-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.5-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "gemini-3.5-flash-lite": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -530,6 +2051,200 @@
    "muse-spark-1.2-contributor",
    "muse-spark-1.3-contributor"
   ],
+  "model_info": {
+   "kimi-k3": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "high",
+     "max"
+    ]
+   },
+   "kimi-k2.7-code": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "gpt-5.6-luna": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "none",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   },
+   "grok-4.5": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "glm-5.3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "glm-5.3-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "glm-5.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5.1": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "mimo-v2.5-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "mimo-v2.5": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "mimo-v2-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "mimo-v2-omni": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "minimax-m3": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "minimax-m2.7": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "minimax-m2.5": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-v4-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek-v4-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "qwen3.8-max": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen3.7-max": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-plus": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen3.6-plus": {
+    "protocol": "messages",
+    "vision": true,
+    "efforts": null
+   },
+   "qwen3.5-plus": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "hy3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "hy3-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "muse-spark-1.2-contributor": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": null
+   },
+   "muse-spark-1.3-contributor": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -540,6 +2255,7 @@
   "protocol": "chat_completions",
   "signup_url": "https://ai.azure.com/",
   "models": [],
+  "model_info": {},
   "local": false
  },
  {
@@ -566,6 +2282,91 @@
    "google/gemini-3.1-flash-lite-preview",
    "xai/grok-4.20-reasoning"
   ],
+  "model_info": {
+   "moonshotai/kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "alibaba/qwen3.6-plus": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "zai/glm-5.1": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "minimax/minimax-m2.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "anthropic/claude-sonnet-4.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "anthropic/claude-opus-4.7": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "anthropic/claude-opus-4.6": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "anthropic/claude-haiku-4.5": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "openai/gpt-5.4": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "openai/gpt-5.4-mini": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "openai/gpt-5.3-codex": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "google/gemini-3.1-pro-preview": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "google/gemini-3-flash": {
+    "protocol": "chat_completions",
+    "vision": true,
+    "efforts": null
+   },
+   "google/gemini-3.1-flash-lite-preview": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "xai/grok-4.20-reasoning": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   }
+  },
   "local": false
  },
  {
@@ -576,6 +2377,7 @@
   "protocol": "chat_completions",
   "signup_url": "https://actual.inc",
   "models": [],
+  "model_info": {},
   "local": false
  },
  {
@@ -602,6 +2404,97 @@
    "deepseek-v4-flash-0731",
    "MiniMax-M2.5"
   ],
+  "model_info": {
+   "qwen3.8-max": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-max": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "qwen3.5-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-coder-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-coder-next": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-4.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-v4-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek-v4-flash-0731": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "MiniMax-M2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -627,6 +2520,100 @@
    "glm-5.1",
    "glm-5"
   ],
+  "model_info": {
+   "qwen3.8-max-0902": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-max": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-v4-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek-v4-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek-v3.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "kimi-k2.7-code": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "glm-5.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5.1": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -652,6 +2639,100 @@
    "glm-5.1",
    "glm-5"
   ],
+  "model_info": {
+   "qwen3.8-max-0902": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-max": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.7-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-v4-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek-v4-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek-v3.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "kimi-k2.7-code": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.6": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "glm-5.2": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5.1": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -673,6 +2754,62 @@
    "glm-4.7",
    "MiniMax-M2.5"
   ],
+  "model_info": {
+   "qwen3.7-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.5-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-max-2026-01-23": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-coder-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-coder-next": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-4.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -694,6 +2831,62 @@
    "glm-4.7",
    "MiniMax-M2.5"
   ],
+  "model_info": {
+   "qwen3.7-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.6-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3.5-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-max-2026-01-23": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-coder-plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "qwen3-coder-next": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "kimi-k2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "glm-5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "glm-4.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMax-M2.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -716,6 +2909,77 @@
    "google/gemini-3.5-flash",
    "gpt-5.5"
   ],
+  "model_info": {
+   "deepseek/deepseek-v4-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "deepseek/deepseek-v4-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "Qwen/Qwen3.7-Max": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "Qwen/Qwen3.6-Plus": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "moonshotai/Kimi-K2.6": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "zai-org/GLM-5.1": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "MiniMaxAI/MiniMax-M2.7": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "stepfun/Step-3.5-Flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "xiaomi/mimo-v2.5-pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "google/gemini-3.5-flash": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "gpt-5.5": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -730,6 +2994,23 @@
    "claude-opus-4-7",
    "claude-haiku-4-5-20251001"
   ],
+  "model_info": {
+   "claude-sonnet-4-6": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "claude-opus-4-7": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   },
+   "claude-haiku-4-5-20251001": {
+    "protocol": "messages",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -740,6 +3021,7 @@
   "protocol": "chat_completions",
   "signup_url": "https://deepinfra.com/dash/api_keys",
   "models": [],
+  "model_info": {},
   "local": false
  },
  {
@@ -752,6 +3034,13 @@
   "models": [
    "muse-spark-1.2"
   ],
+  "model_info": {
+   "muse-spark-1.2": {
+    "protocol": "responses",
+    "vision": true,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -772,6 +3061,62 @@
    "openai/gpt-oss-120b-fast",
    "meta-llama/Llama-3.3-70B-Instruct"
   ],
+  "model_info": {
+   "Qwen/Qwen3.5-397B-A17B-fast": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-ai/DeepSeek-V4-Pro": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   },
+   "zai-org/GLM-5.1": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "moonshotai/Kimi-K2.5-fast": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ]
+   },
+   "MiniMaxAI/MiniMax-M2.5-fast": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "deepseek-ai/DeepSeek-V3.2-fast": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "NousResearch/Hermes-4-70B": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "openai/gpt-oss-120b-fast": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   },
+   "meta-llama/Llama-3.3-70B-Instruct": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  },
  {
@@ -782,6 +3127,7 @@
   "protocol": "responses",
   "signup_url": "https://app.router.com/keys",
   "models": [],
+  "model_info": {},
   "local": false
  },
  {
@@ -794,6 +3140,13 @@
   "models": [
    "solar-pro3"
   ],
+  "model_info": {
+   "solar-pro3": {
+    "protocol": "chat_completions",
+    "vision": false,
+    "efforts": null
+   }
+  },
   "local": false
  }
 ]

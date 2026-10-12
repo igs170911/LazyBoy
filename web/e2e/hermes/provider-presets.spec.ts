@@ -27,6 +27,8 @@ test('a Hermes preset only needs an API key', async ({page}) => {
   await page.getByRole('button',{name:'設定',exact:true}).click();
   if ((page.viewportSize()?.width || 1280) > 700) await page.getByRole('button',{name:'模型',exact:true}).click();
   await page.getByLabel('供應商',{exact:true}).selectOption('xai');
+  // The preset's URL is filled in for the user; it lives in the advanced section.
+  await page.getByText('進階設定',{exact:true}).first().click();
   await expect(page.getByText('https://api.x.ai/v1',{exact:true})).toBeVisible();
   await expect(page.getByRole('link',{name:'取得 API 金鑰 ↗'})).toHaveAttribute('href','https://console.x.ai/');
   await page.getByLabel('API 金鑰',{exact:true}).fill('xai-secret');

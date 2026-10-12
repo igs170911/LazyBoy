@@ -147,6 +147,7 @@ test("model controls and this Bot's MCP settings connect to the native worker", 
   await page.getByRole("complementary", { name:"Bot 清單" }).getByRole("button", { name:"設定", exact:true }).click();
   const settings = page.getByRole("dialog", { name:"LazyBoy 設定", exact:true });
   if (info.project.name === "desktop") await settings.getByRole("button", { name:"模型", exact:true }).click();
+  await settings.getByText("進階設定", { exact:true }).first().click();
   await expect(settings.getByRole("combobox", { name:"推理強度", exact:true })).toBeEnabled();
   await expect(settings.getByRole("combobox", { name:"推理強度", exact:true }).locator("option[value=high]")).toHaveCount(1);
   await expect(settings.getByRole("checkbox", { name:"讀取圖片", exact:true })).toBeEnabled();

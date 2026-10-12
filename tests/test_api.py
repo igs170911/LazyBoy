@@ -59,8 +59,8 @@ async def test_listing_skills_does_not_announce_a_change(service):
         saved=await c.post(f"/api/agents/{agent['id']}/skills",json={"action":"save","name":"Write","instructions":"Verify output."})
         assert saved.status_code==200
         notices=[e for e in service.store.events(agent["id"]) if e["kind"]=="skills_changed"]
-        # Every bot also carries the built-in grok-build skill.
-        assert len(notices)==1 and notices[0]["payload"]=={"count":2,"changed":True}
+        # Every bot also carries the built-in grok-build and deep-research skills.
+        assert len(notices)==1 and notices[0]["payload"]=={"count":3,"changed":True}
         again=await c.post(f"/api/agents/{agent['id']}/skills",json={"action":"list"})
         assert again.status_code==200
         assert len([e for e in service.store.events(agent["id"]) if e["kind"]=="skills_changed"])==1

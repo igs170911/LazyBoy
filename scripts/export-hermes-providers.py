@@ -17,6 +17,40 @@ PROTOCOLS = {"chat_completions": "chat_completions", "codex_responses": "respons
 SKIP = {"custom", "moa"}
 
 
+def efforts(slug, model, protocol, caps, profile):
+    """Reasoning levels the model accepts: [] none, a list when Hermes knows the family, None when unknown."""
+    import agent.reasoning_effort as re_
+    if caps and caps.supports_reasoning is False: return []
+    hook = getattr(profile, "supported_reasoning_efforts", None)
+    try: known = hook(model) if callable(hook) else None
+    except Exception: known = None
+    if known is not None: return list(known)
+    name = model.lower()
+    if slug in {"openai-api", "openai-codex"} or (protocol == "responses" and name.startswith("gpt-")):
+        return list(re_.codex_supported_efforts(model))
+    if "grok" in name:
+        return list(re_.XAI_GROK46_EFFORTS if "4.6" in name or "4.7" in name else re_.XAI_LEGACY_EFFORTS)
+    if "deepseek-v4" in name: return list(re_.DEEPSEEK_V4_EFFORTS)
+    if "glm-5.3" in name: return list(re_.GLM53_EFFORTS)
+    if "kimi" in name: return list(re_.kimi_supported_efforts(model))
+    return None
+
+
+def model_info(slug, base_url, fallback, models, profile):
+    """Per-model wire protocol and capabilities, as Hermes itself would resolve them."""
+    from agent.models_dev import get_model_capabilities
+    from hermes_cli.model_switch import model_derived_api_mode
+    info = {}
+    for model in models:
+        mode = model_derived_api_mode(slug, model) or _fallback_api_mode(slug, base_url, model)
+        protocol = PROTOCOLS.get(mode, fallback)
+        try: caps = get_model_capabilities(slug, model, allow_network=True)
+        except Exception: caps = None
+        info[model] = {"protocol": protocol, "vision": bool(caps and caps.supports_vision),
+                       "efforts": efforts(slug, model, protocol, caps, profile)}
+    return info
+
+
 def preset(slug, label, description):
     registry = PROVIDER_REGISTRY.get(slug)
     profile = providers.get_provider_profile(slug)
@@ -32,11 +66,12 @@ def preset(slug, label, description):
         base_url += "/v1"
     if slug == "gemini":
         base_url += "/openai"
-    models = list(_PROVIDER_MODELS.get(slug) or (profile.fallback_models if profile else ()))
+    models = list(_PROVIDER_MODELS.get(slug) or (profile.fallback_models if profile else ()))[:40]
     return {"id": slug, "label": label or (profile and profile.display_name) or slug,
             "description": description or (profile.description if profile else ""),
             "base_url": base_url, "protocol": protocol, "signup_url": profile.signup_url if profile else "",
-            "models": models[:40], "local": base_url.startswith(("http://127.", "http://localhost"))}
+            "models": models, "model_info": model_info(slug, base_url, protocol, models, profile),
+            "local": base_url.startswith(("http://127.", "http://localhost"))}
 
 
 rows, seen = [], set()

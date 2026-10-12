@@ -21,6 +21,7 @@ from websockets.asyncio.client import connect
 
 from .config import DATA, PROVIDER_PRESETS, ROOT, Settings, HERMES_COMMIT, private_write
 from .store import Store, uid, now
+from .model_check import CHECK_VERSION, check_model
 from .computers import Computers
 from .runtime import Runtime, plain_text
 from .skills import Skills
@@ -159,7 +160,7 @@ async def provider_models(request: Request):
     body = await request.json()
     provider = settings.read()["providers"].get(body.get("provider"), {})
     url = (body.get("base_url") or provider.get("base_url", "")).rstrip("/")
-    key = body.get("api_key") or provider.get("api_key", "")
+    key = body.get("api_key") or saved_key_for(provider, url)
     if urlparse(url).scheme not in {"http", "https"}: raise ValueError("請填寫服務網址")
     headers = {"Authorization": "Bearer " + key, "x-api-key": key, "anthropic-version": "2023-06-01"} if key else {}
     async with httpx.AsyncClient(timeout=20) as client:
@@ -167,9 +168,45 @@ async def provider_models(request: Request):
         if not response.is_success: raise ValueError("無法取得模型清單，請檢查 API key 與服務網址")
         data = response.json()
         return {"models": [r["id"] for r in data.get("data", []) if isinstance(r, dict) and isinstance(r.get("id"), str)]}
-@app.post("/api/providers/reasoning")
-async def provider_reasoning(request: Request):
-    raise ValueError("請在模型設定選擇推理強度；是否支援以模型供應商為準")
+def saved_key_for(provider, url):
+    """A saved key only ever goes to the URL it was saved with, never to one supplied in a request."""
+    return provider.get("api_key", "") if url.rstrip("/") == provider.get("base_url", "").rstrip("/") else ""
+
+
+@app.post("/api/providers/check")
+async def provider_check(request: Request):
+    """Send one tiny request per protocol and remember which one this model answers on."""
+    body = await request.json()
+    provider_id, model = str(body.get("provider") or ""), str(body.get("model") or "").strip()
+    saved = settings.read()["providers"].get(provider_id, {})
+    url = (body.get("base_url") or saved.get("base_url", "")).rstrip("/")
+    key = body.get("api_key") or saved_key_for(saved, url)
+    if not model: raise ValueError("請先選擇模型")
+    if urlparse(url).scheme not in {"http", "https"}: raise ValueError("請填寫服務網址")
+    guess = body.get("protocol") or settings.guess_protocol(provider_id, model, {**saved, "base_url": url})
+    result = await check_model(url, key, model, guess)
+    # Only a saved provider whose key and URL were used as-is gets the result stored.
+    stored = not body.get("base_url") and not body.get("api_key") and settings.record_check(provider_id, model, result, (url, key))
+    if stored:
+        for agent in store.all("agents"): computers.prepare(agent["id"])
+    return {"result": result, "stored": bool(stored), "settings": settings.public()}
+@app.post("/api/providers/check-in-use")
+async def provider_check_in_use():
+    """Check every model the default and the bots use that has never been checked."""
+    cfg = settings.read()
+    pairs = {(cfg["active"], cfg.get("model", ""))} | {(a["provider"], a["model"]) for a in store.all("agents") if a.get("provider") and a.get("model")}
+    pending = []
+    for provider_id, model in pairs:
+        provider = cfg["providers"].get(provider_id, {})
+        row = settings.model_row(provider, model)
+        if model and row and (row.get("check") or {}).get("v") != CHECK_VERSION and provider.get("base_url"):
+            pending.append((provider_id, model, provider))
+    results = await asyncio.gather(*(check_model(p["base_url"], p.get("api_key", ""), m, settings.guess_protocol(pid, m, p)) for pid, m, p in pending))
+    for (provider_id, model, provider), result in zip(pending, results):
+        settings.record_check(provider_id, model, result, (provider["base_url"], provider.get("api_key", "")))
+    if pending:
+        for agent in store.all("agents"): computers.prepare(agent["id"])
+    return {"checked": len(pending), "settings": settings.public()}
 @app.get("/api/media")
 async def media(agent_id: str | None = None):
     agent = runtime.agent(agent_id) if agent_id else {}
@@ -298,7 +335,7 @@ async def delete_agent(id: str):
     for routine in scheduler.list(id): store.remove("routines", routine["id"])
     for thread in store.all("threads"):
         if thread.get("agent_id") == id: store.remove("threads", thread["id"])
-    store.clear_messages(id); store.remove("agents", id); store.remove("mcp", id)
+    store.remove("agents", id); store.purge_agent(id)
     shutil.rmtree(store.agent_directory(id))
     return {"ok": True, "id": id, "name": agent["name"]}
 @app.get("/api/agents/{id}/activity")
@@ -329,14 +366,20 @@ async def events(id: str, request: Request):
     async def stream():
         nonlocal since
         yield ": connected\n\n"
-        ticks = 0
-        while not await request.is_disconnected():
-            batch = store.events(id, since)
-            if batch:
-                since = batch[-1]["id"]
-                yield "id: " + str(since) + "\ndata: " + json.dumps({"events": batch}, ensure_ascii=False) + "\n\n"
-            elif ticks % 40 == 0: yield ": keepalive\n\n"
-            ticks += 1; await asyncio.sleep(.25)
+        with runtime.listen(id) as wake:
+            while not await request.is_disconnected():
+                wake.clear()
+                batch = store.events(id, since)
+                if batch:
+                    since = batch[-1]["id"]
+                    yield "id: " + str(since) + "\ndata: " + json.dumps({"events": batch}, ensure_ascii=False) + "\n\n"
+                    # Coalesce a burst of token deltas into one frame.
+                    await asyncio.sleep(.03)
+                    continue
+                # Wake on the next journaled event; the timeout keeps proxies alive and notices disconnects.
+                with contextlib.suppress(TimeoutError):
+                    async with asyncio.timeout(10): await wake.wait()
+                if not wake.is_set(): yield ": keepalive\n\n"
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
 

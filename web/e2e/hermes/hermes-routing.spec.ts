@@ -39,6 +39,7 @@ test("Hermes routing saves independently, retries errors and preserves model dra
   await page.goto("http://localhost/");
   await page.getByRole("button",{name:"設定",exact:true}).click();
   if((page.viewportSize()?.width || 1280)>700) await page.getByRole("button",{name:"模型",exact:true}).click();
+  await page.getByText("進階：執行核心與對話／工作分流",{exact:true}).click();
   const panel=page.getByRole("region",{name:"對話與工作分流"});
   const base=page.getByLabel("API 網址",{exact:true});
   await base.fill("https://unsaved.example/v1");

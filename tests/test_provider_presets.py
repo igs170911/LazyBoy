@@ -22,3 +22,15 @@ def test_known_presets_match_native_endpoints():
     assert by_id["openai-api"]["protocol"] == "responses"
     assert by_id["gemini"]["base_url"].endswith("/openai")
     assert by_id["lmstudio"]["local"] is True
+
+
+def test_presets_carry_per_model_protocol_and_capabilities():
+    by_id = {p["id"]: p for p in PROVIDER_PRESETS}
+    for preset in PROVIDER_PRESETS:
+        assert set(preset["model_info"]) == set(preset["models"])
+        for info in preset["model_info"].values():
+            assert info["protocol"] in {"chat_completions", "responses", "messages"} and isinstance(info["vision"], bool)
+            assert info["efforts"] is None or isinstance(info["efforts"], list)
+    zen = by_id["opencode-zen"]["model_info"]
+    assert all(v["protocol"] == "messages" for k, v in zen.items() if k.startswith("claude-"))
+    assert all(v["protocol"] == "responses" for k, v in zen.items() if k.startswith("gpt-"))

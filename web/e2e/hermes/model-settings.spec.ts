@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mergeProviderModels, modelsToText, parseModels } from '../../src/model-settings';
+import { mergeProviderModels, modelsToText, parseModels, presetModel, providerModelProtocol } from '../../src/model-settings';
 
 test('refresh and save preserve mixed protocols and manually configured models', () => {
   const configured = parseModels('claude:messages\nreasoner:responses\nprivate:messages');
@@ -34,4 +34,14 @@ test('model IDs containing colons survive a settings round trip', () => {
   const configured = [{id:'local:latest',protocol:'chat_completions' as const},
     {id:'vendor:model',protocol:'responses' as const}];
   expect(parseModels(modelsToText(configured))).toEqual(configured);
+});
+
+test('protocol guesses follow Hermes rules and preset model info', () => {
+  expect(providerModelProtocol('opencode-zen', 'claude-haiku-5-5')).toBe('messages');
+  expect(providerModelProtocol('opencode', 'gpt-5.6-sol')).toBe('responses');
+  expect(providerModelProtocol('custom-x', 'claude-x', {base_url: 'https://opencode.ai/zen/v1'})).toBe('messages');
+  expect(providerModelProtocol('custom-y', 'm', {base_url: 'https://relay.example/anthropic/v1'})).toBe('messages');
+  const preset = {protocol: 'chat_completions' as const, model_info: {'odd-model': {protocol: 'responses' as const, vision: true, efforts: null}}};
+  expect(presetModel('relay', 'odd-model', preset)).toEqual({id: 'odd-model', protocol: 'responses', vision: true});
+  expect(presetModel('relay', 'plain', preset)).toEqual({id: 'plain', protocol: 'chat_completions'});
 });

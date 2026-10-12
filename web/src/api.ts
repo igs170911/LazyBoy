@@ -55,6 +55,7 @@ export type Artifact = {
   updated_at?: string;
 };
 
+export type PlanItem = { content: string; status: "pending" | "in_progress" | "completed" | "cancelled" | string };
 export type TaskDetail = {
   collaboration?: {message_id:number;sender_name:string;recipient_name:string;content:string;at:string}[];
   id: string;
@@ -67,6 +68,9 @@ export type TaskDetail = {
   provider?: string;
   model?: string;
   artifacts: Artifact[];
+  steps?: { id: string; name: string; detail?: string; state: "running" | "done" | "failed"; duration?: number }[];
+  plan?: PlanItem[];
+  sources?: { url: string; title: string; kind: "read" | "search" }[];
   milestones?: { id: string; at: string; message: string; completed: string[]; next: string; evidence: string[] }[];
   approval?: {
     decision: string;
@@ -123,7 +127,8 @@ export type AgentProfile = {
 export type TranscriptItem = { id?: string; role: "user" | "assistant"; content: string; at?: string; streaming?: boolean; narration?: string[]; routine_id?: string; routine_title?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
 
 export type ModelProtocol = "chat_completions" | "responses" | "messages";
-export type SettingsModel = { id: string; label?: string; protocol?: ModelProtocol; reasoning_effort?: string | null; reasoning_levels?: string[] | null; vision?: boolean; image_generation?: boolean };
+export type ModelCheck = { status: "ok" | "protocol" | "unavailable" | "auth" | "busy" | "unknown"; message: string; detail?: string; at?: number; v?: number; protocol?: ModelProtocol | null };
+export type SettingsModel = { id: string; label?: string; protocol?: ModelProtocol; reasoning_effort?: string | null; reasoning_levels?: string[] | null; vision?: boolean; image_generation?: boolean; check?: ModelCheck };
 export type SettingsProvider = {
   id: string;
   label: string;
@@ -140,6 +145,7 @@ export type ProviderPreset = {
   protocol: ModelProtocol;
   signup_url: string;
   models: string[];
+  model_info?: Record<string, { protocol: ModelProtocol; vision: boolean; efforts: string[] | null }>;
   local: boolean;
 };
 export type RoutingTarget = { provider: string; model: string; reasoning_effort?: string | null };
@@ -162,6 +168,7 @@ export type AppSettings = {
   providers: SettingsProvider[];
   laya?: boolean;
   routing?: RoutingSettings;
+  search?: { provider: string; providers: string[]; has_key: boolean; has_xai_key: boolean };
 };
 
 export type ThreadRow = {
@@ -247,8 +254,10 @@ export const api = {
   providerPresets: () => request<{ presets?: ProviderPreset[] }>("/api/providers/presets"),
   providerModels: (body: { provider: string; base_url?: string; api_key?: string }) =>
     request<{ models: string[] }>("/api/providers/models", { method: "POST", body: JSON.stringify(body) }),
-  providerReasoning: (body: { provider: string; model: string }) =>
-    request<AppSettings>("/api/providers/reasoning", { method: "POST", body: JSON.stringify(body) }, 120000),
+  checkModel: (body: { provider: string; model: string; protocol?: ModelProtocol; base_url?: string; api_key?: string }) =>
+    request<{ result: ModelCheck; stored: boolean; settings: AppSettings }>("/api/providers/check", { method: "POST", body: JSON.stringify(body) }, 90000),
+  checkModelsInUse: () =>
+    request<{ checked: number; settings: AppSettings }>("/api/providers/check-in-use", { method: "POST", body: "{}" }, 90000),
   agents: async () => {
     const data = await request<AgentRow[] | { agents?: AgentRow[]; groups?: AgentGroup[] }>("/api/agents");
     const agents = Array.isArray(data) ? data : data.agents || [];
