@@ -116,3 +116,20 @@ def test_evaluate_reads_busy_from_unready_health(monkeypatch):
         raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, io.BytesIO(json.dumps({"ready": False, "busy": True}).encode()))
     monkeypatch.setattr(urllib.request, "urlopen", unready)
     assert evaluate.health("http://classifier")["busy"] is True
+
+
+async def test_host_drops_only_the_redundant_anyio_wakeup():
+    import asyncio
+    host = load("hermes_host_wakeups", "box/hermes_host.py")
+    loop = asyncio.get_running_loop()
+    done = loop.create_future(); done.set_result(None)
+    handle = asyncio.Handle(done.set_result, (None,), loop)
+    try: handle._run()  # what the loop does: the duplicate wake-up raises InvalidStateError
+    except Exception: pass
+    noise = {"message": "Exception in callback Future.set_result()", "exception": asyncio.InvalidStateError("invalid state"), "handle": handle}
+    assert host.redundant_wakeup(noise)
+    assert not host.redundant_wakeup({**noise, "exception": RuntimeError("real failure")})
+    other = asyncio.Handle(print, (), loop)
+    assert not host.redundant_wakeup({**noise, "handle": other})
+    pending = loop.create_future()
+    assert not host.redundant_wakeup({**noise, "handle": asyncio.Handle(pending.set_result, (None,), loop)})

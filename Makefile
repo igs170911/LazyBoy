@@ -1,13 +1,27 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help start stop get-access-token providers
+.PHONY: help start stop get-access-token providers box box-latest
 
 help:
 	@printf '%s\n' \
 		'make start             背景啟動 LazyBoy' \
 		'make stop              停止 LazyBoy' \
 		'make get-access-token  顯示其他裝置使用的登入碼' \
+		'make box               重建 Bot 電腦映像（固定版本，沿用快取），完成後到「設定 → 更新電腦」套用' \
+		'make box-latest        同上，但 grok 等工具與 Python 套件更新到最新版' \
 		'make providers         從 Bot 映像的 Hermes 重新匯出內建供應商清單'
+
+# The bot image builds FROM the desktop image, so the desktop goes first.
+BOT_IMAGE = $${LAZYHERMES_IMAGE:-lazyhermes-bot:local}
+box:
+	@./box/build.sh lazyhermes-desktop:local $(BOX_ARGS)
+	@docker build --build-arg DESKTOP_IMAGE=lazyhermes-desktop:local $(BOX_ARGS) -t $(BOT_IMAGE) .
+	@printf 'grok %s\n' "$$(docker run --rm --entrypoint grok $(BOT_IMAGE) --version 2>/dev/null || echo '版本未知')"
+	@printf '已重建 %s。正在執行的 Bot 電腦不受影響；到「設定 → 更新電腦」套用新映像。\n' "$(BOT_IMAGE)"
+
+# A fresh BOX_REFRESH re-runs every tool layer after it; GROK_CLI_VERSION=latest drops the pin.
+box-latest:
+	@$(MAKE) --no-print-directory box BOX_ARGS="--build-arg BOX_REFRESH=$$(date +%Y%m%d%H%M%S) --build-arg GROK_CLI_VERSION=$${GROK_CLI_VERSION:-latest}"
 
 providers:
 	@docker run --rm -i --entrypoint /opt/hermes/.venv/bin/python -w /opt/hermes $${LAZYHERMES_IMAGE:-lazyhermes-bot:local} - \

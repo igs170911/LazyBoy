@@ -2,12 +2,8 @@
   "name": "lazyboy-playwright-helper",
   "version": "0.1.0",
   "private": true,
-  "description": "Optional Playwright DOM helper for LazyBoy (JSONL / one-shot CLI)",
+  "description": "Playwright for restoring and closing the shared Chromium session",
   "type": "module",
-  "main": "browser_helper.mjs",
-  "scripts": {
-    "self-test": "node browser_helper.mjs --self-test"
-  },
   "dependencies": {
     "playwright": "^1.49.0"
   }

@@ -1,4 +1,6 @@
 """Authenticated transport host for the unmodified upstream Hermes gateway."""
+import asyncio
+from contextlib import asynccontextmanager
 import hmac
 import json
 import faulthandler
@@ -14,7 +16,28 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import httpx
 import uvicorn
 
-app = FastAPI(docs_url=None, redoc_url=None)
+def redundant_wakeup(context):
+    """anyio's UNIX socket waits wake a Future from a reader callback and remove the reader only in a
+    later done-callback; a socket still readable in between (EOF after a model reply over the product
+    socket) runs the reader again, and that second set_result on the finished Future raises
+    InvalidStateError. The waiter already resumed, so nothing is lost: it is noise, not a failure."""
+    callback = getattr(context.get("handle"), "_callback", None)
+    future = getattr(callback, "__self__", None)
+    return (isinstance(context.get("exception"), asyncio.InvalidStateError) and getattr(callback, "__name__", "") == "set_result"
+            and isinstance(future, asyncio.Future) and future.done())
+
+
+def quiet_redundant_wakeups(loop, context):
+    if not redundant_wakeup(context): loop.default_exception_handler(context)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    asyncio.get_running_loop().set_exception_handler(quiet_redundant_wakeups)
+    yield
+
+
+app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
 def prepare_host_state(home: Path, namespace: str | None = None):

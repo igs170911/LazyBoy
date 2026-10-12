@@ -45,6 +45,10 @@ RUN mkdir -p /usr/share/fonts/truetype/huninn \
     && echo '9d5bf4932d31fe94c18cd8cfddc98bc1b14ce10f4e354c682179db290a99c825  /usr/share/fonts/truetype/huninn/jf-openhuninn-2.1.ttf' | sha256sum -c \
     && fc-cache -f
 COPY --from=node:22-bookworm-slim /usr/local/ /usr/local/
+# Tools that should track upstream go below this line. `make box-latest` passes a new
+# BOX_REFRESH each time, which invalidates Docker's cache from here on so they are
+# downloaded again; `make box` keeps the cache and the pinned versions.
+ARG BOX_REFRESH=pinned
 COPY playwright/ /opt/lazyboy/playwright/
 RUN cd /opt/lazyboy/playwright && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --omit=dev
 # Grok Build CLI (`grok`): bots hand coding work to it through the grok-build

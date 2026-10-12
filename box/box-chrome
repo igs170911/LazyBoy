@@ -67,13 +67,15 @@ rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonSocket" "$PROFILE/SingletonCoo
 
 # Flags mirror lazyBoy's lazyboy-browser (the desktop that passes Shopee's
 # checks): Traditional Chinese UI + Accept-Language, maximized normal window,
-# no translate/crash bubbles. Never add --kiosk or --app.
+# no translate/crash bubbles. Never add --kiosk or --app. WebGL runs on
+# SwiftShader (no GPU in the box) so map and canvas sites still render.
 chromium \
   --no-sandbox \
   --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port="$CDP_PORT" \
   --test-type \
-  --disable-gpu \
+  --use-angle=swiftshader \
+  --enable-unsafe-swiftshader \
   --disable-dev-shm-usage \
   --disable-features=TranslateUI \
   --disable-blink-features=AutomationControlled \

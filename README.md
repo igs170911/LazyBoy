@@ -48,11 +48,11 @@ make stop
 ./scripts/start.sh
 ```
 
-第一次在網頁「設定 → 模型」的供應商選單挑一個「Hermes 內建」供應商（OpenRouter、Anthropic、OpenAI、DeepSeek、Gemini、OpenCode 等 40 餘個），服務網址與 API 介面會自動帶入，只需貼上 API key；離開金鑰欄位時會自動載入模型清單。清單外的服務選「自訂 OpenAI 相容服務…」，自行填寫基底網址（通常以 `/v1` 結尾）並選擇 Chat Completions、Responses 或 Anthropic Messages 介面。供應商金鑰保留在產品服務端；Bot 只有自己的連線憑證。
+第一次在網頁「設定 → 模型」只要做三件事：選供應商（OpenRouter、Anthropic、OpenAI、DeepSeek、Gemini、OpenCode 等 40 餘個 Hermes 內建供應商）、貼上 API key、選模型。服務網址會自動帶入，離開金鑰欄位時自動載入模型清單。選定模型後產品會用三種 API 介面（Chat Completions、Responses、Anthropic Messages）各送一個極小的請求，自動找出模型實際可用的介面並顯示「✓ 可以使用」或無法使用的原因（金鑰錯誤、模型下架、供應商忙碌）；無法使用的模型排在清單最後。打開設定頁時，全域與各 Bot 正在用、還沒檢查過的模型也會自動檢查並修正。清單外的服務選「自訂 OpenAI 相容服務…」並填寫基底網址（通常以 `/v1` 結尾）。供應商金鑰保留在產品服務端；Bot 只有自己的連線憑證。
 
 內建清單存在 `server/hermes_providers.json`，由 Bot 映像裡的 Hermes 匯出；升級 Hermes 並重建映像後執行 `make providers` 更新。
 
-依模型支援的能力設定推理強度及「讀取圖片」；未指定推理強度時使用 medium。模型設定的變更在下一次工作生效。供應商提供生圖介面時才開啟「產生圖片」，讓它可用於製作 Bot 頭像。
+API 介面、推理強度、讀取圖片、產生圖片與服務網址收在「進階設定」，通常不用改：讀取圖片依 Hermes 對該模型的能力資料自動開啟，推理強度只列出模型支援的等級，未指定時使用 medium。模型設定的變更在下一次工作生效。交辦因模型問題失敗時，對話會先用中文說明原因與該怎麼做，原始錯誤附在下方。
 
 安裝前可執行 `./scripts/bootstrap.sh --check-only` 檢查 Git、uv、Node 20 以上、npm、Docker daemon 與 Compose。安裝後執行 `python3 scripts/doctor.py --ready` 核對版本及安裝產物；`--static` 只檢查檔案與工具版本。
 
@@ -79,6 +79,10 @@ uv run python scripts/import-settings.py /path/to/providers.json
 - 工作中只顯示一行「思考中」與目前步驟；完成後過程收在答案上方的「已完成 · N 個步驟」，點開才看細節。
 - 工作產出的檔案放在 `/workspace`。答案下方只列最重要的 3 個檔案；檔案面板預設隱藏建置輸出、快取與 log，按「顯示全部」可查看。上傳的檔案也進入該 Bot 的工作目錄。
 - 寫程式、建專案、修 bug 時，Bot 會用內建的 `grok-build` 技能交給 Grok Build CLI（`grok`），自己驗收並回報摘要。第一次使用前，在該 Bot 的「電腦 → 終端機」執行 `grok login`。
+- 需要深入研究或比較多個來源時，Bot 用內建的 `deep-research` 技能：先列計畫，用子 agent 平行查證，交叉比對後把附來源的報告寫進 `/workspace/reports/`。
+- 工作中會顯示 Bot 自己列的計畫；完成後「已思考 · N 個步驟」可展開看計畫與每一步（失敗的步驟標紅），用到網路資料時答案下方有「來源」清單。重新整理頁面後仍保留。
+- 網路搜尋預設使用 Exa 免費額度；「設定 → 模型 → 網路搜尋」可改用 Tavily、Brave 或 DuckDuckGo 並填 API key。填入 xAI API key 後 Bot 也能搜尋 X 貼文。
+- Bot 超過 15 分鐘沒有任何動靜（有工具在執行時 40 分鐘）會自動停止那次工作並標示未完成；按停止後 Bot 一分鐘內沒回應也會直接結束。
 - 在 Bot 設定管理技能與 MCP。技能是 Hermes 真正讀取的 `SKILL.md`，不是另一套只顯示在網頁的筆記。
 - 「定時任務」管理例行工作，也可以請 Bot 用工具建立。產品只使用一個排程器；離線期間錯過的例行工作恢復後補一次。Bot 修改排程時可以只給要改的欄位，其餘保留。清單會顯示下次與上次執行（含結果）；無法開始執行時會在 1、5、15、60 分鐘後重試，不會重複觸發同一次。排程觸發的訊息在對話中以「定時任務」卡片呈現，可展開看內容。
 - 分享檔案包含角色、技能與去除秘密的 MCP 設定。匯入會建立新的獨立 Bot，不複製聊天、記憶、API key 或瀏覽器登入。缺少的 MCP 驗證資料需重新填寫。

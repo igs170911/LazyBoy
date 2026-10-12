@@ -6,6 +6,11 @@ WORKDIR /opt/hermes
 COPY vendor/hermes-agent/ /opt/hermes/
 RUN uv sync --frozen --no-dev --python 3.14 --extra mcp --extra computer-use --extra sms --extra ddgs --extra anthropic \
     && uv cache clean
+# Hermes itself stays on its lock file; the data libraries for the bot's own scripts follow
+# upstream whenever `make box-latest` changes BOX_REFRESH.
+ARG BOX_REFRESH=pinned
+RUN uv pip install --python /opt/hermes/.venv/bin/python openpyxl pdfplumber python-docx pandas \
+    && uv cache clean && mkdir -p /opt/uv-cache && chmod 1777 /opt/uv-cache
 RUN apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/*
 ENV PATH="/opt/hermes/.venv/bin:${PATH}" HOME=/home/box HERMES_HOME=/hermes BROWSER_CDP_URL=http://127.0.0.1:9222 \
     TERMINAL_CWD=/workspace PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1

@@ -28,7 +28,7 @@ def inspect(*, static=False, ready=False):
             version = re.search(r"v(\d+)", detail)
             ok = bool(version and int(version.group(1)) >= 20)
         checks.append({"name":name,"passed":ok,"detail":detail})
-    for name in ("HERMES_VERSION", "uv.lock", "web/package-lock.json", "box/playwright/browser_helper.mjs"):
+    for name in ("HERMES_VERSION", "uv.lock", "web/package-lock.json", "box/playwright/package.json"):
         path = ROOT/name
         checks.append({"name":name,"passed":path.exists(),"detail":"存在" if path.exists() else "缺少檔案"})
     if not static:
