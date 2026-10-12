@@ -330,3 +330,45 @@ test("scheduled runs appear as a collapsible routine card, not as something the 
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(card).toContainText("開啟洞察報告");
 });
+
+test("background work shows on the reply that started it, can be stopped, and its report is labelled", async ({ page }) => {
+  const fixture = setup();
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const started = new Date(Date.now() - 65_000).toISOString();
+  const workers = [
+    { id: "d:0:a", goal: "調查 Threads 熱門話題", status: "running", background: true, started_at: started, at: new Date().toISOString(), tool: "web_extract", detail: "https://example.com/%E8%9D%A6%E7%9A%AE" },
+    { id: "d:1:b", goal: "蝦皮分潤規則", status: "completed", background: true, started_at: started, duration: 44.8 },
+  ];
+  fixture.state.tasks.t0 = { ...fixture.state.tasks.t0, background: workers };
+  fixture.state.activity = { ...IDLE, background: 1, background_task_ids: ["t0"] };
+  await open(page, fixture);
+  const card = page.getByRole("region", { name: "背景工作" });
+  await expect(card).toContainText("背景還有 1 項工作在跑");
+  await expect(card).toContainText("已 1 分");
+  await expect(card.locator("li[data-status=running]")).toContainText("讀取網頁");
+  await expect(card.locator("li[data-status=running] .worker-note")).toHaveText("https://example.com/蝦皮");
+  await expect(card.locator("li[data-status=completed]")).toContainText("45 秒");
+  await expect(page.locator(".chat-status")).toContainText("背景工作中（1）");
+  // The composer stays free: background work never blocks a new message.
+  await expect(page.getByRole("textbox", { name: "訊息" })).not.toHaveAttribute("placeholder", /補充說明/);
+
+  await card.getByRole("button", { name: "全部停止" }).click();
+  await expect.poll(() => fixture.state.posts.some(post => post.path.endsWith("/stop"))).toBe(true);
+  const stopped = workers.map(worker => worker.status === "running" ? { ...worker, status: "interrupted", summary: "Operation interrupted" } : worker);
+  fixture.state.activity = { ...IDLE };
+  await emit(page, [{ kind: "runtime", task_id: "t0", payload: { type: "workers", workers: stopped } }]);
+  await expect(card).toHaveCount(0);
+  const done = page.locator("details.workers-card");
+  await expect(done.locator("summary")).toHaveText(/背景工作已結束 · 完成 1 · 未完成 1/);
+  await done.locator("summary").click();
+  await expect(done.locator("li[data-status=interrupted]")).toContainText("已停止");
+  await expect(done.locator("li[data-status=interrupted] .worker-note")).toHaveCount(0);
+  await expect(page.locator(".chat-status")).toContainText("待命");
+
+  fixture.state.tasks.t9 = { id: "t9", kind: "background", state: "terminal", goal: "背景工作完成，回報結果", verdict: "answer", artifacts: [] };
+  fixture.state.transcript = [...fixture.state.transcript, { id: "delta:t9", role: "assistant", content: "兩組研究都回來了。", at: "2026-10-08T01:09:00Z" }];
+  await emit(page, [{ kind: "reply", task_id: "t9", payload: {} }]);
+  await expect(page.locator(".msg.assistant", { hasText: "兩組研究都回來了" }).locator(".background-origin")).toHaveText("背景工作回報");
+  expect(errors).toEqual([]);
+});

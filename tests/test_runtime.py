@@ -381,3 +381,72 @@ def test_deleting_a_bot_leaves_no_records_and_startup_clears_old_orphans(product
     assert store.events(id) == [] and store.transcript(id) == [] and store.admission(id, "r-" + id) is None
     assert store.get("tasks", "t-" + id) is None and store.get("uploads", "u-" + id) is None and store.get("files", id) is None
     assert store.events(other) and store.transcript(other) and store.get("tasks", "t-" + other) and store.get("files", other) == []
+
+
+async def test_background_workers_outlive_their_turn_and_stop_reaches_them(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "session_id": "sid", "created_at": now()})
+    spawn = {"goal": "調查 **Threads** 熱門話題", "task_count": 2, "task_index": 0, "delegation_id": "deleg_1", "depth": 1}
+    await runtime.event(id, {"type": "subagent.spawn_requested", "session_id": "sid", "payload": spawn})
+    await runtime.event(id, {"type": "subagent.start", "session_id": "sid", "payload": {**spawn, "subagent_id": "sa-1"}})
+    runtime.finish(id, task, "answer", "三線研究跑中")
+    runtime.release(id, task)
+    # The turn ended; the child keeps working and reports progress to the same task.
+    await runtime.event(id, {"type": "subagent.tool", "session_id": "sid", "payload": {**spawn, "tool_name": "web_extract", "tool_preview": "https://www.threads.net"}})
+    worker, = store.get("tasks", task)["background"]
+    assert worker["status"] == "running" and worker["tool"] == "web_extract" and worker["goal"] == "調查 Threads 熱門話題" and worker["background"]
+    activity = runtime.activity(id)
+    assert activity["state"] == "idle" and activity["background"] == 1 and activity["background_task_ids"] == [task] and runtime.busy(id)
+    calls = []
+    async def call(method, params): calls.append((method, params))
+    runtime.clients[id] = SimpleNamespace(alive=True, call=call)
+    assert (await runtime.stop(id))["status"] == "stopping" and calls == [("session.interrupt", {"session_id": "sid"})]
+    await runtime.event(id, {"type": "subagent.complete", "session_id": "sid", "payload": {**spawn, "status": "interrupted", "duration_seconds": 12.34}})
+    worker, = store.get("tasks", task)["background"]
+    assert worker["status"] == "interrupted" and worker["duration"] == 12.3 and "tool" not in worker
+    assert runtime.activity(id)["background"] == 0 and not runtime.busy(id)
+
+
+async def test_lost_connection_does_not_leave_workers_running_forever(product):
+    store, _, _, runtime, id = product
+    task = uid()
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "terminal", "session_id": "sid", "created_at": now(),
+                              "background": [{"id": "k", "goal": "g", "status": "running"}, {"id": "d", "goal": "g", "status": "completed"}]})
+    await runtime.disconnected(id, "gone")
+    assert [w["status"] for w in store.get("tasks", task)["background"]] == ["lost", "completed"]
+
+
+async def test_a_turn_hermes_starts_itself_reaches_the_conversation(product):
+    store, _, _, runtime, id = product
+    runtime.clients[id] = SimpleNamespace(alive=True, product_session="sid")
+    await runtime.event(id, {"type": "status.update", "session_id": "sid", "payload": {"kind": "process", "text": "背景工作完成"}})
+    await runtime.event(id, {"type": "message.start", "session_id": "sid", "payload": {}})
+    task = runtime.active[id]
+    assert store.get("tasks", task)["kind"] == "background" and store.get("tasks", task)["thread_id"] == id
+    # Work queued meanwhile waits for Hermes's own turn instead of colliding with it.
+    queued = await runtime.submit(id, "下一件事", "r1", force_queue=True)
+    await asyncio.sleep(0.05)
+    assert store.get("tasks", queued["queued"])["state"] == "queued"
+    runtime.kick = lambda _: None
+    await runtime.event(id, {"type": "message.delta", "session_id": "sid", "payload": {"text": "計畫如下"}})
+    await runtime.event(id, {"type": "message.complete", "session_id": "sid", "payload": {"text": "計畫如下：…"}})
+    await asyncio.wait_for(runtime.adopted[id], 2)
+    saved = store.get("tasks", task)
+    assert saved["state"] == "terminal" and saved["verdict"] == "answer" and id not in runtime.active
+    assert any(m["content"] == "計畫如下：…" for m in store.transcript(id))
+    runtime.runners[id].cancel()
+
+
+async def test_an_unknown_session_never_becomes_a_task(product):
+    store, _, _, runtime, id = product
+    runtime.clients[id] = SimpleNamespace(alive=True, product_session="sid")
+    await runtime.event(id, {"type": "message.start", "session_id": "someone-else", "payload": {}})
+    assert id not in runtime.active and not store.all("tasks")
+
+
+def test_only_a_stopped_turn_cuts_off_model_requests(product):
+    store, _, _, runtime, id = product
+    for task, state, verdict in [("a", "terminal", "answer"), ("b", "terminal", "cancelled"), ("c", "stopping", None), ("d", "running", None)]:
+        store.put("tasks", task, {"id": task, "agent_id": id, "state": state, "verdict": verdict})
+    assert [runtime.halted(t) for t in "abcd"] == [False, True, True, False] and not runtime.halted(None)

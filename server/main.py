@@ -321,7 +321,7 @@ async def update_agent(id: str, request: Request):
     computers.prepare(id)
     # Runtime/session model reconfiguration is applied when idle, through a fresh native
     # connection resuming the same durable history. Active work retains its chosen model.
-    if not runtime.activity(id)["running"] and id in runtime.clients:
+    if not runtime.busy(id) and id in runtime.clients:
         await runtime.clients.pop(id).close()
     return agent_row(id)
 @app.delete("/api/agents/{id}")
@@ -389,7 +389,7 @@ async def computer_status(id: str): runtime.agent(id); return await computers.st
 async def computer_start(id: str, request: Request):
     runtime.agent(id); action = (await request.json()).get("action", "start")
     if action not in {"start", "restart", "update"}: raise ValueError("無效的電腦操作")
-    if action != "start" and runtime.activity(id)["running"]: raise ValueError("請先停止工作再重新啟動電腦")
+    if action != "start" and runtime.busy(id): raise ValueError("請先停止工作再重新啟動電腦")
     if action != "start" and id in runtime.clients: await runtime.clients.pop(id).close()
     return await computers.start(id, action)
 @app.get("/api/agents/{id}/files")
@@ -594,7 +594,7 @@ async def manage_mcp(request: Request):
         for agent in store.all("agents") if scope == "shared" else [runtime.agent(scope)]:
             computers.prepare(agent["id"])
             client = runtime.clients.get(agent["id"])
-            if client and client.alive and not runtime.activity(agent["id"])["running"]:
+            if client and client.alive and not runtime.busy(agent["id"]):
                 await client.call("reload.mcp", {"confirm": True, "session_id": getattr(client,"product_session",None)})
     elif action == "test":
         id = scope if scope != "shared" else next((a["id"] for a in store.all("agents")), None)
@@ -657,7 +657,7 @@ async def wait_model(awaitable, task_id):
     pending = asyncio.ensure_future(awaitable)
     try:
         while True:
-            if task_id and runtime.task(task_id)["state"] in {"stopping", "terminal"}:
+            if runtime.halted(task_id):
                 if pending.done() and not pending.cancelled() and pending.exception() is None:
                     value = pending.result()
                     if isinstance(value, httpx.Response): await value.aclose()
@@ -690,7 +690,7 @@ async def provider_proxy(provider: str, path: str, request: Request):
         candidates = [b for b in candidates if b[0] == active and b[1] == payload.get("model")]
     if not candidates: raise ValueError("沒有符合這個任務圖片或對話能力的分流模型")
     for index, binding in enumerate(candidates):
-        if foreground and runtime.task(task_id)["state"] in {"stopping", "terminal"}: raise ValueError("這個工作已停止")
+        if foreground and runtime.halted(task_id): raise ValueError("這個工作已停止")
         selected_provider, model, p = binding
         url = p.get("base_url", "").rstrip("/") + "/" + path
         if urlparse(url).scheme not in {"http", "https"}: raise ValueError("請先設定模型供應商與服務網址")

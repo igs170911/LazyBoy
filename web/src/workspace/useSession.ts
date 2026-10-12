@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AgentActivity, type AgentFile, type PlanItem, type TaskDetail, type TeamEvent, type ThreadRow, type TranscriptItem } from "../api";
+import { api, type AgentActivity, type AgentFile, type PlanItem, type TaskDetail, type TeamEvent, type ThreadRow, type TranscriptItem, type Worker } from "../api";
 import { readStorage, writeStorage } from "../storage";
 import { randomUUID } from "../uuid";
 import { stepDetail, stepLabel } from "./steps";
@@ -119,7 +119,7 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   const refreshActivity = useCallback(async (id: string) => {
     try {
       const next = await api.activity(id);
-      if (current.current === id) setActivity(previous => JSON.stringify(previous.question) === JSON.stringify(next.question) && previous.state === next.state && previous.latest_task_id === next.latest_task_id && previous.queued === next.queued ? previous : next);
+      if (current.current === id) setActivity(previous => JSON.stringify(previous.question) === JSON.stringify(next.question) && previous.state === next.state && previous.latest_task_id === next.latest_task_id && previous.queued === next.queued && previous.background === next.background ? previous : next);
     } catch { /* the next event or poll retries */ }
   }, []);
 
@@ -192,6 +192,12 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
             steps[index] = { ...steps[index], state: failed ? "failed" : "done", detail: (failed && stepDetail(String(p.summary || ""))) || steps[index].detail || stepDetail(String(p.detail || "")) };
             return { ...base, steps };
           });
+        } else if (type === "workers" && taskId) {
+          // Delegated children report on the task that spawned them, often long after its reply.
+          const workers = Array.isArray(p.workers) ? p.workers as Worker[] : [];
+          setTasks(cur => cur[taskId] ? { ...cur, [taskId]: { ...cur[taskId], background: workers } } : cur);
+          debounce(`task:${taskId}`, () => void loadTask(taskId), 1500);
+          debounce("activity", () => void refreshActivity(id), 300);
         } else if (type === "plan" && taskId) {
           const plan = Array.isArray(p.plan) ? p.plan as PlanItem[] : [];
           setLive(id, live => ({ ...ensure(live), plan }));

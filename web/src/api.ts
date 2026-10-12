@@ -40,6 +40,9 @@ export type AgentActivity = {
   queued_thread_ids?: string[];
   question?: HumanQuestion | null;
   questions?: HumanQuestion[];
+  /** delegate_task children still working, often after the turn that started them ended. */
+  background?: number;
+  background_task_ids?: string[];
 };
 
 export type Artifact = {
@@ -56,6 +59,19 @@ export type Artifact = {
 };
 
 export type PlanItem = { content: string; status: "pending" | "in_progress" | "completed" | "cancelled" | string };
+export type Worker = {
+  id: string;
+  goal: string;
+  status: "queued" | "running" | "completed" | "failed" | "interrupted" | "lost";
+  background?: boolean;
+  started_at?: string;
+  at?: string;
+  tool?: string;
+  detail?: string;
+  duration?: number;
+  summary?: string;
+};
+
 export type TaskDetail = {
   collaboration?: {message_id:number;sender_name:string;recipient_name:string;content:string;at:string}[];
   id: string;
@@ -71,6 +87,9 @@ export type TaskDetail = {
   steps?: { id: string; name: string; detail?: string; state: "running" | "done" | "failed"; duration?: number }[];
   plan?: PlanItem[];
   sources?: { url: string; title: string; kind: "read" | "search" }[];
+  /** "background": a turn Hermes started itself to report finished background work. */
+  kind?: string;
+  background?: Worker[];
   milestones?: { id: string; at: string; message: string; completed: string[]; next: string; evidence: string[] }[];
   approval?: {
     decision: string;

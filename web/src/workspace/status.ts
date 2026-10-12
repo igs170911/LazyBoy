@@ -9,6 +9,10 @@ export function activityStatus(activity?: AgentActivity | null): { tone: Tone; l
     case "queued": return { tone: "queued", label: "排隊中" };
     case "waiting_input": return { tone: "attention", label: "等你回覆" };
     case "waiting_approval": return { tone: "attention", label: "等你允許" };
-    default: return activity?.queued ? { tone: "queued", label: "排隊中" } : { tone: "idle", label: "待命" };
+    default:
+      if (activity?.queued) return { tone: "queued", label: "排隊中" };
+      // The turn ended but delegated children are still working: the bot is not idle.
+      if (activity?.background) return { tone: "busy", label: `背景工作中（${activity.background}）` };
+      return { tone: "idle", label: "待命" };
   }
 }

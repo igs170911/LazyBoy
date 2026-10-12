@@ -1,8 +1,8 @@
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { AgentRow, Artifact, PlanItem, TaskDetail, ThreadRow } from "../api";
+import type { AgentRow, Artifact, PlanItem, TaskDetail, ThreadRow, Worker } from "../api";
 import { Avatar, botColor, bubbleTone } from "../avatar";
 import { ChatMessageBody, contentUrl, type PreviewFile } from "../markdown";
-import { Brain, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, Globe, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, X } from "../ui/icons";
+import { Brain, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, Globe, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, Users, X } from "../ui/icons";
 import { ConfirmDialog, MenuButton, toast, type MenuItem } from "../ui/overlay";
 import { Composer } from "./Composer";
 import { draftKey } from "./drafts";
@@ -11,7 +11,7 @@ import { QuestionCard, questionBlocksComposer } from "./QuestionCard";
 import { avatarProps } from "./Sidebar";
 import { useMood } from "./mood";
 import { activityStatus } from "./status";
-import { savedSteps } from "./steps";
+import { savedSteps, stepDetail, stepLabel } from "./steps";
 import { ThreadBar, ThreadRenameDialog } from "./Threads";
 import type { LiveTask, Message, Step } from "./useSession";
 import { useSession } from "./useSession";
@@ -182,6 +182,69 @@ function TaskResult({ agentId, task, onOpen }: { agentId: string; task?: TaskDet
   );
 }
 
+const WORKER_LIVE = new Set(["queued", "running"]);
+const WORKER_DONE: Record<string, string> = { failed: "失敗", interrupted: "已停止", lost: "連線中斷，無法再追蹤" };
+
+/** URLs in tool previews arrive percent-encoded; show Chinese paths as text. */
+function readable(text: string) {
+  try { return decodeURI(text); } catch { return text; }
+}
+
+function ago(seconds: number | null) {
+  if (seconds === null) return "";
+  return seconds < 10 ? "剛剛" : `${duration(seconds)}前`;
+}
+
+function WorkerRow({ worker }: { worker: Worker }) {
+  const live = WORKER_LIVE.has(worker.status);
+  // Ticks every second while the child runs: "what it is doing, and how recently" is the proof it is alive.
+  const quiet = useElapsed(worker.at, live);
+  const meta = live
+    ? worker.status === "queued" ? "等待開始" : [worker.tool ? stepLabel(worker.tool) : "思考中", ago(quiet)].filter(Boolean).join(" · ")
+    : worker.status === "completed" ? (worker.duration !== undefined ? duration(Math.round(worker.duration)) : "完成") : WORKER_DONE[worker.status] || worker.status;
+  // A stop already reads "已停止"; Hermes's interruption text adds nothing.
+  const note = live ? readable(stepDetail(worker.detail || "")) : worker.status === "failed" ? worker.summary || "" : "";
+  return (
+    <li data-status={worker.status}>
+      {live ? <LoaderCircle className="spin" aria-label="進行中" /> : worker.status === "completed" ? <Check aria-label="完成" /> : <X aria-label={WORKER_DONE[worker.status] || "未完成"} />}
+      <span className="worker-goal" title={worker.goal}>{worker.goal}</span>
+      <small className="worker-meta">{meta}</small>
+      {note ? <small className="worker-note" title={note}>{note}</small> : null}
+    </li>
+  );
+}
+
+/** Work the bot handed to delegate_task children. Background children keep going after the reply, so this
+ * card says plainly that the bot is still working, on what, and lets the user stop it. */
+function WorkersCard({ workers, onStop }: { workers: Worker[]; onStop?: () => void }) {
+  const running = workers.filter(worker => WORKER_LIVE.has(worker.status));
+  const first = running.map(worker => worker.started_at).filter(Boolean).sort()[0];
+  const elapsed = useElapsed(first, running.length > 0);
+  const failed = workers.filter(worker => !WORKER_LIVE.has(worker.status) && worker.status !== "completed").length;
+  const background = workers.some(worker => worker.background);
+  if (running.length) {
+    return (
+      <section className="workers-card live" aria-live="polite" aria-label="背景工作">
+        <header>
+          <LoaderCircle className="spin" aria-hidden="true" />
+          <strong>{background ? `背景還有 ${running.length} 項工作在跑` : `${running.length} 項子工作進行中`}</strong>
+          {elapsed !== null ? <small>已 {duration(elapsed)}</small> : null}
+          {onStop ? <button type="button" className="btn small" onClick={onStop}><Square aria-hidden="true" />全部停止</button> : null}
+        </header>
+        <ol>{workers.map(worker => <WorkerRow key={worker.id} worker={worker} />)}</ol>
+        {background ? <p className="workers-hint">完成後 Bot 會自動在這段對話回報結果，你可以先做別的事。</p> : null}
+      </section>
+    );
+  }
+  const label = [background ? "背景工作已結束" : "子工作已結束", `完成 ${workers.length - failed}`, failed ? `未完成 ${failed}` : ""].filter(Boolean).join(" · ");
+  return (
+    <details className="workers-card">
+      <summary><Users aria-hidden="true" />{label}<ChevronRight className="chev" aria-hidden="true" /></summary>
+      <ol>{workers.map(worker => <WorkerRow key={worker.id} worker={worker} />)}</ol>
+    </details>
+  );
+}
+
 const SHOWN_SOURCES = 8;
 
 /** Pages the bot read come first; search hits only fill in when it read few pages itself. */
@@ -253,8 +316,8 @@ function Foldable({ active, children }: { active: boolean; children: ReactNode }
   );
 }
 
-const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen }: {
-  item: Message; agent: AgentRow; showAvatar: boolean; knownPaths: string[]; task?: TaskDetail; steps?: Step[]; onOpen: (file: PreviewFile) => void;
+const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop }: {
+  item: Message; agent: AgentRow; showAvatar: boolean; knownPaths: string[]; task?: TaskDetail; steps?: Step[]; onOpen: (file: PreviewFile) => void; onStop?: () => void;
 }) {
   if (item.role === "user") {
     return (
@@ -264,11 +327,11 @@ const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPath
       </div>
     );
   }
-  return <AssistantRow item={item} agent={agent} showAvatar={showAvatar} knownPaths={knownPaths} task={task} steps={steps} onOpen={onOpen} />;
+  return <AssistantRow item={item} agent={agent} showAvatar={showAvatar} knownPaths={knownPaths} task={task} steps={steps} onOpen={onOpen} onStop={onStop} />;
 });
 
-function AssistantRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen }: {
-  item: Message; agent: AgentRow; showAvatar: boolean; knownPaths: string[]; task?: TaskDetail; steps?: Step[]; onOpen: (file: PreviewFile) => void;
+function AssistantRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop }: {
+  item: Message; agent: AgentRow; showAvatar: boolean; knownPaths: string[]; task?: TaskDetail; steps?: Step[]; onOpen: (file: PreviewFile) => void; onStop?: () => void;
 }) {
   // While a reply streams, Markdown re-renders can lag behind the text; scrolling and typing stay responsive.
   const content = useDeferredValue(item.content);
@@ -276,9 +339,11 @@ function AssistantRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen
     <div className={`msg assistant${item.streaming ? " streaming" : ""}`}>
       <div className="msg-avatar">{showAvatar ? <Avatar {...avatarProps(agent)} size={28} gaze={false} /> : null}</div>
       <div className="msg-body">
+        {task?.kind === "background" ? <span className="background-origin"><Users aria-hidden="true" />背景工作回報</span> : null}
         {!item.streaming ? <ThoughtSummary task={task} steps={steps} narration={item.narration} /> : null}
         <Foldable active={!item.streaming}><ChatMessageBody content={item.streaming ? content : item.content} agentId={agent.id} knownPaths={knownPaths} onOpen={onOpen} /></Foldable>
         {!item.streaming ? <TaskResult agentId={agent.id} task={task} onOpen={onOpen} /> : null}
+        {!item.streaming && task?.background?.length ? <WorkersCard workers={task.background} onStop={onStop} /> : null}
         {!item.streaming ? <time className="msg-time">{clock(item.at)}</time> : null}
       </div>
     </div>
@@ -398,7 +463,7 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
             return (
               <div key={item.id || `${item.at}-${index}`} className="msg-wrap">
                 {newDay && item.at ? <div className="day-sep"><span>{dayLabel(item.at)}</span></div> : null}
-                <MessageRow item={item} agent={agent} knownPaths={knownPaths} onOpen={onOpenFile}
+                <MessageRow item={item} agent={agent} knownPaths={knownPaths} onOpen={onOpenFile} onStop={stop}
                   showAvatar={item.role === "assistant" && (newDay || previous?.role !== "assistant")}
                   task={taskId ? tasks[taskId] : undefined} steps={steps} />
               </div>

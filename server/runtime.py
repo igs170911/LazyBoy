@@ -19,6 +19,13 @@ from .store import now, uid
 
 log = logging.getLogger(__name__)
 TERMINAL = {"terminal"}
+WORKER_LIVE = {"queued", "running"}
+
+
+def live_workers(task):
+    return [w for w in task.get("background") or [] if w.get("status") in WORKER_LIVE]
+
+
 STALLED_TEXT = "Bot 長時間沒有回應，已停止這次工作；檔案與對話都保留。可以再交辦一次或請它繼續。"
 
 
@@ -99,6 +106,8 @@ class Runtime:
         self.persisted = {}
         self.flushes = {}
         self.listeners = {}
+        self.adopted = {}
+        self.worker_owner = {}
         self.router = Router(settings)
         self.computers.task_binding = lambda id: self.provider_bindings.get(self.active.get(id))
         self.closed = False
@@ -142,11 +151,18 @@ class Runtime:
         latest = tasks[-1] if tasks else None
         question = next((t.get("question") for t in working if t.get("question")), None)
         state = working[0]["state"] if working else "queued" if queued else "idle"
-        return {"state": state, "running": bool(working), "queued": bool(queued), "observed_at_ms": int(time.time()*1000),
+        background = [t for t in tasks if live_workers(t)]
+        return {"state": state, "background": sum(len(live_workers(t)) for t in background),
+                "background_task_ids": [t["id"] for t in background], "running": bool(working), "queued": bool(queued), "observed_at_ms": int(time.time()*1000),
                 "active_task_ids": [t["id"] for t in working], "queued_task_ids": [t["id"] for t in queued],
                 "thread_id": self.task_thread(working[0]) if working else None,
                 "queued_thread_ids": list(dict.fromkeys(self.task_thread(t) for t in queued)),
                 "latest_task_id": latest["id"] if latest else None, "question": question, "questions": [question] if question else []}
+
+    def busy(self, id):
+        """A turn or delegated background work is running: the connection (and its session) must stay."""
+        activity = self.activity(id)
+        return activity["running"] or activity["background"] > 0
 
     def emit(self, id, kind, payload, task=None):
         if task and "thread_id" not in payload:
@@ -291,6 +307,10 @@ class Runtime:
         while not self.closed:
             task=next((t for t in self.store.all("tasks") if t["agent_id"]==id and t["state"]=="queued"),None)
             if not task: return
+            turn=self.adopted.get(id)
+            if turn and not turn.done():
+                # Hermes is running a turn of its own (background results); queued work follows it.
+                await asyncio.wait({turn}); continue
             task_id=task["id"]
             self.active[id]=task_id
             self.finished[task_id]=asyncio.Event()
@@ -352,18 +372,46 @@ class Runtime:
                 log.exception("Bot task failed: %s",task_id)
                 self.finish(id,task_id,"failed",f"工作未完成：{str(exc)[:1500]}")
             finally:
-                self.active.pop(id,None)
-                self.finished.pop(task_id,None)
-                self.streams.pop(task_id,None)
-                self.narration.pop(task_id,None)
-                self.pending_requests.pop(id,None)
-                self.file_baselines.pop(task_id,None)
-                self.provider_bindings.pop(task_id,None)
-                self.routes.pop(task_id,None)
-                for table in (self.steps,self.sources,self.seen,self.open_tools,self.stalled,self.persisted): table.pop(task_id,None)
-                timer=self.flushes.pop(task_id,None)
-                if timer: timer.cancel()
-                self.store.prune_events(id)
+                self.release(id,task_id)
+
+    def release(self,id,task_id):
+        self.active.pop(id,None)
+        self.finished.pop(task_id,None)
+        self.streams.pop(task_id,None)
+        self.narration.pop(task_id,None)
+        self.pending_requests.pop(id,None)
+        self.file_baselines.pop(task_id,None)
+        self.provider_bindings.pop(task_id,None)
+        self.routes.pop(task_id,None)
+        for table in (self.steps,self.sources,self.seen,self.open_tools,self.stalled,self.persisted): table.pop(task_id,None)
+        timer=self.flushes.pop(task_id,None)
+        if timer: timer.cancel()
+        self.store.prune_events(id)
+
+    def adopt(self,id,sid):
+        """A turn Hermes started itself, e.g. to report background delegate_task results once they finish.
+        It gets a task of its own so the reply, steps and files reach the conversation like any other."""
+        thread_id=self.session_thread(id,self.clients.get(id),sid)
+        if not thread_id or self.active.get(id): return
+        task_id=uid()
+        self.store.put("tasks",task_id,{"id":task_id,"agent_id":id,"thread_id":thread_id,"kind":"background","goal":"背景工作完成，回報結果",
+                                        "state":"running","verdict":None,"created_at":now(),"started_at":now(),"session_id":sid,
+                                        "result":None,"artifacts":[],"milestones":[],"request_id":None,"routine_id":None})
+        self.active[id]=task_id
+        self.finished[task_id]=asyncio.Event()
+        self.file_baselines[task_id]={f["path"]:(f["bytes"],f["updated_at"]) for f in self.store.get("files",id) or []}
+        self.emit(id,"m0.progress",{"message":"背景工作完成，正在整理結果"},task_id)
+        self.adopted[id]=asyncio.create_task(self._adopted(id,task_id))
+
+    async def _adopted(self,id,task_id):
+        try: await self.watch(id,task_id)
+        except asyncio.CancelledError: raise
+        except Exception as exc:
+            log.exception("Background turn failed: %s",task_id)
+            self.finish(id,task_id,"failed",f"工作未完成：{str(exc)[:1500]}")
+        finally:
+            self.release(id,task_id)
+            self.kick(id)
 
     # A turn that streams nothing for this long is presumed hung; an open tool call (a long build or
     # download) gets more room. After an interrupt, or the user's stop, Hermes has STOP_GRACE to settle.
@@ -445,6 +493,12 @@ class Runtime:
         name=event.get("type","");payload=event.get("payload",{})
         if name=="session.title":
             self.native_title(id,event.get("session_id"),payload.get("title"))
+            return
+        if name.startswith("subagent."):
+            self.track_worker(id,task_id,name,event.get("session_id"),payload)
+            return
+        if name=="message.start" and not task_id:
+            self.adopt(id,event.get("session_id"))
             return
         if not task_id: return
         task=self.task(task_id)
@@ -530,6 +584,51 @@ class Runtime:
                 if match: match["kind"]="read" if "read" in (match["kind"],source["kind"]) else match["kind"]
                 elif len(known)<40: known.append(source)
             known.sort(key=lambda s:s["kind"]!="read")
+
+    def track_worker(self,id,task_id,name,sid,payload):
+        """delegate_task children, kept on the task that spawned them. Background ones outlive that turn,
+        so the conversation can show they are still working and the stop button can reach them."""
+        if (payload.get("depth") or 1)>1: return
+        goal=plain_text(payload.get("goal") or "",160)
+        key=f"{payload.get('delegation_id') or ''}:{payload.get('task_index',0)}:{goal[:80]}"
+        owner=self.worker_owner.get(key)
+        if not owner:
+            current=self.store.get("tasks",task_id) if task_id else None
+            owner=task_id if current and current.get("session_id") in {None,sid} else self.session_task(id,sid)
+            if not owner: return
+            self.worker_owner[key]=owner
+        task=self.store.get("tasks",owner)
+        if not task: return
+        workers=[dict(w) for w in task.get("background") or []]
+        worker=next((w for w in workers if w["id"]==key),None)
+        if not worker:
+            worker={"id":key,"goal":goal,"status":"queued","background":bool(payload.get("delegation_id")),"started_at":now()}
+            workers.append(worker); del workers[:-12]
+        status=str(payload.get("status") or "")
+        if name=="subagent.complete":
+            worker["status"]="completed" if status in {"","completed"} else "interrupted" if status=="interrupted" else "failed"
+            if isinstance(payload.get("duration_seconds"),(int,float)): worker["duration"]=round(payload["duration_seconds"],1)
+            if payload.get("summary"): worker["summary"]=plain_text(payload["summary"],200)
+            worker.pop("tool",None)
+        elif name!="subagent.spawn_requested" and worker["status"] in WORKER_LIVE:
+            if worker["status"]=="queued": worker.update(status="running",started_at=now())
+            if name=="subagent.tool" and payload.get("tool_name"):
+                worker["tool"]=str(payload["tool_name"]); worker["detail"]=plain_text(payload.get("tool_preview") or payload.get("text") or "",120)
+        worker["at"]=now()
+        self.store.patch("tasks",owner,background=workers)
+        self.emit(id,"runtime",{"type":"workers","workers":workers},owner)
+
+    def session_task(self,id,sid):
+        """The latest task that ran in this native session."""
+        return next((t["id"] for t in reversed(self.store.all("tasks")) if t["agent_id"]==id and sid and t.get("session_id")==sid),None)
+
+    def lose_workers(self,id,status="lost"):
+        """Children we can no longer follow (connection or service gone) must not show as running forever."""
+        for task in self.store.all("tasks"):
+            if task["agent_id"]!=id or not live_workers(task): continue
+            workers=[{**w,"status":status,"at":now()} if w["status"] in WORKER_LIVE else w for w in task["background"]]
+            self.store.patch("tasks",task["id"],background=workers)
+            self.emit(id,"runtime",{"type":"workers","workers":workers},task["id"])
 
     def persist_stream(self,id,task_id):
         """Store the reply streamed so far, for a page loaded mid-reply."""
@@ -631,9 +730,24 @@ class Runtime:
                 await client.call("session.interrupt",{"session_id":task["session_id"]})
             else:self.finish(id,task_id,"cancelled","")
             return {"status":"stopping"}
+        background=[t for t in self.store.all("tasks") if t["agent_id"]==id and live_workers(t)]
+        if background:
+            # Interrupting the session ends its background delegations too; each reports back as interrupted.
+            client=self.clients.get(id)
+            if not client or not client.alive:
+                self.lose_workers(id,"interrupted"); return {"status":"idle"}
+            for sid in {t.get("session_id") for t in background if t.get("session_id")}:
+                with contextlib.suppress(Exception): await client.call("session.interrupt",{"session_id":sid})
+            return {"status":"stopping"}
         return {"status":"idle"}
 
+    def halted(self,task_id):
+        """The user stopped this turn. A turn that simply ended must not cut off its background children."""
+        task=self.store.get("tasks",task_id) if task_id else None
+        return bool(task) and (task["state"]=="stopping" or task.get("verdict") in {"cancelled","interrupted"})
+
     async def disconnected(self,id,error):
+        self.lose_workers(id)
         task_id=self.active.get(id)
         if task_id:
             self.finish(id,task_id,"interrupted",self.streams.get(task_id,"")+"\n\nBot 連線中斷，尚未完成的操作沒有自動重播。可在重連後繼續交辦。")
@@ -671,6 +785,7 @@ class Runtime:
             if task["state"] not in {"terminal","queued"}:
                 self.finish(task["agent_id"],task["id"],"interrupted","服務曾中斷；保留檔案及對話，沒有自動重播未知結果的操作。")
         for agent in self.store.all("agents"):
+            self.lose_workers(agent["id"])
             self.store.patch("agents",agent["id"],live_session=None)
             self.kick(agent["id"])
 
@@ -679,6 +794,6 @@ class Runtime:
         await self.router.close()
         for id in list(self.active):
             with contextlib.suppress(Exception):await self.stop(id)
-        for runner in self.runners.values():runner.cancel()
-        await asyncio.gather(*self.runners.values(),return_exceptions=True)
+        for runner in [*self.runners.values(),*self.adopted.values()]:runner.cancel()
+        await asyncio.gather(*self.runners.values(),*self.adopted.values(),return_exceptions=True)
         await asyncio.gather(*(c.close() for c in self.clients.values()),return_exceptions=True)
