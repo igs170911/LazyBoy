@@ -202,6 +202,26 @@ body.is-resizing iframe { pointer-events: none; }
 .artifact span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact small { flex: none; color: var(--faint); font-size: 11.5px; }
 .artifact.more { color: var(--muted); }
+.plan-list { display: grid; gap: 3px; margin: 8px 0 0 22px; padding: 0; list-style: none; font-size: 13px; }
+.plan-list li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.5; }
+.plan-list svg { flex: none; width: 14px; height: 14px; margin-top: 3px; color: var(--ok); }
+.plan-list li[data-status="in_progress"] { color: var(--text); font-weight: 600; }
+.plan-list li[data-status="in_progress"] svg { color: var(--accent-strong); }
+.plan-list li[data-status="pending"], .plan-list li[data-status="cancelled"] { color: var(--muted); }
+.plan-list li[data-status="cancelled"] span { text-decoration: line-through; }
+.plan-dot { flex: none; width: 8px; height: 8px; margin: 6px 3px 0; border: 1.5px solid var(--faint); border-radius: 50%; }
+.task-steps .plan-list { margin-left: 4px; }
+.source-list summary { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 99px; background: var(--elev); color: var(--muted); font-size: 12.5px; list-style: none; cursor: pointer; }
+.source-list summary::-webkit-details-marker { display: none; }
+.source-list summary svg { width: 14px; height: 14px; }
+.source-list summary:hover { color: var(--text); }
+.source-list[open] .chev { transform: rotate(90deg); }
+.source-list .chev { transition: transform .15s; }
+.source-list ol { display: grid; gap: 2px; margin: 6px 0 0; padding: 0; list-style: none; }
+.source-list a { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 3px 4px; border-radius: var(--radius-s); color: var(--text); font-size: 13px; text-decoration: none; }
+.source-list a:hover { background: var(--hover); }
+.source-list a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-list a small { flex: none; color: var(--faint); font-size: 11.5px; }
 .narration-list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); list-style: none; color: var(--muted); font-size: 13px; line-height: 1.6; white-space: pre-line; }
 .foldable { position: relative; }
 .foldable.folded .foldable-body { max-height: 520px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }

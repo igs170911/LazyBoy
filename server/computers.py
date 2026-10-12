@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-from .config import IMAGE, PORT, private_write
+from .config import IMAGE, PORT, SEARCH_PROVIDERS, private_write
 
 # Two CPUs, enforced in 10 ms slices: with Docker's default 100 ms period a busy
 # Chromium spends the whole quota early and freezes the desktop stream (and
@@ -25,6 +25,15 @@ RESOURCES = ("--shm-size", "512m", "--memory", "3g", "--cpu-period", "10000", "-
 
 
 BUILTIN_SKILLS = Path(__file__).with_name("builtin_skills")
+
+
+def write_changed(path, content):
+    """prepare() runs before every task; rewriting identical files only churns mtimes Hermes may watch."""
+    try:
+        if path.read_text() == content: return False
+    except OSError: pass
+    private_write(path, content)
+    return True
 
 
 def seed_skills(target):
@@ -55,6 +64,7 @@ class Computers:
         self.store, self.settings = store, settings
         self.locks = {}
         self.cache = {}
+        self.env_dirty = set()
 
     def name(self, id): return "lazyhermes-bot-" + id
 
@@ -76,13 +86,20 @@ class Computers:
         cfg = yaml.safe_load(cfg_path.read_text()) or {} if cfg_path.exists() else {}
         # Preserve Hermes-generated settings and learned state; replace only product-owned bindings.
         vision = bool(self.settings.model_row(selected, model).get("vision"))
+        search = self.settings.search()
+        toolsets = ["terminal", "file", "web", "browser", "skills", "memory", "todo", "clarify", "mcp",
+                    "delegation", "code_execution", "session_search", *(["vision"] if vision else []),
+                    *(["x_search"] if search["xai_api_key"] else [])]
         cfg.update({"model": {"default": model, "provider": "custom:product", "base_url": proxy, "supports_vision": vision},
                     "providers": {"product": {"api": proxy, "key_env": "LAZYHERMES_MODEL_TOKEN",
                                               "default_model": model, "transport": self.settings.protocol(selected, model)}},
                     "terminal": {"backend": "local", "cwd": "/workspace", "timeout": 120},
                     "browser": {"backend": "browser-use", "cdp_url": "http://127.0.0.1:9222", "allow_private_urls": True},
-                    "web": {"provider": "ddgs"},
-                    "platform_toolsets": {"cli": ["terminal", "file", "web", "browser", "skills", "memory", "todo", "clarify", "mcp"]},
+                    # Hermes reads web.backend (web.provider is not a Hermes key).
+                    "web": {**{k: v for k, v in cfg.get("web", {}).items() if k != "provider"}, "backend": search["provider"]},
+                    "platform_toolsets": {"cli": toolsets},
+                    # The computer is an isolated container: a second model vetting every shell command only adds latency.
+                    "approvals": {**cfg.get("approvals", {}), "mode": "off"},
                     "agent": {"max_iterations": 200, "reasoning_effort": self.settings.reasoning(selected, model), "image_input_mode": "native" if vision else "text"},
                     "display": {"busy_input_mode": "steer", "interim_assistant_messages": True}})
         cfg.setdefault("onboarding", {})["profile_build"] = "off"
@@ -98,22 +115,35 @@ class Computers:
         for name, server in {**shared, **local}.items():
             if server.get("enabled", True): cfg["mcp_servers"][name] = {k:v for k,v in server.items() if k not in {"server","transport","enabled"}}
             else: cfg["mcp_servers"].pop(name, None)
-        private_write(cfg_path, yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
+        write_changed(cfg_path, yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
         env_path = root / "hermes" / ".env"
         lines = env_path.read_text().splitlines() if env_path.exists() else []
-        lines = [line for line in lines if not line.startswith("LAZYHERMES_MODEL_TOKEN=")]
-        private_write(env_path, "\n".join([*lines, "LAZYHERMES_MODEL_TOKEN=" + key]) + "\n")
+        # Remove only the keys LazyBoy itself wrote last time; keys the user or Hermes saved stay.
+        written_path = root / "hermes" / ".lazyboy-env-keys"
+        written = set(written_path.read_text().split()) if written_path.exists() else set()
+        extra = [f"{SEARCH_PROVIDERS[search['provider']]}={search['api_key']}"] if search["api_key"] and SEARCH_PROVIDERS[search["provider"]] else []
+        if search["xai_api_key"]: extra.append("XAI_API_KEY=" + search["xai_api_key"])
+        ours = {line.split("=", 1)[0] for line in extra}
+        lines = [line for line in lines if line.split("=", 1)[0] not in written | ours | {"LAZYHERMES_MODEL_TOKEN"}]
+        if write_changed(env_path, "\n".join([*lines, *extra, "LAZYHERMES_MODEL_TOKEN=" + key]) + "\n"):
+            # A running Hermes loaded .env at start; the next task asks it to reload.
+            self.env_dirty.add(id)
+        write_changed(written_path, "\n".join(sorted(ours)) + "\n")
         persona = agent.get("persona") or agent.get("description") or ""
         soul = f"# {agent['name']}\n\n{agent.get('title','')}\n\n{persona}\n\n" + (
             "你是常駐在自己電腦裡的 Bot。使用繁體中文。網頁是使用者與你的主要入口。"
             "使用網頁功能名稱引導使用者，不提供 /help 等終端介面操作指引。"
             "工具在你的獨立電腦裡執行，工作檔案保存於 /workspace。"
-            "公開資訊先搜尋或抓取；登入網站使用 browser_exec，連線的是使用者可接手的同一個 Chromium。"
+            "公開資訊先 web_search，讀網頁內容用 web_extract（不要用 curl 抓 HTML）；登入網站使用 browser_exec，連線的是使用者可接手的同一個 Chromium。"
+            "三個步驟以上的工作，先用 todo 列出計畫並隨進度更新。"
+            "彼此獨立的查詢或子工作（例如比較多個來源、多個商品）用 delegate_task 平行處理；需要連續呼叫多個工具處理資料時用 execute_code 一次完成。"
+            "需要深入研究、比較多個來源或整理調查報告時，使用 deep-research 技能。"
             "需要原生應用程式或 DOM 無法處理時，使用 MCP computer 的桌面工具。"
             "依當前觀察操作，錯誤後先診斷原因；同一網址或同一操作失敗兩次就換方法（搜尋、web_fetch 或桌面工具），不要重試第三次。"
             "等待頁面時等待特定文字或元素出現，不要固定等秒數。"
             "需要登入時告知使用者打開電腦面板接手，不在對話索取密碼。"
             "有需要澄清的問題使用 clarify。完成後驗證結果，區分已完成、估計和未取得的資料。"
+            "根據網路資料回答時，在答案最後附上實際引用的來源網址。"
             "可交付檔案請放在 /workspace，並在回答提供實際路徑。"
             "寫程式、建專案、修 bug 或重構時，使用 grok-build 技能交給 Grok Build CLI，自己負責驗收與摘要。"
             "\n\n## 回覆風格\n"
@@ -122,7 +152,7 @@ class Computers:
             "內容較長的報告、清單或資料寫成 /workspace 裡的 Markdown 檔案，對話只放 3 到 5 行摘要與檔案路徑。"
             "Markdown 適度使用：不用 # 與 ## 大標題，分段需要時用 ### 小標或粗體；清單只用於並列項目；"
             "比較三項以上才用表格；注意事項可用 > [!NOTE]、> [!TIP] 或 > [!WARNING]。")
-        private_write(root / "hermes" / "SOUL.md", soul)
+        write_changed(root / "hermes" / "SOUL.md", soul)
         seed_skills(root / "hermes" / "skills")
         return root
 

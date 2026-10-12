@@ -1,16 +1,17 @@
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { AgentRow, Artifact, TaskDetail, ThreadRow } from "../api";
+import type { AgentRow, Artifact, PlanItem, TaskDetail, ThreadRow } from "../api";
 import { Avatar, botColor, bubbleTone } from "../avatar";
 import { ChatMessageBody, contentUrl, type PreviewFile } from "../markdown";
-import { Brain, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, X } from "../ui/icons";
+import { Brain, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, Globe, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, X } from "../ui/icons";
 import { ConfirmDialog, MenuButton, toast, type MenuItem } from "../ui/overlay";
 import { Composer } from "./Composer";
 import { draftKey } from "./drafts";
-import { bytes, clock, dayLabel, duration, sameDay } from "./format";
+import { bytes, clock, dayLabel, duration, sameDay, unicodeHost } from "./format";
 import { QuestionCard, questionBlocksComposer } from "./QuestionCard";
 import { avatarProps } from "./Sidebar";
 import { useMood } from "./mood";
 import { activityStatus } from "./status";
+import { savedSteps } from "./steps";
 import { ThreadBar, ThreadRenameDialog } from "./Threads";
 import type { LiveTask, Message, Step } from "./useSession";
 import { useSession } from "./useSession";
@@ -57,6 +58,21 @@ function StepList({ steps, limit }: { steps: Step[]; limit?: number }) {
   );
 }
 
+/** The bot's own todo plan, Grok DeepSearch style: what it intends to do and how far it got. */
+function PlanList({ plan }: { plan: PlanItem[] }) {
+  const done = plan.filter(item => item.status === "completed").length;
+  return (
+    <ol className="plan-list" aria-label={`計畫 ${done}/${plan.length}`}>
+      {plan.map((item, index) => (
+        <li key={index} data-status={item.status}>
+          {item.status === "completed" ? <Check aria-label="完成" /> : item.status === "in_progress" ? <LoaderCircle className="spin" aria-label="進行中" /> : <span className="plan-dot" aria-hidden="true" />}
+          <span>{item.content}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function useElapsed(since?: string, running = true) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -77,6 +93,7 @@ function WorkCard({ agent, state, live, task, computerOpen, onOpenComputer, onSt
   const steps = live?.steps || [];
   const title = state === "queued" ? "排隊中" : state === "stopping" ? "正在停止…" : state.startsWith("waiting") ? "等你回覆" : "思考中";
   const notes = live?.narration || [];
+  const plan = live?.plan || task?.plan || [];
   const status = live?.status || notes.at(-1);
   const more = steps.length > 1 || notes.length > 0;
   const meta = [elapsed !== null && state !== "queued" ? duration(elapsed) : "", steps.length > 1 ? `${steps.length} 個步驟` : "", live?.model].filter(Boolean).join(" · ");
@@ -96,6 +113,7 @@ function WorkCard({ agent, state, live, task, computerOpen, onOpenComputer, onSt
       </header>
       {status ? <p className="work-card-status">{status}</p> : null}
       {live?.notice ? <p className="work-card-notice">{live.notice}</p> : null}
+      {plan.length ? <PlanList plan={plan} /> : null}
       {steps.length ? <StepList steps={steps} limit={expanded ? undefined : 1} /> : null}
       {expanded && notes.length ? <Narration notes={notes} /> : null}
     </section>
@@ -123,12 +141,14 @@ function taskSeconds(task?: TaskDetail) {
 /** Grok's "Thought for Ns": the whole process collapses to one line above the answer. */
 function ThoughtSummary({ task, steps, narration }: { task?: TaskDetail; steps?: Step[]; narration?: string[] }) {
   const notes = narration || [];
-  if (!steps?.length && !notes.length) return null;
+  const plan = task?.plan || [];
+  if (!steps?.length && !notes.length && !plan.length) return null;
   const seconds = taskSeconds(task);
   const label = [seconds !== null ? `已思考 ${duration(seconds)}` : "已完成", steps?.length ? `${steps.length} 個步驟` : ""].filter(Boolean).join(" · ");
   return (
     <details className="task-steps">
       <summary><Brain aria-hidden="true" />{label}<ChevronRight className="chev" aria-hidden="true" /></summary>
+      {plan.length ? <PlanList plan={plan} /> : null}
       {notes.length ? <Narration notes={notes} /> : null}
       {steps?.length ? <StepList steps={steps} /> : null}
     </details>
@@ -142,7 +162,8 @@ function TaskResult({ agentId, task, onOpen }: { agentId: string; task?: TaskDet
   const verdict = task.state === "terminal" ? VERDICTS[task.verdict || ""] : undefined;
   const artifacts = task.artifacts || [];
   const shown = all ? artifacts : artifacts.slice(0, SHOWN_FILES);
-  if (!verdict && !artifacts.length) return null;
+  const sources = sourceList(task);
+  if (!verdict && !artifacts.length && !sources.length) return null;
   return (
     <div className="task-result">
       {verdict ? <span className={`verdict ${verdict.tone}`}>{verdict.tone === "danger" ? <TriangleAlert /> : null}{verdict.label}</span> : null}
@@ -156,7 +177,42 @@ function TaskResult({ agentId, task, onOpen }: { agentId: string; task?: TaskDet
           {artifacts.length > SHOWN_FILES ? <button type="button" className="artifact more" onClick={() => setAll(v => !v)}>{all ? "收合" : `+${artifacts.length - SHOWN_FILES}`}</button> : null}
         </div>
       ) : null}
+      {sources.length ? <Sources sources={sources} /> : null}
     </div>
+  );
+}
+
+const SHOWN_SOURCES = 8;
+
+/** Pages the bot read come first; search hits only fill in when it read few pages itself. */
+function sourceList(task: TaskDetail) {
+  const seen = new Set<string>();
+  const rows = (task.sources || []).filter(row => !seen.has(row.url) && seen.add(row.url));
+  const read = rows.filter(row => row.kind === "read");
+  return read.length >= 3 ? read : [...read, ...rows.filter(row => row.kind !== "read")].slice(0, Math.max(read.length, 5));
+}
+
+function Sources({ sources }: { sources: NonNullable<TaskDetail["sources"]> }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? sources : sources.slice(0, SHOWN_SOURCES);
+  return (
+    <details className="source-list">
+      <summary><Globe aria-hidden="true" />來源 {sources.length}<ChevronRight className="chev" aria-hidden="true" /></summary>
+      <ol>
+        {shown.map(source => {
+          let host = source.url;
+          try { host = unicodeHost(new URL(source.url).hostname.replace(/^www\./, "")); } catch { /* keep the raw URL */ }
+          return (
+            <li key={source.url}>
+              <a href={source.url} target="_blank" rel="noreferrer noopener" title={source.url}>
+                <span>{source.title || host}</span><small>{host}</small>
+              </a>
+            </li>
+          );
+        })}
+      </ol>
+      {sources.length > SHOWN_SOURCES ? <button type="button" className="link-btn" onClick={() => setAll(v => !v)}>{all ? "收合" : `顯示全部 ${sources.length} 個來源`}</button> : null}
+    </details>
   );
 }
 
@@ -337,7 +393,8 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
             const previous = visible[index - 1];
             const newDay = !previous || !sameDay(previous.at, item.at);
             const taskId = item.id?.startsWith("delta:") ? item.id.slice(6) : "";
-            const steps = taskId && live?.taskId === taskId && taskId !== activeTaskId ? live.steps : undefined;
+            const steps = taskId && live?.taskId === taskId && taskId !== activeTaskId && live.steps.length ? live.steps
+              : taskId && tasks[taskId]?.steps?.length ? savedSteps(tasks[taskId].steps) : undefined;
             return (
               <div key={item.id || `${item.at}-${index}`} className="msg-wrap">
                 {newDay && item.at ? <div className="day-sep"><span>{dayLabel(item.at)}</span></div> : null}

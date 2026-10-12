@@ -14,10 +14,12 @@ from .rpc import HermesRPC
 from .routing import Router
 from .files import important, rank, walk
 from .skills import Skills
+from .model_check import friendly
 from .store import now, uid
 
 log = logging.getLogger(__name__)
 TERMINAL = {"terminal"}
+STALLED_TEXT = "Bot 長時間沒有回應，已停止這次工作；檔案與對話都保留。可以再交辦一次或請它繼續。"
 
 
 def _vault_place(params):
@@ -30,6 +32,39 @@ def _vault_place(params):
 
 _MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 _MD_MARKS = re.compile(r"(\*\*|__|~~|`+|^#{1,6}\s+|^\s*>\s?|^\s*(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?)", re.M)
+
+
+def tool_failed(payload):
+    """Hermes tool.complete carries the raw result, not an error flag; mirror its own failure test."""
+    if payload.get("error"): return True
+    result=payload.get("result")
+    if isinstance(result,str):
+        try: result=json.loads(result)
+        except ValueError: return False
+    if not isinstance(result,dict): return False
+    if result.get("success") is False or result.get("ok") is False: return True
+    error=result.get("error")
+    if isinstance(error,str) and error.strip(): return True
+    code=result.get("exit_code")
+    return isinstance(code,int) and not isinstance(code,bool) and code!=0
+
+
+def tool_sources(name, payload):
+    """Web pages a tool actually read (web_extract) or found (web_search), for the answer's source list."""
+    result=payload.get("result")
+    if isinstance(result,str):
+        try: result=json.loads(result)
+        except ValueError: return []
+    if not isinstance(result,dict): return []
+    if name=="web_extract": rows,kind=result.get("results"),"read"
+    elif name=="web_search": rows,kind=(result.get("data") or {}).get("web"),"search"
+    else: return []
+    found=[]
+    for row in rows if isinstance(rows,list) else []:
+        url=str(row.get("url") or "") if isinstance(row,dict) else ""
+        if url.startswith(("http://","https://")) and not row.get("error"):
+            found.append({"url":url,"title":plain_text(row.get("title") or "",120),"kind":kind})
+    return found
 
 
 def plain_text(markdown, limit=None):
@@ -56,6 +91,14 @@ class Runtime:
         self.skill_baselines = {}
         self.provider_bindings = {}
         self.routes = {}
+        self.steps = {}
+        self.sources = {}
+        self.seen = {}
+        self.open_tools = {}
+        self.stalled = {}
+        self.persisted = {}
+        self.flushes = {}
+        self.listeners = {}
         self.router = Router(settings)
         self.computers.task_binding = lambda id: self.provider_bindings.get(self.active.get(id))
         self.closed = False
@@ -109,7 +152,17 @@ class Runtime:
         if task and "thread_id" not in payload:
             record = self.store.get("tasks", task)
             if record: payload = {**payload, "thread_id": self.task_thread(record)}
-        return self.store.event(id, kind, payload, task)
+        value = self.store.event(id, kind, payload, task)
+        for wake in self.listeners.get(id, ()): wake.set()
+        return value
+
+    @contextlib.contextmanager
+    def listen(self, id):
+        """An asyncio.Event set whenever this bot journals an event, so streams need not poll."""
+        wake = asyncio.Event()
+        self.listeners.setdefault(id, set()).add(wake)
+        try: yield wake
+        finally: self.listeners[id].discard(wake)
 
     def message(self, agent_id, task_id, role, content, **fields):
         thread = self.task_thread(self.task(task_id)) if task_id else agent_id
@@ -252,6 +305,11 @@ class Runtime:
                 self.store.patch("tasks",task_id,provider=provider,model=model,protocol=self.settings.protocol(selected,model),reasoning_effort=effort,routing={"intent":route.intent,"role":route.role,"enabled":route.enabled})
                 self.computers.prepare(id)
                 client=await self.client(id)
+                if id in self.computers.env_dirty:
+                    # New search/xAI keys were written to .env after this Hermes started.
+                    with contextlib.suppress(Exception):
+                        await client.call("reload.env",{})
+                        self.computers.env_dirty.discard(id)
                 sid=await self.session(id,client,self.task_thread(task))
                 provider, model, selected = self.provider_bindings[task_id]
                 binding = (provider, model, selected.get("base_url"), self.settings.protocol(selected, model), bool(self.settings.model_row(selected,model).get("vision")))
@@ -260,6 +318,17 @@ class Runtime:
                 previous_binding, previous_effort = configured.get(sid, (None, None))
                 binding_changed = previous_binding != binding
                 if binding_changed:
+                    # A resumed session builds its agent in the background from the runtime stored with it
+                    # (including an outdated protocol). A switch sent with --provider does not wait for that
+                    # build and is lost, so first wait for the agent: approval.pending is a read-only call
+                    # Hermes only answers once the agent is ready.
+                    # Hermes gives up after 30 s per call; a cold build with MCP discovery can take longer.
+                    for attempt in range(3):
+                        try:
+                            await client.call("approval.pending", {"session_id": sid}, timeout=45)
+                            break
+                        except Exception as exc:
+                            log.warning("Resumed agent not ready yet (attempt %s): %s", attempt + 1, exc)
                     await client.call("config.set", {"session_id": sid, "key": "model", "value": model + " --provider custom:product", "confirm_expensive_model": True})
                 if binding_changed or previous_effort != effort:
                     await client.call("config.set", {"session_id": sid, "key": "reasoning", "value": effort})
@@ -277,7 +346,7 @@ class Runtime:
                 response = await client.call("prompt.submit",{"session_id":sid,"text":text})
                 if response.get("stored_session_id"):
                     self.patch_thread(id, self.task_thread(task), hermes_session=response["stored_session_id"])
-                await self.finished[task_id].wait()
+                await self.watch(id,task_id)
             except asyncio.CancelledError: raise
             except Exception as exc:
                 log.exception("Bot task failed: %s",task_id)
@@ -291,6 +360,44 @@ class Runtime:
                 self.file_baselines.pop(task_id,None)
                 self.provider_bindings.pop(task_id,None)
                 self.routes.pop(task_id,None)
+                for table in (self.steps,self.sources,self.seen,self.open_tools,self.stalled,self.persisted): table.pop(task_id,None)
+                timer=self.flushes.pop(task_id,None)
+                if timer: timer.cancel()
+                self.store.prune_events(id)
+
+    # A turn that streams nothing for this long is presumed hung; an open tool call (a long build or
+    # download) gets more room. After an interrupt, or the user's stop, Hermes has STOP_GRACE to settle.
+    PERSIST_INTERVAL = .5
+    IDLE_LIMIT = 15*60
+    TOOL_IDLE_LIMIT = 40*60
+    STOP_GRACE = 60
+    WATCH_INTERVAL = 5
+
+    async def watch(self,id,task_id):
+        done=self.finished[task_id]
+        self.seen[task_id]=time.monotonic()
+        while not done.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(done.wait(),self.WATCH_INTERVAL)
+                return
+            state=self.task(task_id)["state"]
+            clock=time.monotonic()
+            if state.startswith("waiting"):
+                self.seen[task_id]=clock; continue
+            if state=="stopping" or task_id in self.stalled:
+                since=self.stalled.setdefault(task_id,clock)
+                if clock-since>=self.STOP_GRACE:
+                    verdict="cancelled" if state=="stopping" else "failed"
+                    self.finish(id,task_id,verdict,"" if verdict=="cancelled" else STALLED_TEXT)
+                continue
+            limit=self.TOOL_IDLE_LIMIT if self.open_tools.get(task_id) else self.IDLE_LIMIT
+            if clock-self.seen[task_id]>=limit:
+                log.warning("Bot task idle for %ss, interrupting: %s",int(clock-self.seen[task_id]),task_id)
+                self.stalled[task_id]=clock
+                self.emit(id,"m0.progress",{"message":"Bot 太久沒有回應，正在停止這次工作"},task_id)
+                client=self.clients.get(id); sid=self.task(task_id).get("session_id")
+                if client and client.alive and sid:
+                    with contextlib.suppress(Exception): await client.call("session.interrupt",{"session_id":sid})
 
     def _uploads(self,id,text):
         return [v for v in self.store.all("uploads") if v["agent_id"]==id and (v["id"] in text or v["name"] in text or v["path"] in text)]
@@ -322,8 +429,12 @@ class Runtime:
         task=self.task(task_id)
         if task["state"]=="terminal": return
         content=text or self.streams.get(task_id,"") or ("已停止，先前檔案與對話已保留。" if verdict=="cancelled" else "工作已結束。")
+        hint=friendly(content) if verdict=="failed" else None
+        if hint: content=hint+"\n\n> 原始錯誤："+" ".join(content.split())[:600]
         self.message(id,task_id,"assistant",content,id="delta:"+task_id,streaming=False,narration=self.narration.get(task_id,[]))
-        self.store.patch("tasks",task_id,state="terminal",verdict=verdict,result={"summary":content},question=None,ended_at=now(),**fields)
+        steps=[{**step,"state":"done" if step["state"]=="running" else step["state"]} for step in self.steps.get(task_id,[])]
+        trail={"steps":steps,"sources":self.sources.get(task_id,[])} if steps or self.sources.get(task_id) else {}
+        self.store.patch("tasks",task_id,state="terminal",verdict=verdict,result={"summary":content},question=None,ended_at=now(),**trail,**fields)
         self.emit(id,"runtime",{"type":"turn_ended","verdict":verdict},task_id)
         self.emit(id,"reply",{},task_id)
         event=self.finished.get(task_id)
@@ -340,28 +451,41 @@ class Runtime:
         if task["state"] == "terminal": return
         sid=event.get("session_id")
         if task.get("session_id") and sid and sid!=task["session_id"]: return
+        self.seen[task_id]=time.monotonic()
         if name=="message.delta":
             text=payload.get("text",payload.get("delta",""))
             if text:
                 value=self.streams.get(task_id,"")+text;self.streams[task_id]=value
-                self.message(id,task_id,"assistant",value,id="delta:"+task_id,streaming=True,narration=self.narration.get(task_id,[]))
+                # Live clients get every delta from the journal; the stored copy only serves reloads mid-reply.
+                if time.monotonic()-self.persisted.get(task_id,0)>=self.PERSIST_INTERVAL:
+                    self.persist_stream(id,task_id)
+                elif task_id not in self.flushes:
+                    # The tail of a burst must still reach storage if no further delta arrives.
+                    self.flushes[task_id]=asyncio.get_running_loop().call_later(self.PERSIST_INTERVAL,self.persist_stream,id,task_id)
                 self.emit(id,"runtime",{"type":"message_delta","id":task_id,"delta":text},task_id)
         elif name=="message.interim":
             self.emit(id,"runtime",{"type":"user_progress","message":payload.get("text","")},task_id)
         elif name=="message.complete":
             status=payload.get("status", "success")
             verdict="cancelled" if status in {"interrupted","cancelled","aborted"} or task["state"]=="stopping" else "failed" if status in {"error","failed"} else "answer"
+            text=payload.get("text", "")
+            if task_id in self.stalled and task["state"]!="stopping":
+                # Our watchdog interrupted a silent turn: that is a failure, not the user's stop.
+                verdict,text="failed",STALLED_TEXT
             await self.refresh_files(id,task_id)
-            self.finish(id,task_id,verdict,payload.get("text", ""),usage=payload.get("usage"),runtime=payload.get("runtime"))
+            self.finish(id,task_id,verdict,text,usage=payload.get("usage"),runtime=payload.get("runtime"))
         elif name in {"tool.start","tool.complete"}:
             tool=payload.get("name","")
             if name == "tool.start": self.fold_narration(id,task_id)
             route = self.routes.get(task_id)
             if name == "tool.start" and route and tool not in {"clarify", "todo", "send_message", "report_progress"}:
                 route.promote()
+            failed=name=="tool.complete" and tool_failed(payload)
+            self.track_step(task_id,name,tool,payload,failed)
             self.emit(id,"runtime",{"type":"tool_started" if name=="tool.start" else "tool_finished",
                                     "id":payload.get("tool_id"),"name":tool,"detail":str(payload.get("context", "")),
-                                    "success":not payload.get("error",False)},task_id)
+                                    "success":not failed,"duration":payload.get("duration_s"),
+                                    "summary":payload.get("summary") or ""},task_id)
             if name == "tool.complete" and tool == "skill_manage":
                 current = self.skill_state(id)
                 previous = self.skill_baselines.get(id, {})
@@ -369,6 +493,11 @@ class Runtime:
                 if current != previous:
                     self.emit(id, "skills_changed", {"count":len(current), "saved":bool(changed), "skill_ids":changed, "at":now()}, task_id)
                 self.skill_baselines[id] = current
+        elif name=="todo.updated":
+            plan=[{"content":plain_text(t.get("content") or "",160),"status":str(t.get("status") or "pending")}
+                  for t in payload.get("todos",[]) if isinstance(t,dict) and t.get("content")][:30]
+            self.store.patch("tasks",task_id,plan=plan)
+            self.emit(id,"runtime",{"type":"plan","plan":plan},task_id)
         elif name=="request.cancel":
             question=task.get("question")
             if question and question["question_id"]==str(payload.get("id")):
@@ -379,9 +508,41 @@ class Runtime:
         elif name in {"status","thinking.start","thinking.end","context.compacting"}:
             self.emit(id,"m0.progress",{"message":payload.get("message",payload.get("text","正在處理工作"))},task_id)
 
+    def track_step(self,task_id,name,tool,payload,failed):
+        """Keep the step trail server-side so a finished turn still shows it after a reload."""
+        steps=self.steps.setdefault(task_id,[]); tool_id=str(payload.get("tool_id") or "")
+        running=self.open_tools.setdefault(task_id,set())
+        if name=="tool.start":
+            running.add(tool_id)
+            steps.append({"id":tool_id or uid(),"name":tool,"detail":plain_text(payload.get("context",""),140),"state":"running"})
+            del steps[:-60]
+            return
+        running.discard(tool_id)
+        step=next((s for s in reversed(steps) if s["id"]==tool_id or (not tool_id and s["name"]==tool and s["state"]=="running")),None)
+        if step:
+            step["state"]="failed" if failed else "done"
+            if failed and payload.get("summary"): step["detail"]=plain_text(payload["summary"],140)
+            if isinstance(payload.get("duration_s"),(int,float)): step["duration"]=round(payload["duration_s"],1)
+        if not failed:
+            known=self.sources.setdefault(task_id,[])
+            for source in tool_sources(tool,payload):
+                match=next((s for s in known if s["url"]==source["url"]),None)
+                if match: match["kind"]="read" if "read" in (match["kind"],source["kind"]) else match["kind"]
+                elif len(known)<40: known.append(source)
+            known.sort(key=lambda s:s["kind"]!="read")
+
+    def persist_stream(self,id,task_id):
+        """Store the reply streamed so far, for a page loaded mid-reply."""
+        timer=self.flushes.pop(task_id,None)
+        if timer: timer.cancel()
+        if task_id not in self.streams or self.store.get("tasks",task_id,{}).get("state")=="terminal": return
+        self.persisted[task_id]=time.monotonic()
+        self.message(id,task_id,"assistant",self.streams[task_id],id="delta:"+task_id,streaming=True,narration=self.narration.get(task_id,[]))
+
     def fold_narration(self,id,task_id):
         """Text streamed before a tool call is progress narration; only the text after the last tool is the reply."""
         text=self.streams.pop(task_id,"").strip()
+        self.persisted.pop(task_id,None)  # the reply restarts: store its first words at once
         if not text: return
         notes=self.narration.setdefault(task_id,[]);notes.append(text)
         self.message(id,task_id,"assistant","",id="delta:"+task_id,streaming=True,narration=notes)
@@ -464,6 +625,7 @@ class Runtime:
         if task_id:
             task=self.task(task_id)
             self.store.patch("tasks",task_id,state="stopping",question=None)
+            self.stalled.setdefault(task_id,time.monotonic())
             client=self.clients.get(id)
             if client and client.alive and task.get("session_id"):
                 await client.call("session.interrupt",{"session_id":task["session_id"]})
@@ -479,16 +641,8 @@ class Runtime:
 
     async def refresh_files(self,id,task_id=None):
         root=self.store.agent_directory(id)/"workspace"
-        files=[]
-        for path in walk(root):
-            if len(files)>=500:break
-            if not path.resolve().is_relative_to(root.resolve()):continue
-            rel=str(path.relative_to(root))
-            if any(part.startswith(".") for part in Path(rel).parts):continue
-            try: stat=path.stat()
-            except OSError: continue
-            from datetime import datetime, timezone
-            files.append({"path":rel,"title":path.name,"media_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","bytes":stat.st_size,"updated_at":datetime.fromtimestamp(stat.st_mtime,timezone.utc).isoformat(),"important":important(rel)})
+        # A large workspace takes a while to walk; keep the event loop (and every live stream) responsive.
+        files=await asyncio.to_thread(self.scan_files,root)
         self.store.put("files",id,files)
         if task_id:
             baseline = self.file_baselines.get(task_id, {})
@@ -497,7 +651,22 @@ class Runtime:
             self.emit(id,"m0.artifact",{},task_id)
         return files
 
+    @staticmethod
+    def scan_files(root):
+        from datetime import datetime, timezone
+        files=[]
+        for path in walk(root):
+            if len(files)>=500:break
+            if not path.resolve().is_relative_to(root.resolve()):continue
+            rel=str(path.relative_to(root))
+            if any(part.startswith(".") for part in Path(rel).parts):continue
+            try: stat=path.stat()
+            except OSError: continue
+            files.append({"path":rel,"title":path.name,"media_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","bytes":stat.st_size,"updated_at":datetime.fromtimestamp(stat.st_mtime,timezone.utc).isoformat(),"important":important(rel)})
+        return files
+
     async def startup(self):
+        if cleaned := self.store.purge_orphans(): log.info("Removed records of %s deleted bots", cleaned)
         for task in self.store.all("tasks"):
             if task["state"] not in {"terminal","queued"}:
                 self.finish(task["agent_id"],task["id"],"interrupted","服務曾中斷；保留檔案及對話，沒有自動重播未知結果的操作。")

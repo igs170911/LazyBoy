@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AgentActivity, type AgentFile, type TaskDetail, type TeamEvent, type ThreadRow, type TranscriptItem } from "../api";
+import { api, type AgentActivity, type AgentFile, type PlanItem, type TaskDetail, type TeamEvent, type ThreadRow, type TranscriptItem } from "../api";
 import { readStorage, writeStorage } from "../storage";
 import { randomUUID } from "../uuid";
 import { stepDetail, stepLabel } from "./steps";
 
 export type Step = { id: string; name: string; label: string; detail: string; state: "running" | "done" | "failed" };
-export type LiveTask = { taskId: string; status: string; steps: Step[]; narration?: string[]; model?: string; notice?: string };
+export type LiveTask = { taskId: string; status: string; steps: Step[]; narration?: string[]; model?: string; notice?: string; plan?: PlanItem[] };
 export type Message = TranscriptItem & { pending?: boolean };
 
 const IDLE: AgentActivity = { state: "idle", running: false, queued: false, observed_at_ms: 0, active_task_ids: [] };
@@ -188,9 +188,13 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
             for (let i = base.steps.length - 1; index < 0 && i >= 0; i--) if (base.steps[i].state === "running" && base.steps[i].name === p.name) index = i;
             if (index < 0) return base;
             const steps = [...base.steps];
-            steps[index] = { ...steps[index], state: p.success === false ? "failed" : "done", detail: steps[index].detail || stepDetail(String(p.detail || "")) };
+            const failed = p.success === false;
+            steps[index] = { ...steps[index], state: failed ? "failed" : "done", detail: (failed && stepDetail(String(p.summary || ""))) || steps[index].detail || stepDetail(String(p.detail || "")) };
             return { ...base, steps };
           });
+        } else if (type === "plan" && taskId) {
+          const plan = Array.isArray(p.plan) ? p.plan as PlanItem[] : [];
+          setLive(id, live => ({ ...ensure(live), plan }));
         } else if (type === "user_progress" && taskId) {
           const message = String(p.message || "").trim();
           if (message) setLive(id, live => ({ ...ensure(live), status: message }));

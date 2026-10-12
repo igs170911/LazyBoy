@@ -45,3 +45,37 @@ export function bytes(value: number) {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10240 ? 1 : 0)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/** Punycode (RFC 3492) labels such as `xn--rsso55b` back to Unicode, for showing domain names. */
+export function unicodeHost(host: string) {
+  return host.split(".").map(label => {
+    if (!label.toLowerCase().startsWith("xn--")) return label;
+    try {
+      const input = label.slice(4), base = 36, out: number[] = [];
+      let n = 128, i = 0, bias = 72, pos = 0;
+      const dash = input.lastIndexOf("-");
+      if (dash > 0) { for (const ch of input.slice(0, dash)) out.push(ch.charCodeAt(0)); pos = dash + 1; }
+      const digit = (c: number) => c >= 48 && c <= 57 ? c - 22 : c >= 65 && c <= 90 ? c - 65 : c >= 97 && c <= 122 ? c - 97 : base;
+      while (pos < input.length) {
+        const old = i;
+        for (let w = 1, k = base; ; k += base) {
+          const d = digit(input.charCodeAt(pos++));
+          if (d >= base || pos > input.length + 1) return label;
+          i += d * w;
+          const t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+          if (d < t) break;
+          w *= base - t;
+        }
+        let delta = old === 0 ? Math.floor((i - old) / 700) : (i - old) >> 1;
+        delta += Math.floor(delta / (out.length + 1));
+        let k = 0;
+        for (; delta > 455; k += base) delta = Math.floor(delta / 35);
+        bias = Math.floor(k + 36 * delta / (delta + 38));
+        n += Math.floor(i / (out.length + 1));
+        i %= out.length + 1;
+        out.splice(i++, 0, n);
+      }
+      return String.fromCodePoint(...out);
+    } catch { return label; }
+  }).join(".");
+}

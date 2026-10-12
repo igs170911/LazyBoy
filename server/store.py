@@ -112,6 +112,34 @@ class Store:
             rows = self.conn.execute("SELECT * FROM events WHERE agent=? AND id>? ORDER BY id LIMIT ?", (agent, since, limit))
             return [{"id": r["id"], "kind": r["kind"], "task_id": r["task"], "payload": json.loads(r["payload"])} for r in rows]
 
+    # Records owned by one bot: deleted with it (imports stay as provenance of created bots).
+    OWNED = ("tasks", "uploads", "lessons")
+
+    def purge_agent(self, agent):
+        """Everything stored for a deleted bot outside its own data directory."""
+        with self.transaction() as c:
+            c.execute("DELETE FROM events WHERE agent=?", (agent,))
+            c.execute("DELETE FROM admissions WHERE agent=?", (agent,))
+            c.execute("DELETE FROM messages WHERE agent=?", (agent,))
+            c.execute(f"DELETE FROM objects WHERE bucket IN ({','.join('?' * len(self.OWNED))}) AND json_extract(data,'$.agent_id')=?", (*self.OWNED, agent))
+            c.execute("DELETE FROM objects WHERE bucket IN ('files','mcp') AND id=?", (agent,))
+
+    def purge_orphans(self):
+        """Rows left behind by bots deleted before purge_agent existed. Returns how many bots were cleaned."""
+        with self.lock:
+            live = {row[0] for row in self.conn.execute("SELECT id FROM objects WHERE bucket='agents'")}
+            owners = {row[0] for row in self.conn.execute("SELECT agent FROM events UNION SELECT agent FROM admissions UNION SELECT agent FROM messages")}
+            owners |= {row[0] for row in self.conn.execute(f"SELECT json_extract(data,'$.agent_id') FROM objects WHERE bucket IN ({','.join('?' * len(self.OWNED))})", self.OWNED) if row[0]}
+            owners |= {row[0] for row in self.conn.execute("SELECT id FROM objects WHERE bucket='files'")}
+        gone = owners - live
+        for agent in gone: self.purge_agent(agent)
+        return len(gone)
+
+    def prune_events(self, agent, keep=5000):
+        """The journal only feeds live streams and short reconnects; finished turns keep their own trail."""
+        with self.transaction() as c:
+            c.execute("DELETE FROM events WHERE agent=? AND id < (SELECT id FROM events WHERE agent=? ORDER BY id DESC LIMIT 1 OFFSET ?)", (agent, agent, keep - 1))
+
     def last_event_id(self, agent):
         with self.lock: return self.conn.execute("SELECT COALESCE(MAX(id),0) FROM events WHERE agent=?", (agent,)).fetchone()[0]
 

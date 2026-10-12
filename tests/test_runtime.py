@@ -156,3 +156,228 @@ def test_skills_are_real_hermes_files_and_toggles(product):
     assert "Read primary sources." in path.read_text()
     assert not skills.manage(id,{"action":"toggle","id":row["id"],"enabled":False})[0]["enabled"]
     with pytest.raises(ValueError): skills.manage(id,{"action":"save","id":"../../elsewhere","name":"Bad","instructions":"Bad"})
+
+
+def test_tool_failure_follows_hermes_result_not_a_missing_error_flag():
+    from server.runtime import tool_failed
+    assert tool_failed({"result": {"output": "", "exit_code": 1, "error": None}})
+    assert tool_failed({"result": json.dumps({"success": False})})
+    assert tool_failed({"result": {"error": "ConnectError"}})
+    assert not tool_failed({"result": {"output": "ok", "exit_code": 0}})
+    assert not tool_failed({"result": "plain text output"})
+    assert not tool_failed({"result": {"exit_code": False}})
+
+
+def test_prepare_enables_agent_tools_skips_smart_approval_and_writes_search_key(product):
+    store, settings, computers, _, id = product
+    root = store.agent_directory(id) / "hermes"
+    (root / ".env").parent.mkdir(parents=True, exist_ok=True)
+    (root / ".env").write_text("MY_SAVED_SECRET=private\nEXA_API_KEY=stale\n")
+    settings.update({"search": {"provider": "tavily", "api_key": "tv-key", "xai_api_key": "xai-key"}})
+    computers.prepare(id)
+    import yaml
+    config = yaml.safe_load((root / "config.yaml").read_text())
+    tools = config["platform_toolsets"]["cli"]
+    assert {"delegation", "code_execution", "session_search", "x_search"} <= set(tools)
+    assert "vision" not in tools
+    assert config["approvals"]["mode"] == "off"
+    assert config["web"]["backend"] == "tavily" and "provider" not in config["web"]
+    env = (root / ".env").read_text()
+    assert "TAVILY_API_KEY=tv-key" in env and "XAI_API_KEY=xai-key" in env
+    assert "EXA_API_KEY=stale" in env and "MY_SAVED_SECRET=private" in env  # not written by LazyBoy: kept
+    public = settings.public()["search"]
+    assert public == {"provider": "tavily", "providers": ["exa", "tavily", "brave-free", "ddgs"], "has_key": True, "has_xai_key": True}
+    assert "tv-key" not in json.dumps(settings.public())
+    settings.update({"search": {"provider": "exa"}})
+    assert settings.search()["api_key"] == "" and settings.search()["xai_api_key"] == "xai-key"
+    with pytest.raises(ValueError): settings.update({"search": {"provider": "google"}})
+
+
+async def test_failed_tool_reaches_the_step_timeline(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
+    await runtime.event(id, {"type": "tool.complete", "payload": {"name": "terminal", "tool_id": "t1", "duration_s": 1.5,
+                                                                    "summary": "exit 1", "result": {"output": "", "exit_code": 1}}})
+    finished = [e for e in store.events(id) if e.get("payload", {}).get("type") == "tool_finished"]
+    assert finished[-1]["payload"]["success"] is False and finished[-1]["payload"]["duration"] == 1.5
+
+
+async def test_finished_turn_keeps_steps_plan_and_sources(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
+    hit = {"data": {"web": [{"url": "https://a.example/news", "title": "A **news**"}, {"url": "https://b.example", "title": "B"}]}}
+    page = {"results": [{"url": "https://b.example", "title": "B page", "content": "x"}, {"url": "https://c.example", "error": "403"}]}
+    for tool_id, tool, result in [("s1", "web_search", hit), ("e1", "web_extract", page), ("t1", "terminal", {"exit_code": 2})]:
+        await runtime.event(id, {"type": "tool.start", "payload": {"name": tool, "tool_id": tool_id, "context": tool}})
+        await runtime.event(id, {"type": "tool.complete", "payload": {"name": tool, "tool_id": tool_id, "result": result, "summary": "boom", "duration_s": 0.25}})
+    await runtime.event(id, {"type": "todo.updated", "payload": {"todos": [{"id": "1", "content": "查資料", "status": "completed"}, {"id": "2", "content": "寫報告", "status": "in_progress"}], "revision": 2}})
+    assert store.get("tasks", task)["plan"] == [{"content": "查資料", "status": "completed"}, {"content": "寫報告", "status": "in_progress"}]
+    runtime.finish(id, task, "answer", "done")
+    saved = store.get("tasks", task)
+    assert [s["state"] for s in saved["steps"]] == ["done", "done", "failed"]
+    assert saved["steps"][2]["detail"] == "boom" and saved["steps"][0]["detail"] == "web_search"
+    assert saved["steps"][0]["duration"] == round(0.25, 1)
+    assert saved["sources"] == [{"url": "https://b.example", "title": "B", "kind": "read"},
+                                {"url": "https://a.example/news", "title": "A news", "kind": "search"}]
+
+
+async def test_watchdog_interrupts_a_silent_turn_then_fails_it(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "session_id": "s", "created_at": now()})
+    calls = []
+    async def call(method, params): calls.append(method)
+    runtime.clients[id] = SimpleNamespace(alive=True, call=call)
+    runtime.finished[task] = asyncio.Event()
+    runtime.IDLE_LIMIT, runtime.STOP_GRACE, runtime.WATCH_INTERVAL = 0.05, 0.05, 0.01
+    await asyncio.wait_for(runtime.watch(id, task), 2)
+    assert calls == ["session.interrupt"]
+    saved = store.get("tasks", task)
+    assert saved["state"] == "terminal" and saved["verdict"] == "failed"
+
+
+async def test_watchdog_ends_a_stop_hermes_never_confirms(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "session_id": "s", "created_at": now()})
+    async def call(method, params): return {}
+    runtime.clients[id] = SimpleNamespace(alive=True, call=call)
+    runtime.finished[task] = asyncio.Event()
+    runtime.STOP_GRACE, runtime.WATCH_INTERVAL = 0.05, 0.01
+    await runtime.stop(id)
+    await asyncio.wait_for(runtime.watch(id, task), 2)
+    assert store.get("tasks", task)["verdict"] == "cancelled"
+
+
+async def test_watchdog_never_fires_while_waiting_for_the_user(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "waiting_input", "session_id": "s", "created_at": now()})
+    runtime.finished[task] = asyncio.Event()
+    runtime.IDLE_LIMIT, runtime.WATCH_INTERVAL = 0.02, 0.01
+    watcher = asyncio.create_task(runtime.watch(id, task))
+    await asyncio.sleep(0.1)
+    assert not watcher.done() and store.get("tasks", task)["state"] == "waiting_input"
+    runtime.finished[task].set()
+    await asyncio.wait_for(watcher, 1)
+
+
+async def test_stream_writes_are_throttled_but_every_delta_is_journaled(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
+    writes = []
+    original = store.message
+    store.message = lambda *a, **k: writes.append(a) or original(*a, **k)
+    for word in ["一", "二", "三", "四"]:
+        await runtime.event(id, {"type": "message.delta", "payload": {"text": word}})
+    assert len(writes) == 1
+    assert [e["payload"]["delta"] for e in store.events(id) if e["payload"].get("type") == "message_delta"] == ["一", "二", "三", "四"]
+    runtime.finish(id, task, "answer", "")
+    assert store.transcript(id)[-1]["content"] == "一二三四"
+
+
+async def test_listeners_wake_on_new_events(product):
+    store, _, _, runtime, id = product
+    with runtime.listen(id) as wake:
+        assert not wake.is_set()
+        runtime.emit(id, "reply", {})
+        assert wake.is_set()
+    assert not runtime.listeners[id]
+
+
+def test_prune_events_keeps_the_recent_journal(product):
+    store, _, _, _, id = product
+    for _ in range(12): store.event(id, "reply", {})
+    store.prune_events(id, keep=5)
+    assert len(store.events(id)) == 5
+
+
+def test_failed_provider_errors_get_a_plain_language_first_line(product):
+    store, _, _, runtime, id = product
+    task = uid()
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
+    runtime.finish(id, task, "failed", "custom:product rejected this request as malformed. Run hermes doctor.\n\nProvider said: HTTP 400: Model does not support this protocol.")
+    reply = store.transcript(id)[-1]["content"]
+    assert reply.startswith("模型的 API 介面設定不對") and "原始錯誤：" in reply and "hermes doctor" in reply
+
+
+async def test_model_switch_waits_for_a_resumed_agent(product):
+    store, settings, computers, runtime, id = product
+    settings.update({"provider": {"id": "relay", "base_url": "https://relay.example/v1", "api_key": "k", "models": [{"id": "m", "protocol": "messages"}]}, "active": "relay", "model": "m"})
+    calls = []
+    async def call(method, params=None, *a, **k):
+        calls.append(method)
+        if method == "prompt.submit":
+            runtime.finish(id, runtime.active[id], "answer", "ok")
+        return {}
+    client = SimpleNamespace(alive=True, call=call)
+    async def no_client(_): return client
+    async def no_session(*_): return "sid"
+    async def no_files(*_, **__): return []
+    runtime.client, runtime.session, runtime.refresh_files = no_client, no_session, no_files
+    computers.prepare = lambda _: None
+    await runtime.submit(id, "hello", "r1")
+    await asyncio.wait_for(runtime.runners[id], 5)
+    assert calls.index("approval.pending") < calls.index("config.set")
+
+
+async def test_watchdog_interrupt_reported_as_failure_not_user_stop(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
+    runtime.stalled[task] = 0
+    await runtime.event(id, {"type": "message.complete", "payload": {"status": "interrupted", "text": ""}})
+    saved = store.get("tasks", task)
+    assert saved["verdict"] == "failed" and "沒有回應" in store.transcript(id)[-1]["content"]
+
+
+async def test_stream_tail_is_flushed_without_a_further_delta(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
+    runtime.PERSIST_INTERVAL = 0.05
+    for word in ["一", "二"]:
+        await runtime.event(id, {"type": "message.delta", "payload": {"text": word}})
+    await asyncio.sleep(0.15)
+    assert store.transcript(id)[-1]["content"] == "一二"
+
+
+def test_env_keeps_keys_lazyboy_did_not_write(product):
+    store, settings, computers, _, id = product
+    root = store.agent_directory(id) / "hermes"
+    (root / ".env").write_text("XAI_API_KEY=user-own\n")
+    computers.prepare(id)
+    assert "XAI_API_KEY=user-own" in (root / ".env").read_text()
+    settings.update({"search": {"provider": "exa", "api_key": "ex"}})
+    computers.prepare(id)
+    assert "EXA_API_KEY=ex" in (root / ".env").read_text() and id in computers.env_dirty
+    settings.update({"search": {"provider": "ddgs"}})
+    computers.prepare(id)
+    env = (root / ".env").read_text()
+    assert "EXA_API_KEY" not in env and "XAI_API_KEY=user-own" in env
+
+
+def test_prune_is_per_bot(product):
+    store, _, _, _, id = product
+    other = uid()
+    for _ in range(6): store.event(id, "reply", {}); store.event(other, "reply", {})
+    store.prune_events(id, keep=4)
+    assert len(store.events(id)) == 4 and len(store.events(other)) == 6
+
+
+def test_deleting_a_bot_leaves_no_records_and_startup_clears_old_orphans(product):
+    store, _, _, _, id = product
+    other = uid()
+    store.put("agents", other, {"id": other, "name": "Keep"})
+    for owner in (id, other):
+        store.event(owner, "reply", {}); store.admit(owner, "r-" + owner, "t-" + owner, "x"); store.message(owner, "user", "hi")
+        store.put("tasks", "t-" + owner, {"id": "t-" + owner, "agent_id": owner, "state": "terminal"})
+        store.put("uploads", "u-" + owner, {"id": "u-" + owner, "agent_id": owner}); store.put("files", owner, [])
+    store.remove("agents", id)  # deleted the old way: rows left behind
+    assert store.purge_orphans() == 1 and store.purge_orphans() == 0
+    assert store.events(id) == [] and store.transcript(id) == [] and store.admission(id, "r-" + id) is None
+    assert store.get("tasks", "t-" + id) is None and store.get("uploads", "u-" + id) is None and store.get("files", id) is None
+    assert store.events(other) and store.transcript(other) and store.get("tasks", "t-" + other) and store.get("files", other) == []

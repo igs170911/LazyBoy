@@ -27,6 +27,7 @@ def test_builtin_skills_seed_once_and_respect_deletion(tmp_path):
     seed_skills(tmp_path)
     skill = tmp_path / "grok-build" / "SKILL.md"
     assert "grok --no-auto-update" in skill.read_text()
+    assert "delegate_task" in (tmp_path / "deep-research" / "SKILL.md").read_text()
     skill.unlink(); skill.parent.rmdir()
     seed_skills(tmp_path)
     assert not skill.exists()

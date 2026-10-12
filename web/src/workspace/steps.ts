@@ -38,6 +38,11 @@ export function stepLabel(name: string) {
   return LABELS[stepKind(name)];
 }
 
+/** The step trail the server saved with a finished task, in the live timeline's shape. */
+export function savedSteps(rows?: { id: string; name: string; detail?: string; state: "running" | "done" | "failed" }[]) {
+  return (rows || []).map(row => ({ id: row.id, name: row.name, label: stepLabel(row.name), detail: stepDetail(row.detail || ""), state: row.state }));
+}
+
 export function stepDetail(detail: string) {
   const text = detail.replace(/\s+/g, " ").trim();
   return text.length > 140 ? text.slice(0, 137) + "…" : text;
