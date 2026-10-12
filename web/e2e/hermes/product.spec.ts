@@ -52,12 +52,14 @@ test("create, choose model, save native skill, export and import an independent 
   await settings.getByLabel("什麼時候使用").fill("核對工作成果時");
   await settings.getByLabel("操作步驟").fill("讀回實際檔案，確認內容與使用者要求一致，再提供下載路徑。");
   await settings.getByRole("button", { name: "儲存技能", exact: true }).click();
-  await expect(settings.locator(".skill-row")).toHaveCount(1);
+  // Built-in skills (e.g. deep-research) are listed too; follow the one this test created.
+  const mine = settings.locator(".skill-row", { hasText: "web-verified-workflow" });
+  await expect(mine).toHaveCount(1);
   await settings.getByRole("button", { name: "停用 web-verified-workflow" }).click();
-  await expect(settings.locator(".skill-row")).toContainText("已停用");
+  await expect(mine).toContainText("已停用");
   await settings.getByRole("button", { name: "儲存並分享 Bot" }).click();
   const sharing = page.getByRole("dialog", { name: "分享 Bot", exact: true });
-  await expect(sharing).toContainText("1 個技能");
+  await expect(sharing).toContainText("web-verified-workflow · 已停用");
   const downloaded = page.waitForEvent("download");
   await sharing.getByRole("button", { name: "下載分享檔案" }).click();
   const download = await downloaded;
@@ -65,7 +67,8 @@ test("create, choose model, save native skill, export and import an independent 
   expect(file).toBeTruthy();
   const template = JSON.parse(await readFile(file!, "utf8"));
   expect(template.profile.name).toBe(newName);
-  expect(template.skills[0].enabled).toBe(false);
+  const skill = (rows: {name:string; enabled:boolean}[]) => rows.find(row => row.name === "web-verified-workflow");
+  expect(skill(template.skills)?.enabled).toBe(false);
   const saved = await (await request.get(`/api/agents/${current}`)).json();
   expect(saved.provider).toBe(available.id);
   expect(saved.model).toBe(available.models[0].id);
@@ -79,14 +82,14 @@ test("create, choose model, save native skill, export and import an independent 
   const copy = await result.json(); owned.push(copy.id);
   expect(copy.id).not.toBe(current);
   expect(copy.provider).toBe("");
-  await expect(importer.getByRole("status")).toContainText("1 個技能");
+  await expect(importer.getByRole("status")).toContainText(`${template.skills.length} 個技能`);
   await importer.getByRole("button", { name: "開始對話", exact: true }).click();
   await expect(chatTitle(page)).toHaveText(`${newName} (2)`);
   await page.reload();
   if (info.project.name === "mobile") await page.locator(".bot-row-main", {hasText:`${newName} (2)`}).click();
   await expect(chatTitle(page)).toHaveText(`${newName} (2)`);
   const importedSkills = await (await request.post(`/api/agents/${copy.id}/skills`, { data:{action:"list"} })).json();
-  expect(importedSkills.skills[0].enabled).toBe(false);
+  expect(skill(importedSkills.skills)?.enabled).toBe(false);
   await page.screenshot({ path:info.outputPath("imported-bot.png"), fullPage:true });
 });
 

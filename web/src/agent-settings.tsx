@@ -532,7 +532,7 @@ export function AgentSettingsDialog({
               const model = provider?.models.some((item) => item.id === chatModel) ? chatModel : provider?.models[0]?.id || "";
               setChatModel(model);
             }}><option value="">使用全域設定</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.label || provider.id}</option>)}</select></label>
-            {chatProvider ? <label>模型<select value={chatModel} onChange={(event) => setChatModel(event.target.value)}>{(providers.find((provider) => provider.id === chatProvider)?.models || []).map((item) => {
+            {chatProvider ? <label>模型<select aria-label="模型" value={chatModel} onChange={(event) => setChatModel(event.target.value)}>{(providers.find((provider) => provider.id === chatProvider)?.models || []).map((item) => {
               const broken = ["unavailable", "auth", "protocol"].includes(item.check?.status || "");
               return <option key={item.id} value={item.id} disabled={broken && item.id !== chatModel}>{item.label || item.id}{broken ? "（無法使用）" : ""}</option>;
             })}</select>
