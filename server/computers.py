@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -68,6 +69,36 @@ def seed_skills(target):
     if seeded: private_write(marker, "\n".join(sorted(seeded)) + "\n")
 
 
+_remapped = None
+
+
+def remapped_docker():
+    """Rootless Docker or userns-remap: UIDs inside a container are not host UIDs, so a container chown to the
+    host user's UID hands files to some other host UID. There the container's root already is the host user."""
+    global _remapped
+    if _remapped is None:
+        try:
+            out = subprocess.run(["docker", "info", "--format", "{{json .SecurityOptions}}"], capture_output=True, text=True, timeout=15).stdout
+            _remapped = "rootless" in out or "userns" in out
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return _remapped
+
+
+def container_user():
+    """The UID:GID the bot's processes run as inside its computer; 0 keeps the container's root."""
+    return (0, 0) if remapped_docker() else (os.getuid(), os.getgid())
+
+
+def reclaim(root):
+    """Give a bot's files back to the host user after a remapped container took them (its root is the host user)."""
+    if not remapped_docker(): return False
+    mounts = [arg for name in ("hermes", "home", "workspace") for arg in ("-v", f"{root / name}:/reclaim/{name}")]
+    result = subprocess.run(["docker", "run", "--rm", "--user", "0:0", "--entrypoint", "chown", *mounts, IMAGE, "-R", "0:0", "/reclaim"],
+                            capture_output=True, text=True, timeout=120)
+    return result.returncode == 0
+
+
 async def docker(*args, timeout=45, check=True, input=None):
     process = await asyncio.create_subprocess_exec("docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                                                    stdin=asyncio.subprocess.PIPE if input is not None else None)
@@ -117,6 +148,13 @@ class Computers:
                 with contextlib.suppress(OSError): shutil.move(str(path), shared / path.name)
 
     def prepare(self, id):
+        try: return self._prepare(id)
+        except PermissionError:
+            # Files a remapped container chowned away; take them back once and write again.
+            if not reclaim(self.store.agent_directory(id)): raise
+            return self._prepare(id)
+
+    def _prepare(self, id):
         agent = self.store.get("agents", id)
         if not agent: raise KeyError(id)
         root = self.store.agent_directory(id)
@@ -248,17 +286,21 @@ class Computers:
             root = self.prepare(id)
             item = await self.inspect(id)
             labels = (item or {}).get("Config", {}).get("Labels") or {}
+            uid, gid = container_user()
             outdated = bool(item) and (labels.get("lazyhermes.limits") != LIMITS or labels.get("lazyhermes.mounts") != MOUNTS)
+            # A computer running as the wrong user keeps taking its files away from the product: replace it now.
+            wrong_user = bool(item) and labels.get("lazyhermes.user", f"{os.getuid()}:{os.getgid()}") != f"{uid}:{gid}"
             # Resource limits and mounts only change on a new container; never interrupt a running desktop just for that.
-            if item and (action == "update" or (outdated and (action == "restart" or not item["State"]["Running"]))):
+            if item and (action == "update" or wrong_user or (outdated and (action == "restart" or not item["State"]["Running"]))):
                 await docker("stop", "-t", "20", self.name(id), timeout=30)
                 await docker("rm", self.name(id))
+                if wrong_user: await asyncio.to_thread(reclaim, root)
                 item = None
             if item:
                 await docker("restart" if action == "restart" else "start", self.name(id), timeout=45)
             else:
                 await docker("run", "-d", "--name", self.name(id), "--label", f"lazyhermes.bot={id}", "--label", "lazyhermes.managed=true", "--label", f"lazyhermes.limits={LIMITS}", "--label", f"lazyhermes.mounts={MOUNTS}",
-                             "-e", f"LAZYHERMES_UID={os.getuid()}", "-e", f"LAZYHERMES_GID={os.getgid()}",
+                             "--label", f"lazyhermes.user={uid}:{gid}", "-e", f"LAZYHERMES_UID={uid}", "-e", f"LAZYHERMES_GID={gid}",
                              "--restart", "unless-stopped", *RESOURCES,
                              "--add-host", "host.docker.internal:host-gateway", "-p", "127.0.0.1::8642", "-p", "127.0.0.1::6080",
                              "-v", f"{self.store.directory / 'ipc'}:/product-ipc:ro", "-v", f"{root / 'hermes'}:/hermes", "-v", f"{root / 'home'}:/home/box", "-v", f"{root / 'workspace'}:/workspace",
