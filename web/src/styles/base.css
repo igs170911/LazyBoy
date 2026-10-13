@@ -38,16 +38,17 @@
 }
 
 :root[data-theme="light"] {
-  --bg: #fbfbfc;
-  --surface: #f4f4f6;
-  --panel: #ffffff;
-  --elev: #efeff3;
-  --hover: #e9e9ee;
-  --line: #e4e4ea;
-  --line-strong: #d2d2da;
-  --text: #17171b;
-  --muted: #5d5d68;
-  --faint: #8a8a96;
+  /* Light gray, not paper white: a white page glares and washes out the muted text. */
+  --bg: #eceef1;
+  --surface: #e3e5e9;
+  --panel: #f6f7f9;
+  --elev: #dcdfe4;
+  --hover: #d5d8de;
+  --line: #d0d3da;
+  --line-strong: #b9bdc6;
+  --text: #0f0f13;
+  --muted: #3c3d47;
+  --faint: #5c5e69;
   --accent: #6b5ae6;
   --accent-strong: #5a48d8;
   --accent-soft: rgba(107, 90, 230, .11);
@@ -57,11 +58,30 @@
   --warn-soft: rgba(185, 119, 0, .1);
   --danger: #d43c3c;
   --danger-soft: rgba(212, 60, 60, .09);
-  --user-bubble: #ececf2;
+  --user-bubble: #dcdfe6;
   --shadow: 0 18px 50px rgba(20, 20, 40, .16), 0 2px 8px rgba(20, 20, 40, .08);
   --shadow-s: 0 4px 16px rgba(20, 20, 40, .1);
   --backdrop: rgba(30, 30, 40, .32);
   color-scheme: light;
+}
+
+/* Links keep a readable blue whatever the accent; the violet accent keeps its own. */
+:root { --link: #8ab4f8; }
+:root[data-theme="light"] { --link: #1a56db; }
+:root[data-accent="violet"] { --link: var(--accent-strong); }
+
+/* Grok's black-and-white accent: primary actions are white on dark and black on light. */
+:root[data-accent="mono"] {
+  --accent: #ececf1;
+  --accent-strong: #ffffff;
+  --accent-ink: #111114;
+  --accent-soft: rgba(255, 255, 255, .09);
+}
+:root[data-theme="light"][data-accent="mono"] {
+  --accent: #18181b;
+  --accent-strong: #000000;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(0, 0, 0, .07);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -81,7 +101,7 @@ h1, h2, h3, h4 { margin: 0; line-height: 1.3; font-weight: 650; }
 h2 { font-size: 18px; }
 h3 { font-size: 15px; }
 p { margin: 0; }
-a { color: var(--accent-strong); }
+a { color: var(--link); }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
@@ -196,3 +216,8 @@ details > summary:hover { color: var(--text); }
 .avatar.blobatar.photo > img { border-radius: 50%; object-fit: cover; }
 .avatar.blobatar.thinking::before { content: ""; position: absolute; z-index: 4; inset: -5px; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0 10%, var(--accent) 22%, transparent 34% 52%, #34d9ff 64%, transparent 76%); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); pointer-events: none; animation: magic-orbit 1.4s linear infinite; }
 .avatar .presence { position: absolute; z-index: 6; right: -1px; bottom: -1px; width: 10px; height: 10px; border: 2px solid var(--surface); border-radius: 50%; background: var(--ok); }
+
+/* People who ask their system for less motion get no entrance animations or slides. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

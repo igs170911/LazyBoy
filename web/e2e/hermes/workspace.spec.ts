@@ -37,6 +37,7 @@ function setup() {
     if (request.method() !== "GET") state.requests.push({ method: request.method(), path, body: request.postData() ? JSON.parse(request.postData()!) : undefined });
     if (path === "/api/auth/status") return json({ authenticated: true });
     if (path === "/api/agents" && request.method() === "GET") return json({ agents: [row()], groups: [] });
+    if (path === "/api/rooms" && request.method() === "GET") return json({ rooms: [] });
     if (path === `/api/agents/${AGENT}`) {
       const thread = url.searchParams.get("thread");
       const transcript = thread ? state.threadTranscripts[thread] || [] : state.transcript;
@@ -85,6 +86,7 @@ function setup() {
 }
 
 async function open(page: Page, fixture: ReturnType<typeof setup>) {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
     localStorage.setItem("lazyhermes.active", "fixture-bot");
     const sources: { onmessage?: (event: { data: string }) => void; onopen?: () => void; url: string }[] = [];
@@ -282,7 +284,11 @@ test("threads split one bot into separate conversations that share its computer"
   const fixture = setup();
   await open(page, fixture);
   await expect(page.getByRole("tablist", { name: "對話串" })).toHaveCount(0);
-  await page.getByRole("button", { name: "新對話" }).click();
+  if ((page.viewportSize()?.width || 1280) <= 860) {
+    // A phone header keeps three actions; 新對話 is in its menu.
+    await page.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "新對話" }).click();
+  } else await page.getByRole("button", { name: "新對話" }).click();
   const tabs = page.getByRole("tablist", { name: "對話串" });
   await expect(tabs.getByRole("tab", { name: "新對話" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".chat-empty")).toContainText("測試 Bot 的另一段對話");
@@ -443,4 +449,35 @@ test("teaching: demonstrate on the bot's computer, edit the steps, and hand it o
   const actions = fixture.state.posts.filter(post => post.path.endsWith("/teach")).map(post => post.body.action);
   expect(actions).toEqual(["start", "drop", "note", "pause", "resume", "finish"]);
   expect(errors).toEqual([]);
+});
+
+test("a reply loaded mid-stream does not repeat text the reconnecting stream replays", async ({ page }) => {
+  const fixture = setup();
+  fixture.state.activity = { ...IDLE, state: "running", running: true, active_task_ids: ["t1"] };
+  fixture.state.transcript = [...fixture.state.transcript,
+    { id: "m2", role: "user", content: "寫一份報告", at: "2026-10-08T01:02:00Z" },
+    { id: "delta:t1", role: "assistant", content: "第一段", at: "2026-10-08T01:02:10Z", streaming: true, stream_event: 50 }];
+  await open(page, fixture);
+  const reply = page.locator(".msg.assistant.streaming");
+  await expect(reply).toContainText("第一段");
+  // Event 49 is already in the loaded copy; 51 is new.
+  await emit(page, [
+    { id: 49, kind: "runtime", task_id: "t1", payload: { type: "message_delta", id: "t1", delta: "第一段" } },
+    { id: 51, kind: "runtime", task_id: "t1", payload: { type: "message_delta", id: "t1", delta: "，第二段" } },
+  ] as never);
+  await expect(reply).toContainText("第一段，第二段");
+  expect(((await reply.innerText()).match(/第一段/g) || []).length).toBe(1);
+});
+
+test("text shared from another app goes into the chosen conversation's composer", async ({ page }) => {
+  const fixture = setup();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => { (window as unknown as { EventSource: unknown }).EventSource = class { close() {} }; });
+  await page.route("**/api/**", fixture.handle);
+  await page.goto("/?share_title=" + encodeURIComponent("好文") + "&share_text=" + encodeURIComponent("看這篇 https://example.com/a") + "&share_url=" + encodeURIComponent("https://example.com/a"));
+  const dialog = page.getByRole("dialog", { name: "分享到 LazyBoy" });
+  await expect(dialog).toContainText("看這篇 https://example.com/a");
+  await dialog.getByRole("button", { name: /測試 Bot/ }).click();
+  await expect(page.getByRole("textbox", { name: "訊息" })).toHaveValue("好文\n看這篇 https://example.com/a");
+  expect(new URL(page.url()).search).toBe("");
 });

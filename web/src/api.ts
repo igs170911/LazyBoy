@@ -34,7 +34,7 @@ export type AgentActivity = {
   state: "idle" | "queued" | "running" | "waiting_input" | "waiting_approval" | "stopping";
   running: boolean;
   queued: boolean;
-  observed_at_ms: number;
+  observed_at_ms?: number;
   active_task_ids: string[];
   latest_task_id?: string | null;
   queued_task_ids?: string[];
@@ -141,6 +141,8 @@ export type AgentGroup = { id: string; name: string; position?: number };
 export type AgentSkill = { id: string; name: string; description: string; instructions: string; enabled: boolean; updated_at: string; source?: string };
 
 export type AgentRow = {
+  /** Grok's Primary Bot: the one the others hand coordination to; marked with a star. */
+  primary?: boolean;
   /** Kept at the top of the sidebar. */
   pinned?: boolean;
   /** Folded into "已隱藏" at the bottom of the sidebar. */
@@ -152,6 +154,8 @@ export type AgentRow = {
   avatar_expression?: string;
   persona?: string;
   reply_style?: string;
+  /** Actions with outside effects the bot must clear with the user first (send, publish, pay, delete). */
+  ask_first?: string[];
   skill_count?: number;
   id: string;
   name: string;
@@ -172,6 +176,7 @@ export type AgentRow = {
 };
 
 export type AgentProfile = {
+  ask_first?: string[];
   group_id?: string;
   avatar_traits?: Record<string, number>;
   avatar_expression?: string;
@@ -189,7 +194,9 @@ export type AgentProfile = {
 
 /** Who a message came from when it was not the user: another bot ("message_in"), or this bot's hand-off ("message_out"). */
 export type PeerFields = { room_id?: string; event?: "message_in" | "message_out" | "group_created" | "group_post" | "bot_created" | "profile_updated" | "question_expired"; from_agent?: string; from_name?: string; peer_id?: string; peer_name?: string; intent?: "request" | "question" | "result" | "fyi"; message_id?: string; silent?: boolean };
-export type TranscriptItem = PeerFields & { id?: string; role: "user" | "assistant" | "event"; content: string; at?: string; streaming?: boolean; narration?: string[]; routine_id?: string; routine_title?: string; lesson_id?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
+export type TranscriptItem = PeerFields & { id?: string; role: "user" | "assistant" | "event"; content: string; at?: string; streaming?: boolean; reactions?: string[];
+  /** The last journal event a stored, still-streaming reply already contains. */
+  stream_event?: number; narration?: string[]; routine_id?: string; routine_title?: string; lesson_id?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
 
 export type ModelProtocol = "chat_completions" | "responses" | "messages";
 export type ModelCheck = { status: "ok" | "protocol" | "unavailable" | "auth" | "busy" | "unknown"; message: string; detail?: string; at?: number; v?: number; protocol?: ModelProtocol | null };
@@ -259,6 +266,14 @@ export type AgentDetail = AgentRow & {
 
 /** `important` is false for build output, caches and lock files; they stay behind "顯示全部". */
 /** Bytes a bot uses on disk, by kind. */
+type TokenCounts = { requests: number; input: number; output: number; cached: number; reasoning: number; cost?: number };
+export type ProviderUsage = TokenCounts & {
+  provider: string; label: string; configured: boolean; errors: number;
+  models: (TokenCounts & { model: string })[];
+  days: { day: string; tokens: number }[];
+};
+export type ProviderUsageSummary = { days: number; since: string; providers: ProviderUsage[] };
+
 export type StorageUsage = { workspace: number; uploads: number; caches: number; browser: number; tools: number; other: number; total: number };
 
 export type RoomMember = Pick<AgentRow, "id" | "name" | "title" | "avatar_color" | "avatar_shape" | "avatar_url" | "avatar_traits" | "avatar_expression"> & {
@@ -266,9 +281,22 @@ export type RoomMember = Pick<AgentRow, "id" | "name" | "title" | "avatar_color"
 };
 export type RoomRow = { id: string; name: string; member_ids: string[]; auto_name?: boolean; created_at?: string; updated_at?: string;
   members: RoomMember[]; preview: string; last_at?: string | null; working: string[]; message_count: number };
-export type RoomMessage = { id: string; role: "user" | "assistant"; content: string; at?: string; speaker_id?: string; speaker_name?: string; mentions?: string[]; failed?: boolean; pending?: boolean };
+export type RoomMessage = { id: string; role: "user" | "assistant"; content: string; at?: string; reactions?: string[]; speaker_id?: string; speaker_name?: string; mentions?: string[]; failed?: boolean; pending?: boolean };
 export type RoomDetail = RoomRow & { transcript: RoomMessage[] };
 export type BotMessage = { id: string; from: string; from_name: string; to: string; to_name: string; intent: string; text: string; at: string };
+
+export type SearchMessage = { kind: "bot" | "room"; owner_id: string; owner_name: string; thread_id: string; thread_title: string; message_id: string; role: string; speaker: string; snippet: string; at?: string };
+export type SearchResult = {
+  query: string;
+  bots: { id: string; name: string; title: string; hidden: boolean }[];
+  rooms: { id: string; name: string; members: string[] }[];
+  messages: SearchMessage[];
+  files: { agent_id: string; agent_name: string; path: string; title: string; media_type?: string; updated_at?: string }[];
+  routines: { id: string; agent_id: string; agent_name: string; title: string; enabled: boolean; next_run_at?: string | null }[];
+};
+
+export type ContextUsage = { available: boolean; reason?: string; used?: number; max?: number; percent?: number; estimated?: boolean; model?: string;
+  parts?: { id: string; label: string; tokens: number }[] };
 
 export type MemoryList = { entries: string[]; used: number; limit: number };
 export type MemoryState = { user: MemoryList; memory: MemoryList };
@@ -306,8 +334,12 @@ async function request<T>(path: string, init?: RequestInit, timeout?: number): P
 }
 
 export type Upload = { id: string; name: string; media_type: string; bytes: number; url: string };
-export type RoutineSchedule = { frequency: "once" | "daily" | "weekdays" | "weekly" | "monthly"; timezone: string; time: string; date?: string | null; weekdays?: number[]; day_of_month?: number | null };
-export type Routine = { id: string; agent_id: string; title: string; instructions: string; schedule: RoutineSchedule; enabled: boolean; next_run_at: string | null; last_run_at: string | null; last_task_id: string | null; last_error: string | null; retry_at?: string | null; last_run?: { state: string; verdict?: string | null; at: string } | null };
+export type RoutineSchedule = { frequency: "once" | "daily" | "weekdays" | "weekly" | "monthly" | "interval" | "trigger"; timezone: string; time: string; date?: string | null; weekdays?: number[]; day_of_month?: number | null;
+  /** interval: repeats every this many minutes, counted from `time`. */
+  every_minutes?: number | null };
+export type Routine = { id: string; agent_id: string; title: string; instructions: string; schedule: RoutineSchedule; enabled: boolean;
+  /** The routine's own web address (path), when it can be triggered by other services. */
+  hook_path?: string | null; next_run_at: string | null; last_run_at: string | null; last_task_id: string | null; last_error: string | null; retry_at?: string | null; last_run?: { state: string; verdict?: string | null; at: string } | null };
 export type RoutineRun = { started_at: string; task_id: string; state: string; verdict?: string; result?: {summary?: string} | null };
 export type MediaCapabilities = { images: boolean; pdf: boolean; text: boolean };
 export type UploadLimits = { files: number; file_bytes: number; image_bytes: number; total_bytes: number };
@@ -331,6 +363,15 @@ export const api = {
       return data;
     });
   },
+  /** A group chat attachment, copied to every member's computer. */
+  roomUpload: async (roomId: string, file: File): Promise<Upload> => {
+    return withRequestTimeout(undefined, 60000, async (signal) => {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/uploads?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file, signal });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "上傳失敗，請重試");
+      return data;
+    });
+  },
   health: () => request<{ ok: boolean; service: boolean; model: string; provider?: string }>("/api/health"),
   settings: () => request<AppSettings>("/api/settings"),
   saveSettings: (body: Record<string, unknown>) =>
@@ -348,6 +389,12 @@ export const api = {
     return { agents, groups: Array.isArray(data) ? [] : data.groups || [] };
   },
   exportTemplate: (id: string) => request<AgentTemplate>(`/api/agents/${encodeURIComponent(id)}/template`),
+  logins: (id: string) => request<{ sites: { site: string; cookies: number }[] }>(`/api/agents/${encodeURIComponent(id)}/logins`, undefined, 120000),
+  copyLogins: (id: string, to: string, sites: string[]) => request<{ copied: number; sites: string[] }>(`/api/agents/${encodeURIComponent(id)}/logins/copy`, { method: "POST", body: JSON.stringify({ to, sites }) }, 180000),
+  saveTemplate: (id: string) => request<SavedTemplate>(`/api/agents/${encodeURIComponent(id)}/save-template`, { method: "POST" }, 60000),
+  savedTemplates: () => request<{ templates: SavedTemplate[] }>("/api/saved-templates"),
+  savedTemplate: (key: string) => request<AgentTemplate>(`/api/saved-templates/${encodeURIComponent(key)}`),
+  deleteSavedTemplate: (key: string) => request<{ ok: boolean }>(`/api/saved-templates/${encodeURIComponent(key)}`, { method: "DELETE" }),
   importTemplate: (id: string, template: AgentTemplate, name: string, group_id: string) => request<AgentRow>(`/api/templates/${id}`, {method:"PUT",body:JSON.stringify({template,name,group_id})},60000),
   teaching: (id: string) => request<{ lesson: Lesson | null }>(`/api/agents/${encodeURIComponent(id)}/teach`, undefined, 8000),
   lesson: (id: string, lesson: string) => request<{ lesson: Lesson }>(`/api/agents/${encodeURIComponent(id)}/lessons/${encodeURIComponent(lesson)}`),
@@ -358,7 +405,13 @@ export const api = {
   createAgent: (profile: AgentProfile) =>
     request<AgentRow>("/api/agents", { method: "POST", body: JSON.stringify(profile) }),
   duplicate: (id: string) => request<AgentRow>(`/api/agents/${encodeURIComponent(id)}/duplicate`, { method: "POST" }, 60000),
+  context: (id: string, thread?: string) => request<ContextUsage>(`/api/agents/${encodeURIComponent(id)}/context${thread && thread !== id ? `?thread=${encodeURIComponent(thread)}` : ""}`),
+  compress: (id: string, thread?: string) => request<{ status: string; before_tokens?: number; after_tokens?: number; before_messages?: number; after_messages?: number }>(`/api/agents/${encodeURIComponent(id)}/context/compress${thread && thread !== id ? `?thread=${encodeURIComponent(thread)}` : ""}`, { method: "POST" }, 300000),
+  react: (owner: string, messageId: string, emoji: string) => request<{ id: string; reactions: string[] }>(`/api/conversations/${encodeURIComponent(owner)}/messages/${encodeURIComponent(messageId)}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) }),
+  search: (q: string) => request<SearchResult>(`/api/search?q=${encodeURIComponent(q)}`),
+  providerUsage: (days = 30) => request<ProviderUsageSummary>(`/api/usage?days=${days}`),
   usage: (id: string, days = 7) => request<{ days: number; turns: number; prompt: number; completion: number; total: number; models: { model: string; total: number }[] }>(`/api/agents/${encodeURIComponent(id)}/usage?days=${days}`),
+  setPrimary: (id: string, primary: boolean) => request<{ agents: AgentRow[] }>(`/api/agents/${encodeURIComponent(id)}/primary`, { method: "POST", body: JSON.stringify({ primary }) }),
   sidebar: (id: string, change: { pinned?: boolean; hidden?: boolean }) => request<AgentRow>(`/api/agents/${encodeURIComponent(id)}/sidebar`, { method: "POST", body: JSON.stringify(change) }),
   updateAgent: (id: string, profile: AgentProfile) =>
     request<AgentRow>(`/api/agents/${id}`, { method: "PATCH", body: JSON.stringify(profile) }),
@@ -399,7 +452,7 @@ export const api = {
   deleteThread: (id: string, thread: string) =>
     request<{ ok: boolean }>(`/api/agents/${encodeURIComponent(id)}/threads/${encodeURIComponent(thread)}`, { method: "DELETE" }),
   memory: (id: string) => request<MemoryState>(`/api/agents/${encodeURIComponent(id)}/memory`),
-  saveMemory: (id: string, target: "user" | "memory", entries: string[]) => request<MemoryState>(`/api/agents/${encodeURIComponent(id)}/memory`, { method: "PUT", body: JSON.stringify({ target, entries }) }),
+  saveMemory: (id: string, target: "user" | "memory", entries: string[], previous?: string[]) => request<MemoryState>(`/api/agents/${encodeURIComponent(id)}/memory`, { method: "PUT", body: JSON.stringify({ target, entries, previous }) }),
   storage: (id: string) => request<StorageUsage>(`/api/agents/${encodeURIComponent(id)}/storage`, undefined, 30000),
   cleanStorage: (id: string) => request<{ freed: number; usage: StorageUsage }>(`/api/agents/${encodeURIComponent(id)}/storage/clean`, { method: "POST" }, 90000),
   agentFiles: (id: string) => request<{ files: AgentFile[] }>(`/api/agents/${encodeURIComponent(id)}/files`, undefined, 8000),
@@ -447,6 +500,8 @@ export const api = {
     }, action === "update" ? 960000 : 120000),
 };
 
+/** A bot's setup saved to start new bots from (Grok's templates). */
+export type SavedTemplate = { id: string; name: string; title?: string; blurb?: string; avatar_color?: string; avatar_shape?: string; created_at?: string; skill_count?: number };
 export type AgentTemplate = {format:"lazyboy.agent-template";version:1;profile:AgentProfile;skills:Pick<AgentSkill,"name"|"description"|"instructions"|"enabled">[];mcp:{mcpServers:Record<string,{command?:string;args?:string[];url?:string;headers?:Record<string,string>;env?:Record<string,string>;enabled?:boolean}>};avatar_png?:string;notes:string[]};
 
 export type McpTest = { ok: boolean; error?: string | null; tools?: {name: string; description?: string}[]; at: string };
@@ -456,5 +511,7 @@ export type ConnectorApp = {
   keywords: string[]; hosts: string[]; token_hint?: string; token_url?: string; featured: boolean;
   state: "available" | "signing_in" | "needs_signin" | "checking" | "connected" | "error" | "off";
   tools: { name: string; description?: string }[]; error?: string | null; checked_at?: string | null; signin?: SignIn | null;
+  /** Tools switched off for every bot. */
+  disabled_tools?: string[];
 };
 export type McpServer = { auth?: string | null; catalog?: string | null; signed_in?: boolean | null; signin?: SignIn | null; scope?: string; scope_name?: string; last_test?: McpTest | null; enabled?:boolean; missing_fields?:string[]; server: string; transport: string; url?: string; command?: string; args?: string[]; header_names?: string[]; env_names?: string[]; status?: string; serverStatus?: string; serverError?: string; tools?: {name: string; description?: string}[] };

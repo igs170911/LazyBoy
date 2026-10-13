@@ -103,6 +103,9 @@ class Runtime:
         self.file_baselines = {}
         self.skill_baselines = {}
         self.provider_bindings = {}
+        # Bot id -> the binding its last task used; Hermes keeps calling that provider (titles, compression,
+        # background workers) after the turn, and the proxy must still accept it.
+        self.last_bindings = {}
         self.routes = {}
         self.steps = {}
         self.sources = {}
@@ -114,6 +117,13 @@ class Runtime:
         self.listeners = {}
         self.adopted = {}
         self.worker_owner = {}
+        # Task id -> its thread, for tasks with a turn in flight: every streamed event needs it.
+        self.task_threads = {}
+        # Streamed text waiting to be journaled as one event (deltas arrive a few characters at a time).
+        self.delta_buffers = {}
+        self.delta_flushes = {}
+        # Hermes session id -> True while a turn we stopped waiting for may still send its last events.
+        self.draining = {}
         # Bot id -> lesson id while the human demonstrates on its computer.
         self.teaching = {}
         self.router = Router(settings)
@@ -154,31 +164,39 @@ class Runtime:
     def task_thread(task):
         return task.get("thread_id") or task["agent_id"]
 
-    def activity(self, id):
-        tasks = [t for t in self.store.all("tasks") if t["agent_id"] == id]
+    def activity(self, id, tasks=None):
+        """What a bot is doing now. `tasks` may pass the bot's live tasks (store.agent_tasks(id, live=True)) when the
+        caller already has them; only unfinished tasks and ones with running workers matter, so nothing else is read."""
+        tasks = self.store.agent_tasks(id, live=True) if tasks is None else tasks
         working = [t for t in tasks if t["state"] not in {"terminal", "queued"}]
         queued = [t for t in tasks if t["state"] == "queued"]
-        latest = tasks[-1] if tasks else None
         question = next((t.get("question") for t in working if t.get("question")), None)
         state = working[0]["state"] if working else "queued" if queued else "idle"
         background = [t for t in tasks if live_workers(t)]
         return {"state": state, "teaching": self.teaching.get(id), "background": sum(len(live_workers(t)) for t in background),
-                "background_task_ids": [t["id"] for t in background], "running": bool(working), "queued": bool(queued), "observed_at_ms": int(time.time()*1000),
+                "background_task_ids": [t["id"] for t in background], "running": bool(working), "queued": bool(queued),
                 "active_task_ids": [t["id"] for t in working], "queued_task_ids": [t["id"] for t in queued],
                 "thread_id": self.task_thread(working[0]) if working else None,
                 "room_id": working[0].get("room_id") if working else None,
                 "queued_thread_ids": list(dict.fromkeys(self.task_thread(t) for t in queued)),
-                "latest_task_id": latest["id"] if latest else None, "question": question, "questions": [question] if question else []}
+                "latest_task_id": self.store.latest_task_id(id), "question": question, "questions": [question] if question else []}
 
     def busy(self, id):
         """A turn, delegated background work or a demonstration is using the bot: its connection and computer must stay."""
         activity = self.activity(id)
         return activity["running"] or activity["background"] > 0 or bool(activity["teaching"])
 
+    def thread_of(self, task_id):
+        """The thread a task belongs to, without loading the task when its turn is in flight."""
+        thread = self.task_threads.get(task_id)
+        if thread: return thread
+        row = self.store.fields("tasks", task_id, "thread_id", "agent_id")
+        return (row[0] or row[1]) if row else None
+
     def emit(self, id, kind, payload, task=None):
         if task and "thread_id" not in payload:
-            record = self.store.get("tasks", task)
-            if record: payload = {**payload, "thread_id": self.task_thread(record)}
+            thread = self.thread_of(task)
+            if thread: payload = {**payload, "thread_id": thread}
         value = self.store.event(id, kind, payload, task)
         for wake in self.listeners.get(id, ()): wake.set()
         return value
@@ -192,7 +210,7 @@ class Runtime:
         finally: self.listeners[id].discard(wake)
 
     def message(self, agent_id, task_id, role, content, **fields):
-        thread = self.task_thread(self.task(task_id)) if task_id else agent_id
+        thread = (self.thread_of(task_id) or agent_id) if task_id else agent_id
         return self.store.message(agent_id, role, content, thread=thread, **fields)
 
     async def client(self, id):
@@ -273,10 +291,14 @@ class Runtime:
         # other threads queue behind it because the bot has one computer.
         if active and not force_queue and not lesson and self.task_thread(self.task(active)) == thread_id:
             task = self.task(active)
+            uploads = self._uploads(id, text)
             if task.get("question"):
-                return await self.answer(id, task["question"]["question_id"], text=text)
+                files = ("\n\n使用者附加的檔案已放在這台電腦：\n" + "\n".join("/workspace/" + u["path"] for u in uploads)) if uploads else ""
+                return await self.answer(id, task["question"]["question_id"], text=text + files, shown=text)
+            # A steer carries text only; a message with a picture waits for its own turn so the picture is attached.
+            pictures = any(u["media_type"].startswith("image/") for u in uploads)
             client = self.clients.get(id)
-            if client and client.alive and task.get("session_id"):
+            if not pictures and client and client.alive and task.get("session_id"):
                 response = await client.call("session.steer", {"session_id": task["session_id"], "text": self._prompt(id,text)})
                 if response.get("status") not in {"rejected", "failed"}:
                     self.store.admit(id,request_id,active,text)
@@ -322,7 +344,7 @@ class Runtime:
 
     def next_task(self,id):
         """The user's own messages go before queued messages from other bots (Grok Bot does the same)."""
-        queued=[t for t in self.store.all("tasks") if t["agent_id"]==id and t["state"]=="queued"]
+        queued=[t for t in self.store.agent_tasks(id,live=True) if t["state"]=="queued"]
         return next((t for t in queued if not t.get("low_priority")),queued[0] if queued else None)
 
     async def _queue(self,id):
@@ -336,6 +358,7 @@ class Runtime:
                 await asyncio.wait({turn}); continue
             task_id=task["id"]
             self.active[id]=task_id
+            self.task_threads[task_id]=self.task_thread(task)
             self.finished[task_id]=asyncio.Event()
             self.store.patch("tasks",task_id,state="running",started_at=now())
             self.emit(id,"m0.progress",{"message":"正在準備 Bot 的電腦與工作環境"},task_id)
@@ -389,7 +412,8 @@ class Runtime:
                     self.finish(id,task_id,"cancelled","")
                     continue
                 if self.settings.model_row(selected, model).get("vision"):
-                    for path in self._images(id, task["goal"], task):
+                    # A group turn's pictures are named in the group messages it is about to read, not in its goal line.
+                    for path in self._images(id, text if task.get("room_id") else task["goal"], task):
                         await client.call("image.attach", {"session_id": sid, "path": path})
                 response = await client.call("prompt.submit",{"session_id":sid,"text":text})
                 if response.get("stored_session_id"):
@@ -409,9 +433,10 @@ class Runtime:
         self.narration.pop(task_id,None)
         self.pending_requests.pop(id,None)
         self.file_baselines.pop(task_id,None)
-        self.provider_bindings.pop(task_id,None)
+        if task_id in self.provider_bindings: self.last_bindings[id]=self.provider_bindings.pop(task_id)
         self.routes.pop(task_id,None)
-        for table in (self.steps,self.sources,self.seen,self.open_tools,self.stalled,self.persisted): table.pop(task_id,None)
+        self.flush_deltas(id,task_id)
+        for table in (self.steps,self.sources,self.seen,self.open_tools,self.stalled,self.persisted,self.task_threads): table.pop(task_id,None)
         timer=self.flushes.pop(task_id,None)
         if timer: timer.cancel()
         self.store.prune_events(id)
@@ -426,6 +451,7 @@ class Runtime:
                                         "state":"running","verdict":None,"created_at":now(),"started_at":now(),"session_id":sid,
                                         "result":None,"artifacts":[],"milestones":[],"request_id":None,"routine_id":None})
         self.active[id]=task_id
+        self.task_threads[task_id]=thread_id
         self.finished[task_id]=asyncio.Event()
         self.file_baselines[task_id]={f["path"]:(f["bytes"],f["updated_at"]) for f in self.store.get("files",id) or []}
         self.emit(id,"m0.progress",{"message":"背景工作完成，正在整理結果"},task_id)
@@ -468,6 +494,9 @@ class Runtime:
                 since=self.stalled.setdefault(task_id,clock)
                 if clock-since>=self.STOP_GRACE:
                     verdict="cancelled" if state=="stopping" else "failed"
+                    # Hermes may still finish that turn later; until its session starts a new one, what it sends is
+                    # the old turn's and must not land on the next task.
+                    if sid:=self.task(task_id).get("session_id"): self.draining[sid]=True
                     self.finish(id,task_id,verdict,"" if verdict=="cancelled" else STALLED_TEXT)
                 continue
             limit=self.TOOL_IDLE_LIMIT if self.open_tools.get(task_id) else self.IDLE_LIMIT
@@ -517,12 +546,15 @@ class Runtime:
         return {s["id"]: hashlib.sha256(json.dumps({k:s[k] for k in ["name","description","instructions","enabled"]}, sort_keys=True).encode()).hexdigest() for s in Skills(self.store).list(id)}
 
     def finish(self,id,task_id,verdict,text,**fields):
+        self.flush_deltas(id,task_id)
         task=self.task(task_id)
         if task["state"]=="terminal": return
         content=text or self.streams.get(task_id,"") or ("已停止，先前檔案與對話已保留。" if verdict=="cancelled" else "工作已結束。")
         hint=friendly(content) if verdict=="failed" else None
         if hint: content=hint+"\n\n> 原始錯誤："+" ".join(content.split())[:600]
         silent=bool(task.get("from_agent") or task.get("room_id")) and verdict!="failed" and is_silent(content)
+        # The group chat was deleted while this member was still answering: its seat is gone, so is the reply.
+        if task.get("room_id") and not self.store.get("rooms",task["room_id"]): silent=True
         self.message(id,task_id,"assistant",content,id="delta:"+task_id,streaming=False,narration=self.narration.get(task_id,[]),**({"silent":True} if silent else {}))
         steps=[{**step,"state":"done" if step["state"]=="running" else step["state"]} for step in self.steps.get(task_id,[])]
         trail={"steps":steps,"sources":self.sources.get(task_id,[])} if steps or self.sources.get(task_id) else {}
@@ -542,27 +574,44 @@ class Runtime:
         if name.startswith("subagent."):
             self.track_worker(id,task_id,name,event.get("session_id"),payload)
             return
+        late=event.get("session_id")
+        if late and late in self.draining:
+            # A turn we gave up on (STOP_GRACE): ignore it until the session starts a new turn.
+            if name=="message.start": self.draining.pop(late,None)
+            else:
+                if name=="message.complete": self.draining.pop(late,None)
+                return
         if name=="message.start" and not task_id:
             self.adopt(id,event.get("session_id"))
             return
         if not task_id: return
-        task=self.task(task_id)
-        if task["state"] == "terminal": return
+        # Read only what every event needs; deltas arrive many times a second.
+        fields=self.store.fields("tasks",task_id,"state","session_id")
+        if not fields: raise KeyError(task_id)
+        state,task_sid=fields
+        if state == "terminal": return
         sid=event.get("session_id")
-        if task.get("session_id") and sid and sid!=task["session_id"]: return
+        if task_sid and sid and sid!=task_sid:
+            if name=="message.complete": self.side_report(id,sid,payload)
+            return
         self.seen[task_id]=time.monotonic()
         if name=="message.delta":
             text=payload.get("text",payload.get("delta",""))
             if text:
                 value=self.streams.get(task_id,"")+text;self.streams[task_id]=value
+                # Buffered before any save: a saved copy must never hold text whose event is still to come.
+                self.buffer_delta(id,task_id,text)
                 # Live clients get every delta from the journal; the stored copy only serves reloads mid-reply.
                 if time.monotonic()-self.persisted.get(task_id,0)>=self.PERSIST_INTERVAL:
                     self.persist_stream(id,task_id)
                 elif task_id not in self.flushes:
                     # The tail of a burst must still reach storage if no further delta arrives.
                     self.flushes[task_id]=asyncio.get_running_loop().call_later(self.PERSIST_INTERVAL,self.persist_stream,id,task_id)
-                self.emit(id,"runtime",{"type":"message_delta","id":task_id,"delta":text},task_id)
-        elif name=="message.interim":
+            return
+        # Anything else must follow the text streamed before it.
+        self.flush_deltas(id,task_id)
+        task=self.task(task_id)
+        if name=="message.interim":
             self.emit(id,"runtime",{"type":"user_progress","message":payload.get("text","")},task_id)
         elif name=="message.complete":
             status=payload.get("status", "success")
@@ -606,6 +655,15 @@ class Runtime:
             self.finish(id,task_id,"failed",payload.get("message") or payload.get("error") or "工作失敗")
         elif name in {"status","thinking.start","thinking.end","context.compacting"}:
             self.emit(id,"m0.progress",{"message":payload.get("message",payload.get("text","正在處理工作"))},task_id)
+
+    def side_report(self,id,sid,payload):
+        """Hermes reports finished background work in the thread that started it, even while this bot is busy in
+        another thread. That turn has no task of ours; its reply is still kept in its own thread."""
+        text=str(payload.get("text") or "").strip()
+        thread_id=self.session_thread(id,self.clients.get(id),sid)
+        if not text or not thread_id: return
+        self.store.message(id,"assistant",text,thread=thread_id,background_report=True)
+        self.emit(id,"reply",{"thread_id":thread_id})
 
     def track_step(self,task_id,name,tool,payload,failed):
         """Keep the step trail server-side so a finished turn still shows it after a reload."""
@@ -665,32 +723,53 @@ class Runtime:
 
     def session_task(self,id,sid):
         """The latest task that ran in this native session."""
-        return next((t["id"] for t in reversed(self.store.all("tasks")) if t["agent_id"]==id and sid and t.get("session_id")==sid),None)
+        if not sid: return None
+        return next((t["id"] for t in reversed(self.store.agent_tasks(id)) if t.get("session_id")==sid),None)
 
-    def lose_workers(self,id,status="lost"):
-        """Children we can no longer follow (connection or service gone) must not show as running forever."""
-        for task in self.store.all("tasks"):
-            if task["agent_id"]!=id or not live_workers(task): continue
+    def lose_workers(self,id,status="lost",everything=False):
+        """Children we can no longer follow (connection or service gone) must not show as running forever.
+        `everything` also checks tasks saved before the workers_live flag existed (once, at startup)."""
+        for task in self.store.agent_tasks(id,live=not everything):
+            if not live_workers(task): continue
             workers=[{**w,"status":status,"at":now()} if w["status"] in WORKER_LIVE else w for w in task["background"]]
             self.store.patch("tasks",task["id"],background=workers)
             self.emit(id,"runtime",{"type":"workers","workers":workers},task["id"])
+
+    DELTA_INTERVAL = .06
+
+    def buffer_delta(self,id,task_id,text):
+        """Streamed text is journaled in small batches: one event per DELTA_INTERVAL instead of one per token."""
+        self.delta_buffers[task_id]=self.delta_buffers.get(task_id,"")+text
+        if task_id not in self.delta_flushes:
+            self.delta_flushes[task_id]=asyncio.get_running_loop().call_later(self.DELTA_INTERVAL,self.flush_deltas,id,task_id)
+
+    def flush_deltas(self,id,task_id):
+        timer=self.delta_flushes.pop(task_id,None)
+        if timer: timer.cancel()
+        text=self.delta_buffers.pop(task_id,"")
+        if text: self.emit(id,"runtime",{"type":"message_delta","id":task_id,"delta":text},task_id)
 
     def persist_stream(self,id,task_id):
         """Store the reply streamed so far, for a page loaded mid-reply."""
         timer=self.flushes.pop(task_id,None)
         if timer: timer.cancel()
-        if task_id not in self.streams or self.store.get("tasks",task_id,{}).get("state")=="terminal": return
+        if task_id not in self.streams or (self.store.fields("tasks",task_id,"state") or ("terminal",))[0]=="terminal": return
         self.persisted[task_id]=time.monotonic()
-        self.message(id,task_id,"assistant",self.streams[task_id],id="delta:"+task_id,streaming=True,narration=self.narration.get(task_id,[]))
+        # Journal the text first, then record which event the stored copy reaches: a page that loads this copy
+        # skips replayed deltas up to that event instead of appending them twice.
+        self.flush_deltas(id,task_id)
+        self.message(id,task_id,"assistant",self.streams[task_id],id="delta:"+task_id,streaming=True,narration=self.narration.get(task_id,[]),
+                     stream_event=self.store.last_event_id(id))
 
     def fold_narration(self,id,task_id):
         """Text streamed before a tool call is progress narration; only the text after the last tool is the reply."""
+        self.flush_deltas(id,task_id)
         text=self.streams.pop(task_id,"").strip()
         self.persisted.pop(task_id,None)  # the reply restarts: store its first words at once
         if not text: return
         notes=self.narration.setdefault(task_id,[]);notes.append(text)
-        self.message(id,task_id,"assistant","",id="delta:"+task_id,streaming=True,narration=notes)
-        self.emit(id,"runtime",{"type":"narration","id":task_id,"text":text},task_id)
+        event=self.emit(id,"runtime",{"type":"narration","id":task_id,"text":text},task_id)
+        self.message(id,task_id,"assistant","",id="delta:"+task_id,streaming=True,narration=notes,stream_event=event["id"])
 
     def native_title(self,id,sid,title):
         """Adopt Hermes' auto-title for a side thread unless the user already named it."""
@@ -761,7 +840,20 @@ class Runtime:
         else:
             await self.answer(id,frame["id"],value="",note="請求已過期：10 分鐘內沒有回覆")
 
-    async def answer(self,id,rid,text="",answers=None,value=None,choice=None,note=None):
+    @staticmethod
+    def answer_text(frame,text="",answers=None,choice=None):
+        """How an answer reads in the conversation: the choice or each question with its answer."""
+        method=frame["method"]
+        if method=="approval":
+            decision=choice or ("always" if text in {"一律允許","always"} else "once" if text in {"允許這次","允許","同意","once","approve"} else "deny")
+            return {"once":"允許這次","always":"一律允許","deny":"拒絕"}.get(decision,"已回覆")
+        if method=="clarify" and answers:
+            questions={q.get("qid"):q.get("question","") for q in frame.get("params",{}).get("questions",[])}
+            lines=[f"{plain_text(questions.get(qid) or '',60)}：{plain_text(str(value),200)}" if questions.get(qid) else plain_text(str(value),200) for qid,value in answers.items() if str(value).strip()]
+            return "\n".join(f"- {line}" for line in lines) if len(lines)>1 else (lines[0] if lines else "")
+        return text
+
+    async def answer(self,id,rid,text="",answers=None,value=None,choice=None,note=None,shown=None):
         frame=self.pending_requests.get(id)
         if not frame or str(frame["id"])!=str(rid): raise ValueError("這個問題已結束，請重新整理對話")
         method=frame["method"]
@@ -788,15 +880,16 @@ class Runtime:
         if note:
             self.message(id,task_id,"event",note,event="question_expired")
         elif method not in {"secret","sudo","vault.code","vault.unlock_prompt","vault.save_login"}:
-            self.message(id,task_id,"user",text or "已回覆問題")
+            self.message(id,task_id,"user",shown or self.answer_text(frame,text,answers,choice) or "已回覆問題")
         self.emit(id,"question_answered",{},task_id)
         return {"ok":True}
 
     async def stop(self,id):
-        stopped=[t["id"] for t in self.store.all("tasks") if t["agent_id"]==id and t["state"]!="terminal"]
+        live=self.store.agent_tasks(id,live=True)
+        stopped=[t["id"] for t in live if t["state"]!="terminal"]
         if self.collab and stopped: self.collab.stop_cascade(id,stopped)
-        for task in self.store.all("tasks"):
-            if task["agent_id"]==id and task["state"]=="queued":self.store.patch("tasks",task["id"],state="terminal",verdict="cancelled",ended_at=now())
+        for task in live:
+            if task["state"]=="queued":self.store.patch("tasks",task["id"],state="terminal",verdict="cancelled",ended_at=now())
         task_id=self.active.get(id)
         if task_id:
             task=self.task(task_id)
@@ -807,7 +900,7 @@ class Runtime:
                 await client.call("session.interrupt",{"session_id":task["session_id"]})
             else:self.finish(id,task_id,"cancelled","")
             return {"status":"stopping"}
-        background=[t for t in self.store.all("tasks") if t["agent_id"]==id and live_workers(t)]
+        background=[t for t in self.store.agent_tasks(id,live=True) if live_workers(t)]
         if background:
             # Interrupting the session ends its background delegations too; each reports back as interrupted.
             client=self.clients.get(id)
@@ -837,8 +930,8 @@ class Runtime:
 
     def halted(self,task_id):
         """The user stopped this turn. A turn that simply ended must not cut off its background children."""
-        task=self.store.get("tasks",task_id) if task_id else None
-        return bool(task) and (task["state"]=="stopping" or task.get("verdict") in {"cancelled","interrupted"})
+        row=self.store.fields("tasks",task_id,"state","verdict") if task_id else None
+        return bool(row) and (row[0]=="stopping" or row[1] in {"cancelled","interrupted"})
 
     async def disconnected(self,id,error):
         self.lose_workers(id)
@@ -879,7 +972,7 @@ class Runtime:
             if task["state"] not in {"terminal","queued"}:
                 self.finish(task["agent_id"],task["id"],"interrupted","服務曾中斷；保留檔案及對話，沒有自動重播未知結果的操作。")
         for agent in self.store.all("agents"):
-            self.lose_workers(agent["id"])
+            self.lose_workers(agent["id"],everything=True)
             self.store.patch("agents",agent["id"],live_session=None)
             self.kick(agent["id"])
 

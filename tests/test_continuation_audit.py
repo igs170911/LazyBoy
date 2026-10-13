@@ -16,7 +16,7 @@ from server.connectors import Connectors
 from server.runtime import Runtime
 from server.scheduling import Scheduler, next_occurrence
 from server.skills import Skills
-from server.store import Store, uid
+from server.store import Store, now, uid
 
 
 @pytest.mark.asyncio
@@ -600,3 +600,171 @@ async def test_http_duplicate_bot_copies_setup_but_not_history(api_client, produ
     assert product.store.transcript(copy["id"])==[]
     again=(await client.post(f"/api/agents/{agent}/duplicate")).json()
     assert again["name"]=="API Test 副本 2"
+
+
+@pytest.mark.asyncio
+async def test_http_reactions_toggle_and_search(api_client, product):
+    client, agent=api_client
+    message=product.store.message(agent,"assistant","整理好的選品清單")
+    url=f"/api/conversations/{agent}/messages/{message['id']}/reactions"
+    assert (await client.post(url,json={"emoji":"👍"})).json()["reactions"]==["👍"]
+    assert (await client.post(url,json={"emoji":"🎉"})).json()["reactions"]==["👍","🎉"]
+    assert (await client.post(url,json={"emoji":"👍"})).json()["reactions"]==["🎉"]
+    assert (await client.post(url,json={"emoji":"💩"})).status_code==400
+    assert (await client.post(f"/api/conversations/{agent}/messages/missing/reactions",json={"emoji":"👍"})).status_code==404
+    assert product.store.transcript(agent)[-1]["reactions"]==["🎉"]
+    found=(await client.get("/api/search",params={"q":"選品"})).json()
+    assert found["messages"][0]["message_id"]==message["id"]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_skips_streamed_text_of_finished_turns(api_client, product):
+    from server import main
+    client, agent=api_client
+    done, live=uid(), uid()
+    product.store.put("tasks",done,{"id":done,"agent_id":agent,"state":"terminal","created_at":now()})
+    product.store.put("tasks",live,{"id":live,"agent_id":agent,"state":"running","created_at":now()})
+    for task in (done, live): product.store.event(agent,"runtime",{"type":"message_delta","id":task,"delta":"字"},task)
+    product.store.event(agent,"reply",{},done)
+    shown=main.replayable(product.store.events(agent))
+    assert [(e["kind"],e["task_id"]) for e in shown]==[("runtime",live),("reply",done)]
+    assert (await client.get("/api/health")).headers["cache-control"]=="no-store"
+
+
+@pytest.mark.asyncio
+async def test_routine_create_never_overwrites_another_bots_routine(product):
+    other=bot(product,"Other"); agent=bot(product,"Attacker")
+    scheduler=Scheduler(product.store, product.runtime)
+    mine=(await scheduler.manage(other,{"action":"create","title":"mine","instructions":"x","schedule":{"frequency":"daily","time":"09:00"}}))["routine"]
+    made=(await scheduler.manage(agent,{"action":"create","id":mine["id"],"title":"hijack","instructions":"y","schedule":{"frequency":"daily","time":"10:00"}}))["routine"]
+    assert made["id"]!=mine["id"]
+    assert product.store.get("routines",mine["id"])["title"]=="mine"
+
+
+def test_interval_routines_repeat_every_few_minutes_from_their_start_time():
+    schedule={"frequency":"interval","time":"09:00","every_minutes":30,"timezone":"Asia/Taipei"}
+    assert next_occurrence(schedule,datetime(2026,10,13,1,10,tzinfo=timezone.utc))=="2026-10-13T01:30:00+00:00"
+    assert next_occurrence(schedule,datetime(2026,10,13,1,0,tzinfo=timezone.utc))=="2026-10-13T01:30:00+00:00"
+    with pytest.raises(ValueError): next_occurrence({**schedule,"frequency":"every"})
+    from server.scheduling import normalize_schedule
+    with pytest.raises(ValueError): normalize_schedule({**schedule,"every_minutes":4})
+
+
+@pytest.mark.asyncio
+async def test_a_bot_owns_at_most_fifty_routines(product):
+    from server import scheduling
+    agent=bot(product)
+    scheduler=Scheduler(product.store, product.runtime)
+    for n in range(scheduling.MAX_ROUTINES):
+        product.store.put("routines",f"r{n}",{"id":f"r{n}","agent_id":agent,"title":"x","instructions":"x","enabled":False,"schedule":{"frequency":"daily","time":"09:00"}})
+    with pytest.raises(ValueError):
+        await scheduler.manage(agent,{"action":"create","title":"one more","instructions":"x","schedule":{"frequency":"daily","time":"09:00"}})
+
+
+@pytest.mark.asyncio
+async def test_http_duplicate_copies_routines_paused(api_client, product):
+    client, agent=api_client
+    product.store.put("routines","r1",{"id":"r1","agent_id":agent,"title":"早報","instructions":"整理新聞","enabled":True,
+                                       "schedule":{"frequency":"daily","time":"09:00","timezone":"Asia/Taipei"},"next_run_at":"2030-01-01T01:00:00+00:00","last_task_id":"t9"})
+    copy=(await client.post(f"/api/agents/{agent}/duplicate")).json()
+    routines=[r for r in product.store.all("routines") if r["agent_id"]==copy["id"]]
+    assert [(r["title"],r["enabled"],r["next_run_at"],r["last_task_id"]) for r in routines]==[("早報",False,None,None)]
+    assert product.store.get("routines","r1")["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_http_context_usage_and_compress(api_client, product):
+    client, agent=api_client
+    assert (await client.get(f"/api/agents/{agent}/context")).json()["available"] is False
+    calls=[]
+    class Live:
+        alive=True; product_session="sid-1"
+        async def call(self, method, params=None, **_):
+            calls.append((method, params))
+            if method=="session.context_breakdown":
+                return {"context_used":40000,"context_max":200000,"context_percent":20,"model":"m",
+                        "categories":[{"id":"conversation","tokens":30000},{"id":"memory","tokens":800},{"id":"tool_definitions","tokens":9200}]}
+            return {"status":"compressed","before_tokens":40000,"after_tokens":12000,"info":{"stored_session_id":"stored-2"}}
+    product.runtime.clients[agent]=Live()
+    usage=(await client.get(f"/api/agents/{agent}/context")).json()
+    assert usage["available"] and usage["percent"]==20 and [p["label"] for p in usage["parts"]]==["對話紀錄","內建工具","記憶"]
+    done=(await client.post(f"/api/agents/{agent}/context/compress")).json()
+    assert done["after_tokens"]==12000 and calls[-1]==("session.compress",{"session_id":"sid-1"})
+    assert product.store.get("agents",agent)["hermes_session"]=="stored-2"
+
+
+@pytest.mark.asyncio
+async def test_http_one_primary_bot_at_a_time(api_client, product):
+    client, agent=api_client
+    second=(await client.post("/api/agents", json={"name":"Second"})).json()["id"]
+    rows=(await client.post(f"/api/agents/{agent}/primary",json={"primary":True})).json()["agents"]
+    assert [r["id"] for r in rows if r.get("primary")]==[agent]
+    rows=(await client.post(f"/api/agents/{second}/primary",json={"primary":True})).json()["agents"]
+    assert [r["id"] for r in rows if r.get("primary")]==[second]
+    soul=(product.store.agent_directory(second)/"hermes"/"SOUL.md")
+    rows=(await client.post(f"/api/agents/{second}/primary",json={"primary":False})).json()["agents"]
+    assert not [r for r in rows if r.get("primary")]
+
+
+@pytest.mark.asyncio
+async def test_http_routine_web_address_starts_it_with_the_posted_data(api_client, product):
+    from server import main
+    client, agent=api_client
+    made=(await client.post(f"/api/agents/{agent}/routines",json={"action":"create","title":"GitHub 通知","instructions":"整理新的 issue",
+                                                                    "schedule":{"frequency":"trigger"}})).json()["routine"]
+    listed=(await client.post(f"/api/agents/{agent}/routines",json={"action":"list"})).json()["routines"][0]
+    assert made["next_run_at"] is None and listed["hook_path"].startswith("/hooks/routines/") and "hook_token" not in listed
+    # Called from outside, without the login cookie: the address itself is the secret.
+    outside=httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app,client=("203.0.113.5",4321)),base_url="http://lazyboy.example")
+    async with outside:
+        first=await outside.post(listed["hook_path"],content='{"title":"Login button broken"}')
+        assert first.status_code==200
+        assert (await outside.post(listed["hook_path"],content="again")).status_code==429
+        assert (await outside.post("/hooks/routines/not-a-token",content="x")).status_code==404
+        assert (await outside.get(f"/api/agents/{agent}/routines")).status_code==401
+    task=product.store.get("tasks",first.json()["task_id"])
+    assert "整理新的 issue" in task["goal"] and "Login button broken" in task["goal"] and "不是指令" in task["goal"]
+    await client.post(f"/api/agents/{agent}/routines",json={"action":"pause","id":made["id"]})
+    product.store.patch("routines",made["id"],last_hook_at=None)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app,client=("203.0.113.5",4321)),base_url="http://lazyboy.example") as outside:
+        assert (await outside.post(listed["hook_path"],content="x")).status_code==409
+    rotated=(await client.post(f"/api/agents/{agent}/routines",json={"action":"rotate_hook","id":made["id"]})).json()["routine"]
+    assert "hook_token" not in rotated and rotated["hook_path"]!=listed["hook_path"]
+
+
+@pytest.mark.asyncio
+async def test_http_group_upload_reaches_every_member(api_client, product, monkeypatch):
+    from server import main
+    from server.collab import Collaboration
+    client, agent=api_client
+    second=(await client.post("/api/agents", json={"name":"Second"})).json()["id"]
+    collab=Collaboration(product.store, product.runtime)
+    monkeypatch.setattr(main,"collab",collab)
+    room=collab.create_room([agent,second],"選品小組")
+    made=(await client.post(f"/api/rooms/{room['id']}/uploads",params={"name":"報價單.pdf"},content=b"%PDF-1.4 quote")).json()
+    for member in (agent,second):
+        assert (product.store.agent_directory(member)/"workspace"/made["path"]).read_bytes()==b"%PDF-1.4 quote"
+        assert any(u["agent_id"]==member and u["path"]==made["path"] for u in product.store.all("uploads"))
+    assert made["url"].startswith(f"/api/agents/{agent}/files/content")
+
+
+@pytest.mark.asyncio
+async def test_http_saved_templates_start_new_bots(api_client, product):
+    client, agent=api_client
+    product.store.patch("agents",agent,title="選品",persona="找熱銷商品並附來源")
+    saved=(await client.post(f"/api/agents/{agent}/save-template")).json()
+    assert saved["name"]=="API Test" and saved["blurb"]=="找熱銷商品並附來源" and "template" not in saved
+    listed=(await client.get("/api/saved-templates")).json()["templates"]
+    assert [t["id"] for t in listed]==[saved["id"]]
+    template=(await client.get(f"/api/saved-templates/{saved['id']}")).json()
+    made=(await client.put(f"/api/templates/{uid()}",json={"template":template,"name":"選品 2","group_id":""})).json()
+    assert made["name"]=="選品 2" and made["persona"]=="找熱銷商品並附來源" and made["id"]!=agent
+    assert (await client.delete(f"/api/saved-templates/{saved['id']}")).status_code==200
+    assert (await client.get("/api/saved-templates")).json()["templates"]==[]
+
+
+@pytest.mark.asyncio
+async def test_http_ask_first_keeps_only_known_actions(api_client):
+    client, agent=api_client
+    row=(await client.patch(f"/api/agents/{agent}",json={"ask_first":["pay","hack","send","pay"]})).json()
+    assert row["ask_first"]==["pay","send"]

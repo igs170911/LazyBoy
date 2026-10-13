@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from .computers import docker
+from . import usage as model_usage
 
 log = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ async def clear_browser_cache(computers, agent_id: str, root: Path, running: boo
             await asyncio.sleep(1)
             if await asyncio.to_thread(lambda: sum(size(profile / name) for name in BROWSER_CACHES)) < before * 0.8: break
     else:
-        for name in BROWSER_CACHES: shutil.rmtree(profile / name, ignore_errors=True)
+        await asyncio.to_thread(lambda: [shutil.rmtree(profile / name, ignore_errors=True) for name in BROWSER_CACHES])
     return max(0, before - await asyncio.to_thread(lambda: sum(size(profile / name) for name in BROWSER_CACHES)))
 
 
@@ -147,4 +148,6 @@ async def daily(store, computers, runtime):
                 if result["freed"]: log.info("Cleaned %.1f MB for %s", result["freed"] / 1048576, agent["name"])
             except Exception:
                 log.exception("Cleanup failed for %s", agent["id"])
+        try: model_usage.prune(store)
+        except Exception: log.exception("Pruning model usage failed")
         await asyncio.sleep(DAY)

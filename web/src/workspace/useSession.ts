@@ -35,7 +35,7 @@ function mergeTranscript(current: Message[], incoming: TranscriptItem[]): Messag
     const mine = item.id ? byId.get(item.id) : undefined;
     // The stream may already be ahead of the snapshot that was read before the last delta.
     if (mine && mine.streaming && item.streaming && mine.content.length > item.content.length) return mine;
-    if (mine && mine.content === item.content && mine.streaming === item.streaming && mine.at === item.at) return mine;
+    if (mine && mine.content === item.content && mine.streaming === item.streaming && mine.at === item.at && (mine.reactions || []).join() === (item.reactions || []).join()) return mine;
     return item;
   });
   const sentTexts = new Set(incoming.filter(item => item.role === "user").map(item => item.content.trim()));
@@ -120,7 +120,7 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   const refreshActivity = useCallback(async (id: string) => {
     try {
       const next = await api.activity(id);
-      if (current.current === id) setActivity(previous => JSON.stringify(previous.question) === JSON.stringify(next.question) && previous.state === next.state && previous.latest_task_id === next.latest_task_id && previous.queued === next.queued && previous.background === next.background && previous.teaching === next.teaching ? previous : next);
+      if (current.current === id) setActivity(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
     } catch { /* the next event or poll retries */ }
   }, []);
 
@@ -161,6 +161,9 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
           setTranscript(cur => {
             const index = cur.findIndex(item => item.id === key);
             if (index < 0) return [...cur, { id: key, role: "assistant", content: delta, at: new Date().toISOString(), streaming: true }];
+            // A finished reply is final, and a loaded copy already holds the text up to its stream_event.
+            const item = cur[index];
+            if (!item.streaming || (item.stream_event && event.id <= item.stream_event)) return cur;
             const next = [...cur];
             next[index] = { ...next[index], content: next[index].content + delta, streaming: true };
             return next;
@@ -172,7 +175,7 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
           setLive(id, live => { const base = ensure(live); return { ...base, narration: [...(base.narration || []), text].slice(-40) }; });
           if (here) {
             const key = `delta:${String(p.id || taskId)}`;
-            setTranscript(cur => cur.map(item => item.id === key ? { ...item, content: "", narration: [...(item.narration || []), text] } : item));
+            setTranscript(cur => cur.map(item => item.id === key && item.streaming && !(item.stream_event && event.id <= item.stream_event) ? { ...item, content: "", narration: [...(item.narration || []), text] } : item));
           }
         } else if (type === "tool_started" && taskId) {
           const name = String(p.name || "");
@@ -208,21 +211,22 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
         } else if (type === "steering" && taskId) {
           setLive(id, live => ({ ...ensure(live), notice: "已把你的補充送進目前的工作" }));
         } else if (type === "question" || type === "turn_ended") {
-          void refreshActivity(id);
+          // A question shows at once; the end of a turn can wait for the other updates around it.
+          if (type === "question") void refreshActivity(id); else debounce("activity", () => void refreshActivity(id), 60);
           if (type === "turn_ended") {
             setLive(id, live => live && live.taskId === taskId ? { ...live, steps: live.steps.map(step => step.state === "running" ? { ...step, state: "done" } : step) } : live);
             if (taskId) void loadTask(taskId);
             debounce("transcript", () => void reloadTranscript(id));
             debounce("files", () => void reloadFiles(id), 300);
             debounce("threads", () => void reloadThreads(id), 300);
-            changed.current();
+            debounce("agents", () => changed.current(), 400);
           }
         }
         break;
       }
       case "m0.progress":
         if (taskId && typeof p.message === "string") setLive(id, live => ({ ...ensure(live), status: String(p.message) }));
-        void refreshActivity(id);
+        debounce("activity", () => void refreshActivity(id), 250);
         break;
       case "model_routed":
         if (taskId) setLive(id, live => ({ ...ensure(live), model: [p.provider, p.model].filter(Boolean).join(" · ") }));
@@ -237,9 +241,10 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
       case "user_message":
       case "reply":
       case "question_answered":
+        // Coalesced: a reconnect can deliver dozens of these at once.
         if (here) debounce("transcript", () => void reloadTranscript(id));
-        void refreshActivity(id);
-        if (event.kind !== "question_answered") { changed.current(); debounce("threads", () => void reloadThreads(id), 300); }
+        debounce("activity", () => void refreshActivity(id), 150);
+        if (event.kind !== "question_answered") { debounce("agents", () => changed.current(), 400); debounce("threads", () => void reloadThreads(id), 300); }
         break;
       case "conversation_cleared":
         if (here) {
@@ -268,7 +273,7 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
         changed.current();
         break;
       case "error":
-        void refreshActivity(id);
+        debounce("activity", () => void refreshActivity(id), 150);
         debounce("transcript", () => void reloadTranscript(id));
         break;
       default:
@@ -360,6 +365,21 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
     }
   }, [refreshActivity, reloadTranscript, setLive]);
 
+  /** Toggle an emoji on a message, shown at once and confirmed by the server. */
+  const react = useCallback(async (messageId: string, emoji: string) => {
+    const id = current.current;
+    if (!id) return;
+    const flip = (list?: string[]) => list?.includes(emoji) ? list.filter(item => item !== emoji) : [...(list || []), emoji];
+    setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: flip(item.reactions) } : item));
+    try {
+      const result = await api.react(id, messageId, emoji);
+      setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: result.reactions } : item));
+    } catch (err) {
+      setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: flip(item.reactions) } : item));
+      throw err;
+    }
+  }, []);
+
   const stop = useCallback(async () => {
     const id = current.current;
     if (!id) return;
@@ -430,6 +450,8 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   return {
     transcript, activity, busy, here: placement.here, elsewhere: placement.elsewhere, live, tasks, files, loading, loadError,
     threadId, thread, threads, workingThread, openThread, createThread, renameThread, deleteThread, clear,
-    send, stop, refresh, refreshActivity, reloadFiles, lesson, teach,
+    send, stop, refresh, refreshActivity, reloadFiles, lesson, teach, react,
+    /** Choose which thread a bot opens on (search results jump into a side thread). */
+    showThread: selectThread,
   };
 }

@@ -30,7 +30,7 @@ export function applyTheme(pref: ThemePref = readTheme()): void {
   document.documentElement.dataset.theme = mode;
   document.documentElement.style.colorScheme = mode;
   // Match the browser and home-screen chrome to the page background so no band shows above or below the app.
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", mode === "light" ? "#fbfbfc" : "#0e0e11");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", mode === "light" ? "#eceef1" : "#0e0e11");
 }
 
 export function persistTheme(pref: ThemePref): void {
@@ -50,4 +50,23 @@ export function watchSystemTheme(): () => void {
   };
   media.addEventListener("change", onChange);
   return () => media.removeEventListener("change", onChange);
+}
+
+/** Accent color: Grok's black-and-white ("mono", the default) or LazyBoy's original violet. */
+export const ACCENT_PREFS = ["mono", "violet"] as const;
+export type AccentPref = (typeof ACCENT_PREFS)[number];
+const ACCENT_KEY = "lazyhermes.accent";
+
+export function readAccent(): AccentPref {
+  try { const saved = readStorage(ACCENT_KEY); if (saved === "mono" || saved === "violet") return saved; } catch { /* ignore */ }
+  return "mono";
+}
+
+export function applyAccent(pref: AccentPref = readAccent()): void {
+  if (typeof document !== "undefined") document.documentElement.dataset.accent = pref;
+}
+
+export function persistAccent(pref: AccentPref): void {
+  try { writeStorage(ACCENT_KEY, pref); } catch { /* ignore */ }
+  applyAccent(pref);
 }

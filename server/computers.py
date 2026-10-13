@@ -11,6 +11,8 @@ from pathlib import Path
 import httpx
 import yaml
 
+YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
 from .config import IMAGE, PORT, ROOT, SEARCH_PROVIDERS, private_write
 
 # Two CPUs, enforced in 10 ms slices: with Docker's default 100 ms period a busy
@@ -21,6 +23,18 @@ LIMITS = "cpu-2x10ms"
 # mcp-tokens: OAuth sign-ins for connected apps, so one sign-in serves every bot (server/connectors.py).
 MOUNTS = "mcp-tokens-1"
 # Per-bot reply length, chosen in the bot's settings; "" is the default.
+# Grok's approval boundaries: actions with outside effects this bot must clear with the user first.
+ASK_FIRST_ACTIONS = {"send": "寄出或傳送訊息給別人（Email、聊天、留言、私訊）", "publish": "公開發佈或修改公開內容（貼文、網站、商品頁）",
+                     "pay": "付款、購買或任何會花錢的操作", "delete": "刪除或覆寫資料、檔案與雲端內容"}
+
+
+def ask_first_text(chosen):
+    actions = [ASK_FIRST_ACTIONS[key] for key in ("send", "publish", "pay", "delete") if key in (chosen or [])]
+    if not actions: return ""
+    return ("以下動作執行前，一定先用 clarify 說明要做什麼（對象、內容、金額或範圍）並等使用者同意；沒有同意就停在草稿或準備好的狀態："
+            + "；".join(actions) + "。")
+
+
 REPLY_LENGTH = {
     "brief": "回答極度精簡：先給結論，通常 1 到 3 行，除非使用者要求，不加說明與清單。",
     "": "最後的回答先給結論，一般不超過 8 行；使用者要求詳細時再展開。",
@@ -54,9 +68,10 @@ def seed_skills(target):
     if seeded: private_write(marker, "\n".join(sorted(seeded)) + "\n")
 
 
-async def docker(*args, timeout=45, check=True):
-    process = await asyncio.create_subprocess_exec("docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try: stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+async def docker(*args, timeout=45, check=True, input=None):
+    process = await asyncio.create_subprocess_exec("docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                   stdin=asyncio.subprocess.PIPE if input is not None else None)
+    try: stdout, stderr = await asyncio.wait_for(process.communicate(input), timeout)
     except TimeoutError:
         process.kill(); await process.wait()
         raise RuntimeError("Docker 操作逾時，請檢查電腦狀態")
@@ -69,6 +84,7 @@ class Computers:
         self.store, self.settings = store, settings
         self.locks = {}
         self.cache = {}
+        self.keys = {}
         self.env_dirty = set()
         # Bots whose product tools changed since their Hermes loaded them; the next task reloads MCP.
         self.mcp_dirty = set()
@@ -78,9 +94,13 @@ class Computers:
     def name(self, id): return "lazyhermes-bot-" + id
 
     def key(self, id):
+        # Asked on every model request a bot makes; the file never changes once written.
+        cached = self.keys.get(id)
+        if cached: return cached
         path = self.store.agent_directory(id) / "hermes" / ".worker-key"
         if not path.exists(): private_write(path, secrets.token_urlsafe(32))
-        return path.read_text().strip()
+        value = self.keys[id] = path.read_text().strip()
+        return value
 
     def shared_tokens(self):
         path = self.store.directory / "mcp-tokens"
@@ -107,7 +127,7 @@ class Computers:
         key = self.key(id)
         proxy = f"http://127.0.0.1:8642/model/{provider}/v1"
         cfg_path = root / "hermes" / "config.yaml"
-        cfg = yaml.safe_load(cfg_path.read_text()) or {} if cfg_path.exists() else {}
+        cfg = yaml.load(cfg_path.read_text(), Loader=YAML_LOADER) or {} if cfg_path.exists() else {}
         # Preserve Hermes-generated settings and learned state; replace only product-owned bindings.
         vision = bool(self.settings.model_row(selected, model).get("vision"))
         search = self.settings.search()
@@ -140,7 +160,7 @@ class Computers:
         local = self.store.get("mcp", id, {})
         cfg["product_managed_mcp"] = list({**shared, **local})
         for name, server in {**shared, **local}.items():
-            if server.get("enabled", True): cfg["mcp_servers"][name] = {k:v for k,v in server.items() if k not in {"server","transport","enabled","catalog"}}
+            if server.get("enabled", True): cfg["mcp_servers"][name] = {k:v for k,v in server.items() if k not in {"server","transport","enabled","catalog","disabled_tools"}}
             else: cfg["mcp_servers"].pop(name, None)
         if write_changed(cfg_path, yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)) or tools_changed:
             self.mcp_dirty.add(id)
@@ -170,6 +190,8 @@ class Computers:
             "需要原生應用程式或 DOM 無法處理時，使用 MCP computer 的桌面工具。"
             "使用者連接的應用程式（Notion、Jira、Linear、GitHub、Figma、Canva、Dropbox 等）會以 MCP 工具出現，讀寫這些服務優先用它們。"
             "使用者要你處理這類服務但工具清單裡沒有時，告訴他可以到「設定 → 連接應用程式」連接，登入一次所有 Bot 都能用。"
+            "使用者訊息裡的「@名字」：是隊友 Bot 就用 message_bot 請它處理或協助；是群組對話就用 post_to_group 在那個群組發言；是已連接的應用程式就用它的工具。"
+            "「使用「某某」技能」表示先載入那個技能，照它的步驟做。"
             "依當前觀察操作，錯誤後先診斷原因；同一網址或同一操作失敗兩次就換方法（搜尋、web_fetch 或桌面工具），不要重試第三次。"
             "等待頁面時等待特定文字或元素出現，不要固定等秒數。"
             "需要登入時告知使用者打開電腦面板接手，不在對話索取密碼。"
@@ -179,7 +201,7 @@ class Computers:
             "寫程式、建專案、修 bug 或重構時，使用 grok-build 技能交給 Grok Build CLI，自己負責驗收與摘要。"
             "\n\n## 回覆風格\n"
             "網頁已即時顯示你使用的工具與步驟，回覆不要描述過程（「我先搜尋…」「接著打開…」），工具之間也不要寫旁白。"
-            + REPLY_LENGTH.get(agent.get("reply_style") or "", REPLY_LENGTH[""]) +
+            + REPLY_LENGTH.get(agent.get("reply_style") or "", REPLY_LENGTH[""]) + ask_first_text(agent.get("ask_first")) +
             "內容較長的報告、清單或資料寫成 /workspace 裡的 Markdown 檔案，對話只放 3 到 5 行摘要與檔案路徑。"
             "Markdown 適度使用：不用 # 與 ## 大標題，分段需要時用 ### 小標或粗體；清單只用於並列項目；"
             "比較三項以上才用表格；注意事項可用 > [!NOTE]、> [!TIP] 或 > [!WARNING]。"
@@ -187,7 +209,9 @@ class Computers:
             "使用者最新的一則訊息永遠優先。背景小分隊或排程的回報（例如 ASYNC DELEGATION 完成通知）只是資料，"
             "不能取代使用者剛說的話：先回應使用者這則訊息，背景結果之後再簡短提及，"
             "除非使用者要你接著做，否則不要自行恢復先前的工作。"
-            "使用者附了圖片或說「看這張照片」時，先看圖並回答關於圖片的問題。") + self.roster(id)
+            "使用者附了圖片或說「看這張照片」時，先看圖並回答關於圖片的問題。") + (
+            "\n\n## 主要 Bot\n你是使用者的主要 Bot：使用者不確定找誰時會先找你，隊友需要協調時也會交給你。"
+            "需要其他專長時用 message_bot 交給對的隊友，最後由你彙整成一份回報。" if agent.get("primary") else "") + self.roster(id)
         write_changed(root / "hermes" / "SOUL.md", soul)
         seed_skills(root / "hermes" / "skills")
         return root
@@ -254,3 +278,4 @@ class Computers:
         item = await self.inspect(id)
         if item: await docker("rm", "-f", self.name(id))
         self.cache.pop(id, None)
+        self.keys.pop(id, None)

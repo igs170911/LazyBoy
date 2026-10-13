@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api, type AgentGroup, type AgentRow } from "../api";
 import { Avatar, AvatarLookProvider, readAvatarLooks } from "../avatar";
 import { deferDialog } from "../deferred-dialog";
 import type { PreviewFile } from "../markdown";
 import type { SettingsSectionId } from "../settings";
 import { readStorage, writeStorage } from "../storage";
-import { Bell, BellOff, CircleDot, Copy, Eye, EyeOff, Pin, Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, GraduationCap, Import } from "../ui/icons";
+import { Bell, BellOff, CircleDot, Copy, Eye, EyeOff, Pin, Star, KeyRound, Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, GraduationCap, Import, Keyboard, MessageSquarePlus, MessagesSquare, PanelLeft, Plug, Settings, SunMoon, ChartColumn } from "../ui/icons";
 import { ConfirmDialog, toast, Toaster, type MenuItem } from "../ui/overlay";
 import { ComputerPane } from "./ComputerPane";
 import { Conversation, type PanelTab } from "./Conversation";
-import { appendDraft, draftKey } from "./drafts";
+import { appendDraft, draftKey, readDraft, writeDraft } from "./drafts";
+import { ShareInDialog, sharedText } from "./ShareIn";
 import { FilesPane } from "./FilesPane";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, type DropTarget } from "./Sidebar";
 import { GroupEditor, MoveDialog } from "./TeamDialogs";
 import { TeachStartDialog } from "./Teaching";
 import { useSwipeBack } from "./swipe-back";
@@ -24,24 +25,38 @@ import { RoomView } from "./Room";
 import { PeerDialog, RoomDialog } from "./Team";
 import type { RoomRow } from "../api";
 import { BUSY_STATES, useSession } from "./useSession";
+import type { PaletteAction } from "./CommandPalette";
+import { keys } from "./shortcut-keys";
+import type { FocusTarget } from "./focus";
+import { contentUrl } from "../markdown";
+import { persistTheme, readTheme, resolvedTheme } from "../theme";
+import type { SearchMessage } from "../api";
 
 const RoutinesDialog = deferDialog<Parameters<typeof import("../routines").RoutinesDialog>[0]>(() => import("../routines").then(m => ({ default: m.RoutinesDialog })), "RoutinesDialog");
 const AgentShareDialog = deferDialog<Parameters<typeof import("../agent-template").AgentShareDialog>[0]>(() => import("../agent-template").then(m => ({ default: m.AgentShareDialog })), "AgentShareDialog");
 const TemplateImportDialog = deferDialog<Parameters<typeof import("../agent-template").TemplateImportDialog>[0]>(() => import("../agent-template").then(m => ({ default: m.TemplateImportDialog })), "TemplateImportDialog");
 const AgentSettingsDialog = deferDialog<Parameters<typeof import("../agent-settings").AgentSettingsDialog>[0]>(() => import("../agent-settings").then(m => ({ default: m.AgentSettingsDialog })), "AgentSettingsDialog");
 const SettingsDialog = deferDialog<Parameters<typeof import("../settings").SettingsDialog>[0]>(() => import("../settings").then(m => ({ default: m.SettingsDialog })), "SettingsDialog");
+// Opened on demand, so they stay out of the first download.
+const CommandPalette = deferDialog<Parameters<typeof import("./CommandPalette").CommandPalette>[0]>(() => import("./CommandPalette").then(m => ({ default: m.CommandPalette })), "CommandPalette");
+const NewChatDialog = deferDialog<Parameters<typeof import("./NewChat").NewChatDialog>[0]>(() => import("./NewChat").then(m => ({ default: m.NewChatDialog })), "NewChatDialog");
+const ShortcutsDialog = deferDialog<Parameters<typeof import("./Shortcuts").ShortcutsDialog>[0]>(() => import("./Shortcuts").then(m => ({ default: m.ShortcutsDialog })), "ShortcutsDialog");
+const LoginShareDialog = deferDialog<Parameters<typeof import("./LoginShare").LoginShareDialog>[0]>(() => import("./LoginShare").then(m => ({ default: m.LoginShareDialog })), "LoginShareDialog");
+const WelcomeTemplates = lazy(() => import("./NewChat").then(m => ({ default: m.WelcomeTemplates })));
 const AboutDialog = deferDialog<Parameters<typeof import("../settings").AboutDialog>[0]>(() => import("../settings").then(m => ({ default: m.AboutDialog })), "AboutDialog");
 
 const ACTIVE_KEY = "lazyhermes.active";
 const ROOM_KEY = "lazyhermes.room";
 const PANEL_KEY = "lazyhermes.panel";
+const COMPACT_KEY = "lazyhermes.compactSidebar";
 const MOBILE_QUERY = "(max-width: 860px)";
 
 type Panel = { open: boolean; tab: PanelTab; width: number };
 type Dialog =
   | { kind: "settings"; section?: SettingsSectionId }
   | { kind: "about" }
-  | { kind: "create" }
+  | { kind: "create"; preset?: Partial<AgentRow> | null }
+  | { kind: "new"; startAt?: "templates" }
   | { kind: "agent"; id: string; section: "profile" | "skills" | "memory" }
   | { kind: "routines"; id: string }
   | { kind: "share"; agent: AgentRow }
@@ -51,7 +66,11 @@ type Dialog =
   | { kind: "move"; agent: AgentRow }
   | { kind: "room"; room?: RoomRow }
   | { kind: "peer"; id: string; peer: string }
-  | { kind: "confirm"; title: string; body: string; label: string; danger?: boolean; run: () => Promise<void> };
+  | { kind: "confirm"; title: string; body: string; label: string; danger?: boolean; run: () => Promise<void> }
+  | { kind: "palette"; query?: string }
+  | { kind: "logins"; agent: AgentRow }
+  | { kind: "share-in"; text: string }
+  | { kind: "shortcuts" };
 
 function readPanel(): Panel {
   try {
@@ -75,7 +94,7 @@ export function Workspace() {
   const { agents, groups, loaded, error, refresh, upsert, remove, applyTeam } = useAgents();
   const mobile = useMedia(MOBILE_QUERY);
   const [activeId, setActiveId] = useState<string | null>(() => readStorage(ACTIVE_KEY));
-  const { rooms, refresh: refreshRooms, setRooms } = useRooms();
+  const { rooms, refresh: refreshRooms, setRooms, loaded: roomsLoaded } = useRooms();
   // A group chat open in the main pane; selecting a bot closes it.
   const [roomId, setRoomId] = useState<string | null>(() => readStorage(ROOM_KEY) || null);
   const [view, setView] = useState<"list" | "chat">("list");
@@ -83,6 +102,9 @@ export function Workspace() {
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [looks, setLooks] = useState(readAvatarLooks);
+  const [compact, setCompact] = useState(() => readStorage(COMPACT_KEY) === "1");
+  const [finding, setFinding] = useState(false);
+  const [focus, setFocus] = useState<(FocusTarget & { owner: string }) | null>(null);
   const routinesButton = useRef<HTMLButtonElement>(null);
   const active = agents.find(agent => agent.id === activeId) || null;
   const session = useSession(active?.id || null, () => void refresh());
@@ -95,11 +117,11 @@ export function Workspace() {
 
   useEffect(() => {
     if (!loaded) return;
-    if (!active && agents.length) setActiveId(agents.slice().sort((a, b) => (Date.parse(b.last_at || "") || 0) - (Date.parse(a.last_at || "") || 0))[0].id);
+    // With nothing open yet, start on the primary bot, else the latest conversation.
+    if (!active && agents.length) setActiveId((agents.find(a => a.primary) || agents.slice().sort((a, b) => (Date.parse(b.last_at || "") || 0) - (Date.parse(a.last_at || "") || 0))[0]).id);
     if (!agents.length) setActiveId(null);
   }, [loaded, active, agents]);
   useEffect(() => { if (activeId) writeStorage(ACTIVE_KEY, activeId); }, [activeId]);
-  useEffect(() => { document.title = active ? `${active.name} · LazyBoy` : "LazyBoy"; }, [active]);
 
   // Phone navigation is a stack: list -> chat -> computer/files sheet. The browser back button pops it.
   const depth = useRef(0);
@@ -133,21 +155,84 @@ export function Workspace() {
   useEffect(() => { writeStorage(ROOM_KEY, roomId || ""); }, [roomId]);
   const room = rooms.find(item => item.id === roomId) || null;
   const seenItems = useMemo(() => [...agents.map(a => ({ id: a.id, last_at: a.last_at })), ...rooms.map(r => ({ id: r.id, last_at: r.last_at }))], [agents, rooms]);
-  // Ctrl/⌘+K: jump to the sidebar search from anywhere (on a phone the list page has it on top).
+  // Something shared from another app (Android's share sheet): ask which conversation it is for.
   useEffect(() => {
+    const text = sharedText(window.location.search);
+    if (!text) return;
+    window.history.replaceState(window.history.state, "", "/");
+    setDialog({ kind: "share-in", text });
+  }, []);
+  const toggleCompact = useCallback(() => setCompact(value => { writeStorage(COMPACT_KEY, value ? "0" : "1"); return !value; }), []);
+  // Grok's keyboard shortcuts. Combos the browser keeps for itself (new tab, switch tab) have Alt variants.
+  const shortcutState = useRef({ dialog: null as Dialog | null, activeId: null as string | null, roomId: null as string | null });
+  shortcutState.current = { dialog, activeId, roomId };
+  useEffect(() => {
+    const focusSearch = () => { const input = document.querySelector<HTMLInputElement>(".sidebar-search input"); input?.focus(); input?.select(); };
+    const step = (delta: number) => {
+      const rows = [...document.querySelectorAll<HTMLButtonElement>(".sidebar .bot-row:not(.hidden-row) .bot-row-main")];
+      if (!rows.length) return;
+      const current = rows.findIndex(row => row.getAttribute("aria-current") === "page");
+      rows[current < 0 ? 0 : (current + delta + rows.length) % rows.length]?.click();
+    };
     const key = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
-      event.preventDefault();
-      const focus = () => { const input = document.querySelector<HTMLInputElement>(".sidebar-search input"); input?.focus(); input?.select(); };
-      // Focus at once, so keys typed right after the shortcut land in the search, not in the composer.
-      if (state.current.mobile && state.current.view === "chat") { back(); requestAnimationFrame(focus); } else focus();
+      if (event.defaultPrevented || event.isComposing) return;
+      const mod = event.metaKey || event.ctrlKey;
+      const { dialog: open, activeId: bot, roomId: group } = shortcutState.current;
+      const name = event.key.toLowerCase();
+      if (mod && !event.altKey && !event.shiftKey && name === "k") {
+        event.preventDefault();
+        setDialog(current => current?.kind === "palette" ? null : current ? current : { kind: "palette" });
+        return;
+      }
+      // Other dialogs keep their own keys.
+      if (open || document.querySelector('[aria-modal="true"]')) return;
+      if (mod && event.shiftKey && name === "f") {
+        event.preventDefault();
+        if (state.current.mobile && state.current.view === "chat") { back(); requestAnimationFrame(focusSearch); } else focusSearch();
+      } else if (mod && !event.shiftKey && !event.altKey && name === "f" && (bot || group) && !(state.current.mobile && state.current.view === "list")) {
+        event.preventDefault();
+        setFinding(already => { if (already) window.dispatchEvent(new Event("lazyboy-find-again")); return true; });
+      } else if (mod && name === "n" && (event.altKey || !event.shiftKey)) {
+        event.preventDefault(); setDialog({ kind: "new" });
+      } else if (mod && !event.shiftKey && (name === "i" || name === "l")) {
+        const box = document.querySelector<HTMLTextAreaElement>(".chat .composer textarea");
+        if (box) { event.preventDefault(); box.focus(); }
+      } else if (mod && !event.shiftKey && name === "d") {
+        if (document.querySelector(".chat .composer textarea")) { event.preventDefault(); window.dispatchEvent(new Event("lazyboy-dictate")); }
+      } else if (mod && !event.shiftKey && name === "b") {
+        event.preventDefault(); toggleCompact();
+      } else if (mod && event.code === "Comma") {
+        event.preventDefault();
+        if (event.shiftKey && bot && !group) setDialog({ kind: "agent", id: bot, section: "profile" });
+        else if (!event.shiftKey) setDialog({ kind: "settings" });
+      } else if (mod && event.code === "Slash") {
+        event.preventDefault(); setDialog({ kind: "shortcuts" });
+      } else if (event.altKey && !mod && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+        event.preventDefault(); step(event.key === "ArrowUp" ? -1 : 1);
+      } else if (event.altKey && !mod && /^Digit[1-9]$/.test(event.code)) {
+        const rows = document.querySelectorAll<HTMLButtonElement>(".sidebar .bot-row .bot-row-main");
+        const row = rows[Number(event.code.slice(5)) - 1];
+        if (row) { event.preventDefault(); row.click(); }
+      }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [back]);
+  }, [back, toggleCompact]);
   const { isUnread: unread, markUnread } = useSeen(seenItems, mobile && view === "list" ? null : roomId || activeId);
   useNotifications(agents, mobile && view === "list" ? null : roomId ? null : activeId, id => select(id));
-  useEffect(() => { if (roomId && rooms.length && !room) setRoomId(null); }, [roomId, rooms, room]);
+  // A group chat deleted elsewhere (or on another device) closes here, also when it was the last one.
+  useEffect(() => { if (roomId && roomsLoaded && !room) setRoomId(null); }, [roomId, roomsLoaded, room]);
+  useEffect(() => { setFinding(false); }, [activeId, roomId, session.threadId]);
+  // Unread conversations and bots waiting for an answer show in the tab title and on the installed app's icon.
+  const unreadCount = useMemo(() => [...agents.filter(a => !a.hidden).map(a => unread(a.id, a.last_at)), ...rooms.map(r => unread(r.id, r.last_at))].filter(Boolean).length, [agents, rooms, unread]);
+  const waitingCount = agents.filter(a => a.activity?.state === "waiting_input" || a.activity?.state === "waiting_approval").length;
+  useEffect(() => {
+    const total = unreadCount + waitingCount;
+    const base = room ? `${room.name} · LazyBoy` : active ? `${active.name} · LazyBoy` : "LazyBoy";
+    document.title = total ? `(${total}) ${base}` : base;
+    const badge = navigator as Navigator & { setAppBadge?: (count?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    if (total) void badge.setAppBadge?.(total).catch(() => undefined); else void badge.clearAppBadge?.().catch(() => undefined);
+  }, [unreadCount, waitingCount, active?.name, room?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const togglePanel = useCallback((tab: PanelTab, force = false) => {
     const { open, tab: currentTab } = panel;
@@ -181,9 +266,13 @@ export function Workspace() {
       { label: agent.hidden ? "顯示在側欄" : "從側欄隱藏", icon: agent.hidden ? <Eye /> : <EyeOff />, onSelect: () => void api.sidebar(agent.id, { hidden: !agent.hidden, ...(agent.hidden ? {} : { pinned: false }) }).then(upsert).catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
     ] : []),
     ...(!inChat ? [{ label: "標為未讀", icon: <CircleDot />, onSelect: () => markUnread(agent.id) }] : []),
+    { label: agent.primary ? "取消主要 Bot" : "設為主要 Bot", icon: <Star />, hint: agent.primary ? undefined : "其他 Bot 會把協調交給它",
+      onSelect: () => void api.setPrimary(agent.id, !agent.primary).then(data => { applyTeam({ agents: data.agents }); toast(agent.primary ? `${agent.name} 不再是主要 Bot` : `${agent.name} 是你的主要 Bot 了`, "ok"); }).catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
     { label: "複製 Bot", icon: <Copy />, onSelect: () => void api.duplicate(agent.id).then(row => { upsert(row); toast(`已建立「${row.name}」`, "ok", { label: "打開", run: () => select(row.id) }); }).catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
     { label: isMuted(agent.id) ? "開啟通知" : "關閉通知", icon: isMuted(agent.id) ? <Bell /> : <BellOff />, onSelect: () => { setMuted(agent.id, !isMuted(agent.id)); toast(isMuted(agent.id) ? `已關閉 ${agent.name} 的通知` : `已開啟 ${agent.name} 的通知`, "ok"); } },
     { label: "分享 Bot", icon: <Share2 />, onSelect: () => setDialog({ kind: "share", agent }) },
+    ...(agents.length > 1 ? [{ label: "分享登入給其他 Bot", icon: <KeyRound />, hint: "對方不用再登入同一個網站", onSelect: () => setDialog({ kind: "logins", agent }) }] : []),
+    { label: "存成範本", icon: <Import />, hint: "之後在「新增」一鍵建立同樣的 Bot", onSelect: () => void api.saveTemplate(agent.id).then(() => toast(`已把「${agent.name}」存成範本，在「新增」裡可以找到`, "ok")).catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
     { label: "教它一件事", icon: <GraduationCap />, onSelect: () => setDialog({ kind: "teach", agent }) },
     ...(groups.length ? [{ label: "移到分區", icon: <Users />, onSelect: () => setDialog({ kind: "move", agent }) }] : []),
     "separator",
@@ -210,7 +299,7 @@ export function Workspace() {
         toast(`已刪除 ${agent.name}`, "ok");
       },
     }) },
-  ], [groups.length, active?.id, activeId, session, refresh, remove, back]);
+  ], [groups.length, active?.id, activeId, session, refresh, remove, back, applyTeam, agents]);
 
   const groupActions = useCallback((group: AgentGroup): MenuItem[] => [
     { label: "編輯分區", icon: <Pencil />, onSelect: () => setDialog({ kind: "group", group }) },
@@ -219,6 +308,59 @@ export function Workspace() {
       run: async () => applyTeam(await api.manageTeam({ action: "delete_group", group_id: group.id })),
     }) },
   ], [applyTeam]);
+
+  /** A message picked in search: open its bot (and thread) or group chat, then bring the message into view. */
+  const openMessage = useCallback((hit: SearchMessage) => {
+    const nonce = Date.now();
+    if (hit.kind === "room") selectRoom(hit.owner_id);
+    else { session.showThread(hit.owner_id, hit.thread_id); select(hit.owner_id); }
+    setFocus({ owner: hit.owner_id, id: hit.message_id, nonce });
+  }, [select, selectRoom, session]);
+  const openFileOf = useCallback((agentId: string, path: string, title: string, mediaType?: string) => {
+    select(agentId);
+    openFile({ title, path, url: contentUrl(agentId, path), mediaType });
+  }, [select, openFile]);
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const dark = resolvedTheme(readTheme()) === "dark";
+    const list: PaletteAction[] = [
+      { id: "new-bot", label: "新增 Bot", hint: "從範本開始、取名字建立，或開群組對話", icon: <Plus />, keys: keys("Mod+Alt+N"), run: () => setDialog({ kind: "new" }) },
+      { id: "new-room", label: "新增群組對話", hint: "2 到 6 個 Bot 一起完成一件事", icon: <MessagesSquare />, run: () => setDialog({ kind: "room" }) },
+      { id: "import", label: "匯入 Bot", icon: <Import />, run: () => setDialog({ kind: "import" }) },
+      { id: "apps", label: "連接應用程式", hint: "Notion、GitHub、Figma、Canva…", icon: <Plug />, run: () => setDialog({ kind: "settings", section: "mcp" }) },
+      { id: "usage", label: "模型用量", icon: <ChartColumn />, run: () => setDialog({ kind: "settings", section: "usage" }) },
+      { id: "settings", label: "設定", icon: <Settings />, keys: keys("Mod+,"), run: () => setDialog({ kind: "settings" }) },
+      { id: "theme", label: dark ? "切換成淺色外觀" : "切換成深色外觀", icon: <SunMoon />, run: () => persistTheme(dark ? "light" : "dark") },
+      { id: "compact", label: compact ? "展開側欄" : "精簡側欄", icon: <PanelLeft />, keys: keys("Mod+B"), run: toggleCompact },
+      { id: "shortcuts", label: "鍵盤快速鍵", icon: <Keyboard />, keys: keys("Mod+/"), run: () => setDialog({ kind: "shortcuts" }) },
+    ];
+    if (active && !roomId) list.unshift(
+      { id: "bot-thread", label: `與 ${active.name} 開新對話`, icon: <MessageSquarePlus />, run: () => void session.createThread().catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
+      { id: "bot-settings", label: `${active.name} 的設定`, icon: <Pencil />, keys: keys("Mod+Shift+,"), run: () => setDialog({ kind: "agent", id: active.id, section: "profile" }) },
+      { id: "bot-skills", label: `${active.name} 的技能`, icon: <Brain />, run: () => setDialog({ kind: "agent", id: active.id, section: "skills" }) },
+      { id: "bot-routines", label: `${active.name} 的定時任務`, icon: <CalendarClock />, run: () => setDialog({ kind: "routines", id: active.id }) },
+      { id: "bot-computer", label: `打開 ${active.name} 的電腦`, icon: <Monitor />, run: () => togglePanel("computer", true) },
+      { id: "bot-files", label: `${active.name} 的檔案`, icon: <FolderOpen />, run: () => togglePanel("files", true) },
+      { id: "bot-teach", label: `教 ${active.name} 一件事`, icon: <GraduationCap />, run: () => setDialog({ kind: "teach", agent: active }) },
+      { id: "bot-context", label: `${active.name} 的 Context 用量`, hint: "看對話佔了多少，或壓縮舊對話", icon: <ChartColumn />, run: () => window.dispatchEvent(new Event("lazyboy-context")) },
+    );
+    return list;
+  }, [active, roomId, compact, session, toggleCompact, togglePanel]);
+
+  /** A bot dropped on a sidebar section: pin it, hide it, or file it under a section (leaving pinned/hidden). */
+  const moveBot = useCallback(async (agent: AgentRow, target: DropTarget) => {
+    try {
+      if ("pinned" in target) upsert(await api.sidebar(agent.id, { pinned: true, hidden: false }));
+      else if ("hidden" in target) upsert(await api.sidebar(agent.id, { hidden: true, pinned: false }));
+      else {
+        if (agent.pinned || agent.hidden) upsert(await api.sidebar(agent.id, { pinned: false, hidden: false }));
+        if ((agent.group_id || "") !== target.group) applyTeam(await api.manageTeam({ action: "move_agent", agent_id: agent.id, group_id: target.group }));
+      }
+    } catch (err) { toast(String(err instanceof Error ? err.message : err), "error"); }
+  }, [upsert, applyTeam]);
+  const reorderGroups = useCallback((ids: string[]) => {
+    applyTeam({ groups: ids.map((id, position) => ({ ...groups.find(group => group.id === id)!, position })) });
+    void api.manageTeam({ action: "reorder_groups", ids }).then(applyTeam).catch(err => { toast(String(err instanceof Error ? err.message : err), "error"); void refresh(); });
+  }, [groups, applyTeam, refresh]);
 
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -260,17 +402,23 @@ export function Workspace() {
 
   return (
     <AvatarLookProvider value={looks}>
-      <div ref={appRef} className={`app${mobile ? " is-mobile" : ""}${panelVisible ? " has-panel" : ""}`} data-view={view}>
+      <div ref={appRef} className={`app${mobile ? " is-mobile" : ""}${panelVisible ? " has-panel" : ""}${compact && !mobile ? " sidebar-compact" : ""}`} data-view={view}>
         {showSidebar ? (
           <Sidebar agents={agents} groups={groups} activeId={mobile || roomId ? null : activeId} loaded={loaded} onSelect={select}
             rooms={rooms} activeRoomId={mobile ? null : roomId} onSelectRoom={selectRoom} onCreateRoom={() => setDialog({ kind: "room" })} unread={unread}
             onCreate={() => setDialog({ kind: "create" })} onImport={() => setDialog({ kind: "import" })}
             onCreateGroup={() => setDialog({ kind: "group" })} onSettings={() => setDialog({ kind: "settings" })}
-            agentActions={agent => agentActions(agent)} groupActions={groupActions} />
+            agentActions={agent => agentActions(agent)} groupActions={groupActions}
+            onMove={moveBot} onReorderGroups={reorderGroups}
+            compact={compact && !mobile} onToggleCompact={mobile ? undefined : toggleCompact}
+            onNew={() => setDialog({ kind: "new" })} onTemplates={() => setDialog({ kind: "new", startAt: "templates" })}
+            onSearch={query => setDialog({ kind: "palette", query })} onConnectApps={() => setDialog({ kind: "settings", section: "mcp" })} />
         ) : null}
 
         {showChat ? (roomId && room ? (
           <RoomView key={room.id} roomId={room.id} mobile={mobile} onBack={back}
+            finding={finding} onCloseFind={() => setFinding(false)}
+            focusMessage={focus && focus.owner === room.id ? focus : null} onFocused={() => setFocus(null)}
             onEdit={row => setDialog({ kind: "room", room: row })}
             onDeleted={() => { setRoomId(null); void refreshRooms(); if (state.current.mobile) back(); }}
             onOpenBot={select} onOpenFile={openFile} onChanged={() => void refreshRooms()} />
@@ -282,7 +430,9 @@ export function Workspace() {
             onTeach={() => setDialog({ kind: "teach", agent: active })}
             onPick={text => appendDraft(draftKey(active.id, session.threadId), text)}
             onOpenSettings={() => setDialog({ kind: "agent", id: active.id, section: "profile" })}
-            menuItems={agentActions(active, true)} />
+            menuItems={agentActions(active, true)}
+            finding={finding} onCloseFind={() => setFinding(false)}
+            focusMessage={focus && focus.owner === active.id ? focus : null} onFocused={() => setFocus(null)} />
         ) : (
           <main className="chat chat-welcome">
             {!loaded ? null : error && !agents.length ? (
@@ -293,9 +443,10 @@ export function Workspace() {
                 <h2>歡迎使用 LazyBoy</h2>
                 <p className="chat-empty-lead">每個 Bot 都有自己的電腦、技能與檔案。建立第一個 Bot，交代它工作吧。</p>
                 <div className="welcome-actions">
-                  <button type="button" className="btn primary" onClick={() => setDialog({ kind: "create" })}><Plus />新增 Bot</button>
+                  <button type="button" className="btn primary" onClick={() => setDialog({ kind: "create" })}><Plus />建立自己的 Bot</button>
                   <button type="button" className="btn" onClick={() => setDialog({ kind: "import" })}><Import />匯入 Bot</button>
                 </div>
+                <Suspense fallback={null}><WelcomeTemplates onPick={preset => setDialog({ kind: "create", preset })} /></Suspense>
               </div>
             )}
           </main>
@@ -334,7 +485,7 @@ export function Workspace() {
       ) : null}
       {dialog?.kind === "about" ? <AboutDialog mobile={mobile} onClose={() => setDialog(mobile ? { kind: "settings" } : null)} /> : null}
       {dialog?.kind === "create" ? (
-        <AgentSettingsDialog mode="create" onClose={() => setDialog(null)} onSaved={row => { setDialog(null); upsert(row); void refresh(); select(row.id); }} />
+        <AgentSettingsDialog mode="create" preset={dialog.preset} onClose={() => setDialog(null)} onSaved={row => { setDialog(null); upsert(row); void refresh(); select(row.id); }} />
       ) : null}
       {dialog?.kind === "agent" && dialogAgent ? (
         <AgentSettingsDialog key={dialogAgent.id} agent={dialogAgent} initialSection={dialog.section}
@@ -365,6 +516,24 @@ export function Workspace() {
       {dialog?.kind === "peer" ? <PeerDialog agentId={dialog.id} peerId={dialog.peer} team={agents} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "confirm" ? (
         <ConfirmDialog title={dialog.title} body={dialog.body} confirmLabel={dialog.label} danger={dialog.danger} onConfirm={dialog.run} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog?.kind === "palette" ? (
+        <CommandPalette agents={agents} rooms={rooms} actions={paletteActions} initialQuery={dialog.query} onClose={() => setDialog(null)}
+          onOpenBot={select} onOpenRoom={selectRoom} onOpenMessage={openMessage} onOpenFile={openFileOf}
+          onOpenRoutine={id => { select(id); setDialog({ kind: "routines", id }); }} />
+      ) : null}
+      {dialog?.kind === "shortcuts" ? <ShortcutsDialog onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === "logins" ? <LoginShareDialog agent={dialog.agent} agents={agents} onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === "share-in" ? (
+        <ShareInDialog text={dialog.text} agents={agents} rooms={rooms} onClose={() => setDialog(null)}
+          onPickBot={id => { const text = dialog.text; setDialog(null); appendDraft(draftKey(id, id), text); select(id); }}
+          onPickRoom={id => { const text = dialog.text; setDialog(null); const current = readDraft(`room:${id}`).text; writeDraft(`room:${id}`, { text: [current.trim(), text].filter(Boolean).join("\n\n") }); selectRoom(id); }} />
+      ) : null}
+      {dialog?.kind === "new" ? (
+        <NewChatDialog agents={agents} startAt={dialog.startAt} onClose={() => setDialog(null)} onCreate={preset => setDialog({ kind: "create", preset })}
+          onOpenBot={select} onImport={() => setDialog({ kind: "import" })} onCreateGroup={() => setDialog({ kind: "group" })}
+          onRoomCreated={row => { setRooms(current => [row, ...current.filter(item => item.id !== row.id)]); void refreshRooms(); selectRoom(row.id); }}
+          onCreated={row => { upsert(row); void refresh(); select(row.id); toast(`已用範本建立「${row.name}」`, "ok"); }} />
       ) : null}
       <Toaster />
     </AvatarLookProvider>

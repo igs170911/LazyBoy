@@ -18,8 +18,12 @@ export function MemoryPanel({ agentId, agentName }: { agentId: string; agentName
   useEffect(() => { api.memory(agentId).then(setState).catch(err => setError(err instanceof Error ? err.message : String(err))); }, [agentId]);
   const save = async (target: "user" | "memory", entries: string[], done: string) => {
     setBusy(true); setError("");
-    try { setState(await api.saveMemory(agentId, target, entries)); setEditing(null); setAdding(null); toast(done, "ok"); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    try { setState(await api.saveMemory(agentId, target, entries, state?.[target].entries)); setEditing(null); setAdding(null); toast(done, "ok"); }
+    catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      // The bot changed this list meanwhile: show its current version so the edit can be made on top of it.
+      void api.memory(agentId).then(setState).catch(() => undefined);
+    }
     finally { setBusy(false); }
   };
   if (!state) return <div className="memory-panel">{error ? <p className="pane-error" role="alert">{error}</p> : <p className="muted">讀取記憶…</p>}</div>;

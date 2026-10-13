@@ -130,6 +130,113 @@ export function MenuButton({ label, icon, items, placement = "bottom-end", class
   );
 }
 
+const LONG_PRESS_MS = 480;
+
+/**
+ * A menu that opens where it was asked for: right-click with a mouse, a long press on a touch screen, or the
+ * keyboard's menu key (Shift+F10). Spread `bind` on the row; render `menu` anywhere.
+ */
+export function useContextMenu(label: string, items: () => MenuItem[]) {
+  const [at, setAt] = useState<{ x: number; y: number; items: MenuItem[]; anchor: Element | null } | null>(null);
+  const press = useRef<{ timer: number; x: number; y: number; fired: boolean; anchor: Element | null } | null>(null);
+  const open = (x: number, y: number, anchor: Element | null) => setAt({ x, y, items: items(), anchor });
+  const cancel = () => { if (press.current) window.clearTimeout(press.current.timer); };
+  // React events from the open menu (a portal) still bubble through the row; leave those alone.
+  const fromMenu = (event: React.SyntheticEvent) => !!(event.target as Element).closest?.(".menu");
+  const bind = {
+    onContextMenu: (event: React.MouseEvent) => {
+      event.preventDefault();
+      if (fromMenu(event)) return;
+      if (press.current?.fired) return;
+      // The menu key reports no pointer position; open beside the row instead.
+      const anchor = event.currentTarget as Element;
+      if (!event.clientX && !event.clientY) { const box = anchor.getBoundingClientRect(); open(box.left + 24, box.bottom - 4, anchor); }
+      else open(event.clientX, event.clientY, anchor);
+    },
+    onPointerDown: (event: React.PointerEvent) => {
+      if (event.pointerType !== "touch" || fromMenu(event)) return;
+      cancel();
+      const { clientX: x, clientY: y } = event;
+      const anchor = event.currentTarget as Element;
+      press.current = { x, y, anchor, fired: false, timer: window.setTimeout(() => {
+        if (!press.current) return;
+        press.current.fired = true;
+        navigator.vibrate?.(10);
+        open(x, y, anchor);
+      }, LONG_PRESS_MS) };
+    },
+    onPointerMove: (event: React.PointerEvent) => {
+      const p = press.current;
+      if (p && !p.fired && Math.hypot(event.clientX - p.x, event.clientY - p.y) > 8) { cancel(); press.current = null; }
+    },
+    onPointerUp: cancel,
+    onPointerCancel: () => { cancel(); press.current = null; },
+    // The tap that ends a long press must not also open the row.
+    onClickCapture: (event: React.MouseEvent) => {
+      if (fromMenu(event)) return;
+      if (press.current?.fired) { event.preventDefault(); event.stopPropagation(); }
+      press.current = null;
+    },
+  };
+  const menu = at ? <PointMenu label={label} x={at.x} y={at.y} items={at.items} anchor={at.anchor} onClose={() => { setAt(null); press.current = null; }} /> : null;
+  return { bind, menu, opened: !!at };
+}
+
+function PointMenu({ label, x, y, items, anchor, onClose }: { label: string; x: number; y: number; items: MenuItem[]; anchor: Element | null; onClose: () => void }) {
+  const menu = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!menu.current) return;
+    const box = menu.current.getBoundingClientRect();
+    setPosition({
+      left: Math.max(8, Math.min(x, window.innerWidth - box.width - 8)),
+      top: y + box.height + 8 > window.innerHeight ? Math.max(8, y - box.height) : y,
+    });
+  }, [x, y]);
+  // Focus once placed: a still-hidden menu cannot take focus.
+  useEffect(() => { if (position) menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true }); }, [!!position]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const outside = (event: Event) => { if (!menu.current?.contains(event.target as Node)) onClose(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); onClose(); } };
+    // Only scrolling what holds the row moves it away from the menu; a conversation scrolling as a reply streams in
+    // elsewhere on the page must not close it.
+    const scrolled = (event: Event) => { const target = event.target; if (target === document || (anchor && target instanceof Node && target.contains(anchor))) onClose(); };
+    document.addEventListener("keydown", escape);
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("contextmenu", outside, true);
+    window.addEventListener("resize", onClose);
+    window.addEventListener("blur", onClose);
+    window.addEventListener("scroll", scrolled, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("contextmenu", outside, true);
+      window.removeEventListener("resize", onClose);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("scroll", scrolled, true);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [onClose, anchor]);
+  function onKeyDown(event: React.KeyboardEvent) {
+    const buttons = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") || [])];
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "Escape" || event.key === "Tab") { event.preventDefault(); event.stopPropagation(); onClose(); }
+    else if (event.key === "ArrowDown") { event.preventDefault(); buttons[(index + 1) % buttons.length]?.focus(); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); buttons[(index - 1 + buttons.length) % buttons.length]?.focus(); }
+  }
+  return createPortal(
+    <div ref={menu} role="menu" aria-label={label} className="menu" onKeyDown={onKeyDown} onContextMenu={event => event.preventDefault()}
+      style={position ? position : { visibility: "hidden", top: 0, left: 0 }}>
+      {items.map((item, index) => item === "separator"
+        ? <div key={`s${index}`} className="menu-sep" role="separator" />
+        : <button key={item.label} type="button" role="menuitem" className={item.danger ? "danger" : ""} disabled={item.disabled}
+            onClick={() => { onClose(); item.onSelect(); }}>
+            {item.icon}<span>{item.label}</span>{item.hint ? <small>{item.hint}</small> : null}
+          </button>)}
+    </div>,
+    document.body,
+  );
+}
+
 type Toast = { id: number; text: string; kind: "info" | "error" | "ok"; action?: { label: string; run: () => void } };
 let toasts: Toast[] = [];
 let nextToast = 1;

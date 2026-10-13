@@ -129,3 +129,32 @@ def test_sign_ins_saved_in_a_bots_own_home_move_to_the_shared_folder(apps):
     (own / "notion.json").write_text("old")
     apps.computers.prepare(apps.bot)
     assert (apps.store.directory / "mcp-tokens" / "notion.json").read_text() == "old" and not (own / "notion.json").exists()
+
+
+async def test_tools_of_a_connected_app_can_be_switched_off(apps):
+    view = await apps.connectors.connect("context7", apps.bot)
+    assert view["state"] == "connected" and view["disabled_tools"] == []
+    view = await apps.connectors.set_tools("context7", ["search"])
+    assert view["disabled_tools"] == ["search"]
+    entry = apps.store.get("mcp", "shared")["context7"]
+    assert "search" in entry["tools"]["exclude"]
+    config = yaml.safe_load((apps.store.agent_directory(apps.bot) / "hermes" / "config.yaml").read_text())
+    assert "search" in config["mcp_servers"]["context7"]["tools"]["exclude"] and "disabled_tools" not in config["mcp_servers"]["context7"]
+    # Reconnecting keeps the choice; switching back on clears it.
+    await apps.connectors.connect("context7", apps.bot)
+    assert apps.store.get("mcp", "shared")["context7"]["disabled_tools"] == ["search"]
+    view = await apps.connectors.set_tools("context7", [])
+    assert view["disabled_tools"] == [] and "tools" not in apps.store.get("mcp", "shared")["context7"]
+    with pytest.raises(ValueError): await apps.connectors.set_tools("notion", ["x"])
+
+
+async def test_disconnecting_an_app_keeps_a_custom_connectors_sign_in(apps):
+    await apps.connectors.connect("context7", apps.bot)
+    apps.store.put("mcp", apps.bot, {"context7": {"url": "https://example.test/mcp", "auth": "oauth", "enabled": True}})
+    token = apps.store.directory / "mcp-tokens" / "context7.json"
+    token.parent.mkdir(parents=True, exist_ok=True); token.write_text("{}")
+    await apps.connectors.disconnect("context7")
+    assert token.exists()
+    apps.store.put("mcp", apps.bot, {})
+    await apps.connectors.connect("context7", apps.bot); await apps.connectors.disconnect("context7")
+    assert not token.exists()

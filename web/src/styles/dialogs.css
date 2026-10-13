@@ -108,7 +108,7 @@
 .lb-settings-copy { display: grid; flex: 1; gap: 2px; min-width: 0; font-size: 14px; }
 .lb-settings-copy strong { font-weight: 550; overflow-wrap: anywhere; }
 .lb-settings-copy small { color: var(--muted); font-size: 12.5px; font-weight: 400; }
-.lb-settings-copy a { color: var(--accent-strong); }
+.lb-settings-copy a { color: var(--link); }
 .lb-settings-url { font-family: var(--mono); overflow-wrap: anywhere; }
 .lb-settings-control { display: flex; flex: none; align-items: center; gap: 8px; }
 .lb-settings-row > input:not([type=checkbox]), .lb-settings-row > select, .lb-settings-select { width: min(280px, 50%); min-width: 160px; }
@@ -241,7 +241,7 @@
 .mcp-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
 .mcp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mcp-actions button, .mcp-actions a { min-height: 30px !important; padding: 4px 11px !important; font-size: 13px !important; }
-.mcp-actions a { color: var(--accent-strong); text-decoration: none; }
+.mcp-actions a { color: var(--link); text-decoration: none; }
 .mcp-missing { color: var(--warn); }
 .mcp-scope { margin-left: 8px; padding: 1px 8px; border-radius: 99px; background: var(--elev); color: var(--muted); font-size: 11.5px; font-weight: 500; vertical-align: 1px; }
 .mcp-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
@@ -324,7 +324,7 @@
 [data-tone="ok"] small i, .app-badge[data-tone="ok"], .app-sheet-status[data-tone="ok"] strong i { background: var(--ok); }
 [data-tone="warn"] small i, .app-badge[data-tone="warn"], .app-sheet-status[data-tone="warn"] strong i { background: var(--warn); }
 [data-tone="error"] small i, .app-badge[data-tone="error"], .app-sheet-status[data-tone="error"] strong i { background: var(--danger); }
-.connected-apps em { padding: 3px 10px; border-radius: 99px; background: var(--accent); color: #fff; font-size: 12.5px; font-style: normal; font-weight: 600; }
+.connected-apps em { padding: 3px 10px; border-radius: 99px; background: var(--accent); color: var(--accent-ink); font-size: 12.5px; font-style: normal; font-weight: 600; }
 .app-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
 .app-grid small { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 12.5px; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .app-grid button { align-items: flex-start; min-height: 64px; }
@@ -346,7 +346,7 @@
 .app-sheet-lead { margin-top: -6px; }
 .app-sheet-connect { display: grid; gap: 10px; }
 .app-sheet-connect label { display: grid; gap: 6px; font-size: 13.5px; }
-.app-sheet-connect label a, .signin-steps a { display: inline-flex; align-items: center; gap: 4px; justify-self: start; color: var(--accent-strong); font-size: 13px; }
+.app-sheet-connect label a, .signin-steps a { display: inline-flex; align-items: center; gap: 4px; justify-self: start; color: var(--link); font-size: 13px; }
 .app-sheet-connect label a svg, .signin-steps a svg { width: 13px; height: 13px; }
 .app-sheet-connect > button { justify-self: stretch; min-height: 42px !important; font-size: 15px; }
 .app-sheet-connect small { color: var(--muted); font-size: 12.5px; text-align: center; }
@@ -439,3 +439,132 @@
 .usage-line { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .usage-line strong { font-size: 15px; font-variant-numeric: tabular-nums; }
 .usage-line small { color: var(--faint); font-size: 12px; overflow-wrap: anywhere; }
+
+/* Model usage per provider (Settings → 模型用量). */
+.usage-panel { gap: 10px; }
+.usage-period { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.usage-period button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface); color: var(--muted); font-size: 13px; }
+.usage-period button.picked { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.usage-period span { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-empty { color: var(--muted); font-size: 13.5px; }
+.usage-card { border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface); }
+.usage-card > summary { display: grid; gap: 4px; padding: 12px 14px; cursor: pointer; list-style: none; }
+.usage-card > summary::-webkit-details-marker { display: none; }
+.usage-card-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.usage-card-head strong { overflow: hidden; font-size: 14.5px; text-overflow: ellipsis; white-space: nowrap; }
+.usage-card-head small { color: var(--faint); font-size: 12px; }
+.usage-card-head b { margin-left: auto; font-size: 14.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-card-sub { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.usage-bars { display: flex; align-items: flex-end; gap: 2px; height: 34px; margin-top: 4px; }
+.usage-bars i { flex: 1; min-width: 1px; border-radius: 2px 2px 0 0; background: var(--accent); opacity: .75; }
+.usage-models { width: 100%; margin: 0 0 6px; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-models th { padding: 6px 14px; color: var(--faint); font-size: 12px; font-weight: 600; text-align: right; }
+.usage-models td { padding: 6px 14px; border-top: 1px solid var(--line); text-align: right; }
+.usage-models :is(th, td):first-child { overflow-wrap: anywhere; text-align: left; }
+
+/* ---------- New (Grok's "New chat"): new bot, templates, group chat ---------- */
+.new-chat-dialog { width: min(640px, 100%); padding-bottom: 14px; }
+.new-chat-search { position: relative; display: flex; align-items: center; }
+.new-chat-search > svg { position: absolute; left: 12px; width: 17px; height: 17px; color: var(--faint); pointer-events: none; }
+.new-chat-search input { width: 100%; min-height: 42px; padding-left: 38px; }
+.new-chat-body { display: grid; gap: 16px; min-height: 0; overflow-y: auto; }
+.new-chat-actions { display: grid; gap: 2px; }
+.new-chat-action { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-s); background: none; color: var(--text); font-size: 14.5px; text-align: left; }
+.new-chat-action:hover:not(:disabled) { background: var(--hover); }
+.new-chat-action:disabled { opacity: .5; }
+.new-chat-action.primary-action { background: var(--accent-soft); font-weight: 600; }
+.new-chat-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--surface); color: var(--muted); }
+.new-chat-icon svg { width: 16px; height: 16px; }
+.new-chat-section h3, .welcome-templates h3 { margin-bottom: 8px; color: var(--faint); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.new-chat-bots { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.new-chat-bots li { display: flex; align-items: center; gap: 6px; border-radius: var(--radius-s); }
+.new-chat-bots li:hover, .new-chat-bots li.picked { background: var(--hover); }
+.new-chat-bot { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; padding: 7px 10px; border: 0; background: none; color: var(--text); text-align: left; }
+.new-chat-bot span { display: grid; min-width: 0; }
+.new-chat-bot strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.new-chat-bot small { overflow: hidden; color: var(--muted); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.new-chat-check { display: grid; flex: none; place-items: center; width: 24px; height: 24px; margin-right: 10px; padding: 0; border: 1.5px solid var(--line-strong); border-radius: 7px; background: none; color: var(--accent-ink); }
+.new-chat-check[aria-checked="true"] { border-color: var(--accent); background: var(--accent); }
+.new-chat-check svg { width: 15px; height: 15px; }
+.new-chat-foot { display: flex; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.new-chat-foot > span { flex: 1; color: var(--muted); font-size: 13.5px; }
+.template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.template-card { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); text-align: left; transition: border-color .15s, background .15s, transform .1s; }
+.template-card:hover { border-color: var(--line-strong); background: var(--hover); }
+.template-card:active { transform: scale(.99); }
+.template-card > span { display: grid; gap: 3px; min-width: 0; }
+.template-card strong { font-size: 14.5px; }
+.template-card small { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.welcome-templates { width: min(760px, 100%); margin-top: 28px; text-align: left; }
+
+/* Individual tools of a connected app. */
+.tool-switches summary small { margin-left: 6px; color: var(--faint); font-weight: 400; }
+.tool-switches ul { display: grid; gap: 2px; max-height: 300px; margin: 6px 0 0; padding: 0; overflow-y: auto; list-style: none; }
+.tool-switches label { display: flex !important; align-items: flex-start; gap: 10px; padding: 6px 4px; border-radius: var(--radius-s); font-weight: 400 !important; cursor: pointer; }
+.tool-switches label:hover { background: var(--hover); }
+.tool-switches input { flex: none; margin-top: 3px; }
+.tool-switches label span { display: grid; gap: 2px; min-width: 0; }
+.tool-switches code { font-size: 12.5px; }
+.tool-switches small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+/* The New dialog's rows are list items, not the dialog's standard buttons. */
+.new-chat-dialog :is(.new-chat-action, .new-chat-bot, .template-card) { justify-content: flex-start; min-height: 0; font-weight: 400; white-space: normal; text-align: left; }
+.new-chat-dialog :is(.new-chat-action, .new-chat-bot) { border: 0; background: none; }
+.new-chat-dialog .new-chat-action { padding: 8px 10px; font-size: 14.5px; }
+.new-chat-dialog .new-chat-action.primary-action { background: var(--accent-soft); font-weight: 600; }
+.new-chat-dialog .new-chat-action:hover:not(:disabled), .new-chat-dialog .new-chat-bots li:hover .new-chat-bot { background: var(--hover); }
+.new-chat-dialog .new-chat-bot { padding: 7px 10px; }
+.new-chat-dialog .template-card { align-items: flex-start; padding: 12px; border: 1px solid var(--line); background: var(--surface); }
+.new-chat-dialog .template-card:hover { border-color: var(--line-strong); background: var(--hover); }
+.new-chat-dialog .new-chat-check { min-height: 0; width: 24px; height: 24px; padding: 0; border-radius: 7px; background: none; }
+.new-chat-dialog .new-chat-check[aria-checked="true"] { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+
+/* Context usage of one conversation. */
+.context-dialog { width: min(520px, 100%); }
+.context-meter { height: 10px; overflow: hidden; border-radius: 99px; background: var(--elev); }
+.context-meter i { display: block; height: 100%; border-radius: inherit; background: var(--ok); transition: width .3s var(--ease); }
+.context-meter i[data-level="mid"] { background: var(--warn); }
+.context-meter i[data-level="high"] { background: var(--danger); }
+.context-total { color: var(--muted); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.context-total strong { color: var(--text); font-size: 16px; }
+.context-parts { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.context-parts li { display: grid; grid-template-columns: 110px 1fr 64px; align-items: center; gap: 10px; font-size: 13.5px; }
+.context-parts i { height: 8px; border-radius: 99px; background: var(--accent); opacity: .7; }
+.context-parts small { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.context-hint { font-size: 13px; line-height: 1.6; }
+
+/* A routine's trigger address. */
+.routine-hook { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px 8px; margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--line-strong); border-radius: var(--radius-s); font-size: 13px; }
+.routine-hook > span { color: var(--muted); }
+.routine-hook code { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.routine-hook small { grid-column: 1 / -1; color: var(--faint); font-size: 12px; line-height: 1.5; }
+.routine-check { display: flex !important; align-items: center; gap: 8px; font-weight: 400 !important; }
+
+/* Your saved templates in the New dialog. */
+.saved-template { position: relative; display: flex; }
+.saved-template .template-card { flex: 1; padding-right: 40px; }
+.new-chat-dialog .saved-template-remove { position: absolute; top: 8px; right: 8px; min-height: 0; width: 28px; height: 28px; padding: 0; border: 0; background: none; opacity: 0; }
+.saved-template:hover .saved-template-remove, .saved-template-remove:focus-visible, .is-mobile .saved-template-remove { opacity: 1; }
+
+/* Approval boundaries in the bot settings. */
+.ask-first { display: grid; gap: 6px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.ask-first legend { padding: 0 4px; font-size: 14px; font-weight: 600; }
+.ask-first small { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.ask-first label { display: flex !important; align-items: center; gap: 8px; font-weight: 400 !important; }
+
+/* Sharing sign-ins between bots. */
+.login-share-dialog { width: min(520px, 100%); }
+.login-share-head { margin-bottom: 6px; color: var(--faint); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.login-share-list { display: grid; gap: 2px; max-height: 220px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.login-share-list label { display: flex !important; align-items: center; gap: 10px; padding: 6px 4px; border-radius: var(--radius-s); font-weight: 400 !important; cursor: pointer; }
+.login-share-list label:hover { background: var(--hover); }
+.login-share-list span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.login-share-list small { color: var(--faint); font-size: 12px; }
+
+/* Shared from another app: choose the conversation. */
+.share-in-dialog { width: min(460px, 100%); }
+.share-in-preview { max-height: 120px; margin: 0; padding: 8px 12px; overflow: auto; border-left: 3px solid var(--line-strong); border-radius: var(--radius-s); background: var(--surface); color: var(--muted); font-size: 13.5px; white-space: pre-wrap; }
+.share-in-list { display: grid; gap: 2px; max-height: 50vh; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.share-in-dialog .share-in-list button { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; border: 0; background: none; font-weight: 400; text-align: left; }
+.share-in-dialog .share-in-list button:hover { background: var(--hover); }
+.share-in-list span { flex: 1; min-width: 0; overflow: hidden; font-size: 14.5px; text-overflow: ellipsis; white-space: nowrap; }
+.share-in-list small { color: var(--faint); font-size: 12px; }

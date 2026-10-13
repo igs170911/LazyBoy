@@ -12,13 +12,15 @@ from pathlib import Path
 
 import yaml
 
+YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
 DELIMITER = "\n§\n"
 TARGETS = {"user": ("USER.md", "user_char_limit", 1375), "memory": ("MEMORY.md", "memory_char_limit", 2200)}
 ENTRY_LIMIT = 2000
 
 
 def limits(root: Path):
-    try: cfg = (yaml.safe_load((root / "config.yaml").read_text()) or {}).get("memory") or {}
+    try: cfg = (yaml.load((root / "config.yaml").read_text(), Loader=YAML_LOADER) or {}).get("memory") or {}
     except (OSError, yaml.YAMLError): cfg = {}
     return {target: int(cfg.get(key) or default) for target, (_, key, default) in TARGETS.items()}
 
@@ -52,8 +54,13 @@ def locked(path: Path):
         os.close(fd)
 
 
-def write(hermes: Path, target: str, items):
-    """Replace one list. Entries are trimmed; the § separator cannot appear inside one; the budget is enforced."""
+class Changed(ValueError):
+    """The bot wrote to this list after the page loaded it; saving would erase what it learned."""
+
+
+def write(hermes: Path, target: str, items, previous=None):
+    """Replace one list. Entries are trimmed; the § separator cannot appear inside one; the budget is enforced.
+    `previous` is the list the page edited; if the bot changed it meanwhile, nothing is written."""
     if target not in TARGETS: raise ValueError("無效的記憶類別")
     if not isinstance(items, list): raise ValueError("記憶格式無效")
     clean = []
@@ -63,10 +70,15 @@ def write(hermes: Path, target: str, items):
         if len(text) > ENTRY_LIMIT: raise ValueError(f"每條記憶最多 {ENTRY_LIMIT} 字")
         clean.append(text)
     limit = limits(hermes)[target]
-    if len(DELIMITER.join(clean)) > limit: raise ValueError(f"超過這類記憶的上限 {limit} 字，請刪掉或縮短幾條")
     path = hermes / "memories" / TARGETS[target][0]
     path.parent.mkdir(parents=True, exist_ok=True)
     with locked(path):
+        current = entries(path)
+        if isinstance(previous, list) and [str(p).strip() for p in previous if str(p).strip()] != current:
+            raise Changed("Bot 剛剛更新了這份記憶，已重新載入，請再改一次")
+        size = len(DELIMITER.join(clean))
+        # A list already over budget may still shrink one entry at a time.
+        if size > limit and size >= len(DELIMITER.join(current)): raise ValueError(f"超過這類記憶的上限 {limit} 字，請刪掉或縮短幾條")
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(DELIMITER.join(clean), encoding="utf-8")
         os.chmod(temporary, 0o600)

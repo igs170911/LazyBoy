@@ -3,22 +3,24 @@ import { RoutingPanel } from "./routing-settings";
 import { SearchPanel } from "./search-settings";
 import { useDialogFocus } from "./dialog-focus";
 import { ConnectApps } from "./connect-apps";
+import { UsagePanel } from "./usage-panel";
 import { notifyOn, notifySupported, setNotify } from "./notify";
 import { useEffect, useRef, useState } from "react";
 import { api, type AppSettings, type ModelCheck, type ModelProtocol, type ProviderPreset, type SettingsModel } from "./api";
 import { mergeProviderModels, presetModel } from "./model-settings";
 import { useI18n } from "./i18n";
-import { persistTheme, readTheme, THEME_PREFS, type ThemePref } from "./theme";
+import { ACCENT_PREFS, persistAccent, persistTheme, readAccent, readTheme, THEME_PREFS, type AccentPref, type ThemePref } from "./theme";
 
 export const APP_NAME = "LazyBoy";
 export const APP_VERSION = (import.meta.env.LAZYBOY_VERSION || "0.1.20").trim() || "0.1.20";
 export const APP_BUILD = (import.meta.env.LAZYBOY_BUILD || "20").trim() || "20";
 
-export type SettingsSectionId = "general" | "model" | "mcp" | "updates";
+export type SettingsSectionId = "general" | "model" | "usage" | "mcp" | "updates";
 
 const SECTIONS: readonly { id: SettingsSectionId; icon: () => React.ReactElement }[] = [
   { id: "general", icon: GearIcon },
   { id: "model", icon: ModelIcon },
+  { id: "usage", icon: ChartIcon },
   { id: "mcp", icon: PlugIcon },
   { id: "updates", icon: DownloadIcon },
 ];
@@ -66,6 +68,14 @@ function ModelIcon() {
     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="6" y="6" width="12" height="12" rx="2" />
       <path d="M10 10h4v4h-4zM9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
+    </svg>
+  );
+}
+
+function ChartIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
     </svg>
   );
 }
@@ -136,6 +146,7 @@ function OverlayShell({
 function GeneralPanel() {
   const { t } = useI18n();
   const [theme, setTheme] = useState<ThemePref>(readTheme);
+  const [accent, setAccent] = useState<AccentPref>(readAccent);
 
   return (
     <div className="lb-settings-stack">
@@ -164,6 +175,19 @@ function GeneralPanel() {
             <option value="system">{t.themeSystem}</option>
             <option value="light">{t.themeLight}</option>
             <option value="dark">{t.themeDark}</option>
+          </select>
+        </label>
+        <label className="lb-settings-row">
+          <span className="lb-settings-copy">強調色<small>按鈕、選取與重點的顏色。</small></span>
+          <select className="lb-settings-select" aria-label="強調色" value={accent}
+            onChange={(event) => {
+              const next = event.target.value as AccentPref;
+              if (!ACCENT_PREFS.includes(next)) return;
+              persistAccent(next);
+              setAccent(next);
+            }}>
+            <option value="mono">黑白（Grok 風格）</option>
+            <option value="violet">紫色</option>
           </select>
         </label>
       </SettingsGroup>
@@ -739,6 +763,10 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
       <section aria-label={t.modelSection}>
         <ModelPanel />
       </section>
+      <section className="lb-settings-group" aria-label="模型用量">
+        <h3>模型用量</h3>
+        <UsagePanel />
+      </section>
       <section id="settings-mcp" className="lb-settings-group" aria-label="連接應用程式">
         <h3>連接應用程式</h3>
         <ConnectApps agentId={agentId} />
@@ -749,12 +777,16 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
   </OverlayShell>;
 }
 
+function sectionName(id: SettingsSectionId, t: ReturnType<typeof useI18n>["t"]) {
+  return id === "general" ? t.general : id === "model" ? t.modelSection : id === "usage" ? "模型用量" : id === "mcp" ? "連接應用程式" : t.updates;
+}
+
 export function SettingsDialog({ onClose, computer, mobile = false, onAbout, agentId, initialSection = "general" }: { agentId?: string | null; onClose: () => void; computer?: SettingsComputer; mobile?: boolean; onAbout?: () => void; initialSection?: SettingsSectionId }) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSectionId>(initialSection);
   const headingId = `lb-settings-heading-${section}`;
   const panelId = `lb-settings-panel-${section}`;
-  const sectionLabel = section === "general" ? t.general : section === "model" ? t.modelSection : section === "mcp" ? "連接應用程式" : t.updates;
+  const sectionLabel = sectionName(section, t);
   if (mobile) return <MobileSettings agentId={agentId} onClose={onClose} onAbout={onAbout} computer={computer} initialSection={initialSection} />;
 
   return (
@@ -774,7 +806,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
                 onClick={() => setSection(item.id)}
               >
                 <item.icon />
-                <span>{item.id === "general" ? t.general : item.id === "model" ? t.modelSection : item.id === "mcp" ? "連接應用程式" : t.updates}</span>
+                <span>{sectionName(item.id, t)}</span>
               </button>
             );
           })}
@@ -791,7 +823,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
           </button>
           <h2 id={headingId}>{sectionLabel}</h2>
           <div className="lb-settings-body">
-            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "mcp" ? <ConnectApps agentId={agentId} /> : <UpdatesPanel computer={computer} />}
+            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "usage" ? <UsagePanel /> : section === "mcp" ? <ConnectApps agentId={agentId} /> : <UpdatesPanel computer={computer} />}
           </div>
         </section>
       </div>

@@ -272,3 +272,29 @@ async def test_approvals_offer_always_allow_only_when_hermes_does(team):
     assert answered == [{"choice": "always"}]
     await team.runtime.human_request(scout, {"id": "a2", "method": "approval", "params": {"command": "rm -rf /", "choices": ["once", "deny"]}})
     assert team.store.get("tasks", task)["question"]["options"] == ["允許這次", "拒絕"]
+
+
+async def test_a_retried_message_is_delivered_once(team):
+    chief, writer = team.bots["Chief"], team.bots["Writer"]
+    running(team, chief)
+    first = await team.collab.send(chief, "Writer", "寫三則貼文", request_id="tool-call-1")
+    again = await team.collab.send(chief, "Writer", "寫三則貼文", request_id="tool-call-1")
+    assert first["sent"] and again.get("replayed")
+    assert len(team.store.all("bot_messages")) == 1
+    assert len([m for m in team.store.transcript(chief) if m.get("event") == "message_out"]) == 1
+    assert len(queued(team, writer)) == 1
+
+
+def test_the_primary_bot_is_named_in_every_teammate_list(team):
+    chief, writer = team.bots["Chief"], team.bots["Writer"]
+    team.store.patch("agents", chief, primary=True)
+    roster = team.collab.roster_text(writer)
+    assert "Chief（總管）［主要 Bot］" in roster and "Chief 是使用者的主要 Bot" in roster
+    assert "主要 Bot" not in team.collab.roster_text(chief).split("## 隊友與協作")[1].split("\n")[2]
+
+
+def test_group_attachments_are_pointed_to_on_each_members_computer():
+    from server.collab import attachments_in
+    text = "看這份 [報價單.pdf](/api/agents/0b1e7f3a-1111-2222-3333-444455556666/files/content?path=uploads/k1/%E5%A0%B1%E5%83%B9%E5%96%AE.pdf)"
+    assert attachments_in(text) == "看這份 ［附件：報價單.pdf，在你的電腦：/workspace/uploads/k1/報價單.pdf］"
+    assert attachments_in("沒有附件") == "沒有附件"

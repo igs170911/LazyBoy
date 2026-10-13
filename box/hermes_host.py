@@ -73,14 +73,32 @@ def prepare_host_state(home: Path, namespace: str | None = None):
         raise
 
 
+_product = None
+_key = None
+
+
+def product_client():
+    """One client for every relayed request: building one costs an SSL context and a connection each time."""
+    global _product
+    if _product is None or _product.is_closed:
+        _product = httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds="/product-ipc/product.sock"), timeout=httpx.Timeout(300, connect=10))
+    return _product
+
+
+def worker_key():
+    global _key
+    if _key is None: _key = Path(os.environ["HERMES_HOME"], ".worker-key").read_text().strip()
+    return _key
+
+
 async def relay(path: str, request: Request, *, model_api: bool = False):
-    key = Path(os.environ["HERMES_HOME"], ".worker-key").read_text().strip()
+    key = worker_key()
     authorization = request.headers.get("authorization", "")
     if model_api and not authorization and request.headers.get("x-api-key"):
         authorization = "Bearer " + request.headers["x-api-key"]
     if not hmac.compare_digest(authorization, "Bearer " + key):
         return JSONResponse({"error": "Bot authentication required"}, status_code=401)
-    client = httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds="/product-ipc/product.sock"), timeout=httpx.Timeout(300, connect=10))
+    client = product_client()
     headers = {"Authorization": "Bearer " + key, "content-type": request.headers.get("content-type", "application/json")}
     if model_api:
         for name in ("anthropic-beta", "anthropic-version"):
@@ -88,14 +106,13 @@ async def relay(path: str, request: Request, *, model_api: bool = False):
     try:
         upstream = await client.send(client.build_request(request.method, "http://product" + path, params=request.query_params, headers=headers, content=await request.body()), stream=True)
     except BaseException as error:
-        await client.aclose()
         if isinstance(error, httpx.HTTPError):
             return JSONResponse({"error": "Product service unavailable"}, status_code=502)
         raise
     async def chunks():
         try:
             async for chunk in upstream.aiter_bytes(): yield chunk
-        finally: await upstream.aclose(); await client.aclose()
+        finally: await upstream.aclose()
     return StreamingResponse(chunks(), status_code=upstream.status_code, media_type=upstream.headers.get("content-type", "application/json"))
 
 

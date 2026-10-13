@@ -2,7 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMem
 import type { AgentRow, Artifact, PlanItem, TaskDetail, ThreadRow, Worker } from "../api";
 import { Avatar, botColor, bubbleTone } from "../avatar";
 import { ChatMessageBody, contentUrl, type PreviewFile } from "../markdown";
-import { Brain, CalendarClock, Copy, Check, Quote, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, Globe, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, Users, X } from "../ui/icons";
+import { Brain, CalendarClock, ChartColumn, Copy, Check, Quote, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, Globe, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, Users, X } from "../ui/icons";
 import { ConfirmDialog, MenuButton, toast, type MenuItem } from "../ui/overlay";
 import { Composer } from "./Composer";
 import { appendDraft, draftKey } from "./drafts";
@@ -17,6 +17,14 @@ import type { LiveTask, Message, Step } from "./useSession";
 import { DemoCard } from "./Teaching";
 import { useSession } from "./useSession";
 import { INTENT_LABEL, isPeerEvent, PeerGroup, TeamEvent } from "./Team";
+import { FindBar } from "./FindBar";
+import { plainLine, ReactButton, ReactionList, ReplyButton, SpeakButton } from "./MessageActions";
+import { useVoiceChat, voiceChatSupported } from "./voice";
+import { setReply } from "./drafts";
+import { deferDialog } from "../deferred-dialog";
+
+const ContextDialog = deferDialog<Parameters<typeof import("./ContextDialog").ContextDialog>[0]>(() => import("./ContextDialog").then(m => ({ default: m.ContextDialog })), "ContextDialog");
+import { useFocusMessage, type FocusTarget } from "./focus";
 import type { RoomRow } from "../api";
 
 type Session = ReturnType<typeof useSession>;
@@ -368,9 +376,10 @@ function Foldable({ active, children }: { active: boolean; children: ReactNode }
   );
 }
 
-const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop, team = [], onPeer, onOpenRoom, onOpenBot }: {
+const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop, team = [], onPeer, onOpenRoom, onOpenBot, onReply, onReact }: {
   item: Message; agent: AgentRow; showAvatar: boolean; knownPaths: string[]; task?: TaskDetail; steps?: Step[]; onOpen: (file: PreviewFile) => void; onStop?: () => void;
   team?: AgentRow[]; onPeer?: (peerId: string) => void; onOpenRoom?: (id: string) => void; onOpenBot?: (id: string) => void;
+  onReply?: (item: Message) => void; onReact?: (item: Message, emoji: string) => void;
 }) {
   // A hand-off to or from another bot, or something the bot did for the team, is an event line, not a bubble from the user.
   if (item.role === "event" || (item.role === "user" && item.from_agent)) {
@@ -384,11 +393,12 @@ const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPath
       </div>
     );
   }
-  return <AssistantRow item={item} agent={agent} showAvatar={showAvatar} knownPaths={knownPaths} task={task} steps={steps} onOpen={onOpen} onStop={onStop} />;
+  return <AssistantRow item={item} agent={agent} showAvatar={showAvatar} knownPaths={knownPaths} task={task} steps={steps} onOpen={onOpen} onStop={onStop} onReply={onReply} onReact={onReact} />;
 });
 
-function AssistantRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop }: {
+function AssistantRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop, onReply, onReact }: {
   item: Message; agent: AgentRow; showAvatar: boolean; knownPaths: string[]; task?: TaskDetail; steps?: Step[]; onOpen: (file: PreviewFile) => void; onStop?: () => void;
+  onReply?: (item: Message) => void; onReact?: (item: Message, emoji: string) => void;
 }) {
   // While a reply streams, Markdown re-renders can lag behind the text; scrolling and typing stay responsive.
   const content = useDeferredValue(item.content);
@@ -401,7 +411,16 @@ function AssistantRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen
         <Foldable active={!item.streaming}><ChatMessageBody content={item.streaming ? content : item.content} agentId={agent.id} knownPaths={knownPaths} onOpen={onOpen} /></Foldable>
         {!item.streaming ? <TaskResult agentId={agent.id} task={task} onOpen={onOpen} /> : null}
         {!item.streaming && task?.background?.length ? <WorkersCard workers={task.background} onStop={onStop} /> : null}
-        {!item.streaming ? <div className="msg-foot"><time className="msg-time">{clock(item.at)}</time><CopyButton text={item.content} /></div> : null}
+        {!item.streaming && onReact ? <ReactionList reactions={item.reactions} onToggle={emoji => onReact(item, emoji)} /> : null}
+        {!item.streaming ? (
+          <div className="msg-foot">
+            <time className="msg-time">{clock(item.at)}</time>
+            {onReply && item.id ? <ReplyButton onReply={() => onReply(item)} /> : null}
+            {onReact && item.id ? <ReactButton chosen={item.reactions} onToggle={emoji => onReact(item, emoji)} /> : null}
+            {item.id ? <SpeakButton id={item.id} text={item.content} /> : null}
+            <CopyButton text={item.content} />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -425,7 +444,13 @@ function EmptyChat({ agent, thread, onPick }: { agent: AgentRow; thread: ThreadR
   );
 }
 
-export function Conversation({ agent, session, mobile, panel, onBack, onTogglePanel, onOpenFile, onRoutines, onTeach, onPick, menuItems, onOpenSettings, team = [], rooms = [], onOpenRoom, onPeer, onOpenBot }: {
+export function Conversation({ agent, session, mobile, panel, onBack, onTogglePanel, onOpenFile, onRoutines, onTeach, onPick, menuItems, onOpenSettings, team = [], rooms = [], onOpenRoom, onPeer, onOpenBot, finding = false, onCloseFind, focusMessage, onFocused }: {
+  /** Find in this chat is open (Ctrl/⌘+F). */
+  finding?: boolean;
+  onCloseFind?: () => void;
+  /** A message picked in search, to scroll to and flash. */
+  focusMessage?: FocusTarget | null;
+  onFocused?: () => void;
   onOpenBot?: (id: string) => void;
   team?: AgentRow[];
   rooms?: RoomRow[];
@@ -446,6 +471,12 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
 }) {
   const { transcript, activity, busy, live, tasks, files, threadId, thread, threads, workingThread } = session;
   const [threadDialog, setThreadDialog] = useState<{ kind: "rename" | "clear" | "delete"; thread: ThreadRow } | null>(null);
+  const [showContext, setShowContext] = useState(false);
+  useEffect(() => {
+    const open = () => setShowContext(true);
+    window.addEventListener("lazyboy-context", open);
+    return () => window.removeEventListener("lazyboy-context", open);
+  }, []);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -486,18 +517,35 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
     return () => observer.disconnect();
   }, [toBottom]);
 
+  useFocusMessage(scroller, focusMessage, visible, pinned, onFocused);
+  const replyTo = useCallback((item: Message) => {
+    if (!item.id) return;
+    setReply(draftKey(agent.id, threadId), { id: item.id, author: agent.name, text: plainLine(item.content) });
+  }, [agent.id, agent.name, threadId]);
+  // The newest finished reply, which voice chat reads aloud when it is new.
+  const lastReply = useMemo(() => {
+    const last = [...visible].reverse().find(item => item.role === "assistant" && !item.from_agent);
+    return last && !last.streaming && last.id ? { id: last.id, content: last.content } : null;
+  }, [visible]);
+  const voice = useVoiceChat({ send: session.send, reply: lastReply });
+  useEffect(() => () => voice.stop(), [agent.id, threadId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const react = useCallback((item: Message, emoji: string) => {
+    if (item.id) void session.react(item.id, emoji).catch(err => toast(err instanceof Error ? err.message : String(err), "error"));
+  }, [session]);
   const stop = useCallback(() => { void session.stop().catch(err => toast(err instanceof Error ? err.message : String(err), "error")); }, [session]);
   const blocked = questionBlocksComposer(question) ? "請先在上方卡片回覆 Bot 的問題" : "";
   const fail = (err: unknown) => toast(err instanceof Error ? err.message : String(err), "error");
   const newThread = () => { void session.createThread().catch(fail); };
   const steering = busy && session.here !== "queued";
   // A phone header keeps three actions so the name and status get room; the rest move into the menu.
+  const contextItem: MenuItem = { label: "Context 用量", icon: <ChartColumn />, onSelect: () => setShowContext(true) };
   const headerMenu: MenuItem[] = mobile ? [
     ...(threads.length <= 1 ? [{ label: "新對話", icon: <MessageSquarePlus />, onSelect: newThread }] : []),
     { label: "定時任務", icon: <CalendarClock />, onSelect: onRoutines },
+    contextItem,
     "separator",
     ...menuItems,
-  ] : menuItems;
+  ] : [contextItem, ...menuItems];
   const color = botColor(agent.name, agent.avatar_color);
   const tint = useMemo(() => { const tone = bubbleTone(color); return { "--bot": tone.fill, "--bot-ink": tone.ink } as CSSProperties; }, [color]);
 
@@ -527,6 +575,7 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
           onDelete={row => setThreadDialog({ kind: "delete", thread: row })} />
       ) : null}
 
+      {finding && onCloseFind ? <FindBar scroller={scroller} version={visible} pinned={pinned} onClose={onCloseFind} /> : null}
       <div className="chat-scroll" ref={scroller} onScroll={event => {
         const el = event.currentTarget;
         const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -546,7 +595,7 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
             if (run) {
               const newDay = index === 0 || !sameDay(visible[index - 1].at, item.at);
               return (
-                <div key={item.id || `${item.at}-${index}`} className="msg-wrap">
+                <div key={item.id || `${item.at}-${index}`} className="msg-wrap" data-msg={item.id}>
                   {newDay && item.at ? <div className="day-sep"><span>{dayLabel(item.at)}</span></div> : null}
                   <PeerGroup items={run} agentId={agent.id} team={team} knownPaths={knownPaths} onOpen={onOpenFile} onPeer={peer => onPeer?.(peer)} />
                 </div>
@@ -558,9 +607,10 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
             const steps = taskId && live?.taskId === taskId && taskId !== activeTaskId && live.steps.length ? live.steps
               : taskId && tasks[taskId]?.steps?.length ? savedSteps(tasks[taskId].steps) : undefined;
             return (
-              <div key={item.id || `${item.at}-${index}`} className="msg-wrap">
+              <div key={item.id || `${item.at}-${index}`} className="msg-wrap" data-msg={item.id}>
                 {newDay && item.at ? <div className="day-sep"><span>{dayLabel(item.at)}</span></div> : null}
                 <MessageRow item={item} agent={agent} knownPaths={knownPaths} onOpen={onOpenFile} onStop={stop} team={team} onPeer={onPeer} onOpenRoom={onOpenRoom} onOpenBot={onOpenBot}
+                  onReply={replyTo} onReact={react}
                   showAvatar={item.role === "assistant" && (newDay || previous?.role !== "assistant" || !!previous?.from_agent)}
                   task={taskId ? tasks[taskId] : undefined} steps={steps} />
               </div>
@@ -581,10 +631,19 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
           </button>
         ) : null}
         {question ? <QuestionCard agentId={agent.id} question={question} onDone={() => { void session.refreshActivity(agent.id); }} onOpenComputer={() => onTogglePanel("computer", true)} /> : null}
+        {voice.phase !== "off" ? (
+          <div className="voice-bar" data-phase={voice.phase} role="status">
+            <span className="voice-dot" aria-hidden="true" />
+            <span>{voice.phase === "listening" ? (voice.heard || "正在聽…說完停一下就會送出") : voice.phase === "waiting" ? `等 ${agent.name} 回覆…` : `${agent.name} 正在說…`}</span>
+            <button type="button" className="btn small" onClick={voice.stop}>結束語音對話</button>
+          </div>
+        ) : null}
         <Composer key={draftKey(agent.id, threadId)} agentId={agent.id} draft={draftKey(agent.id, threadId)} agentName={agent.name} busy={steering} elsewhere={session.elsewhere}
           stopping={!session.elsewhere && activity.state === "stopping"} blocked={blocked}
-          answering={!!question && !blocked} onSend={session.send} onStop={session.stop} onTeach={onTeach} autoFocus={!mobile} />
+          answering={!!question && !blocked} onSend={session.send} onStop={session.stop} onTeach={onTeach} autoFocus={!mobile} team={team} rooms={rooms}
+          onVoiceChat={voiceChatSupported && voice.phase === "off" ? voice.start : undefined} />
       </div>
+      {showContext ? <ContextDialog agentId={agent.id} agentName={agent.name} threadId={threadId} busy={busy} onClose={() => setShowContext(false)} onNewThread={newThread} /> : null}
       {threadDialog?.kind === "rename" ? (
         <ThreadRenameDialog thread={threadDialog.thread} onClose={() => setThreadDialog(null)} onSave={title => session.renameThread(threadDialog.thread.id, title)} />
       ) : null}

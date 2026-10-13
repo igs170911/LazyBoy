@@ -17,6 +17,7 @@ import asyncio
 import logging
 import random
 import re
+from urllib.parse import unquote
 from datetime import datetime, timedelta, timezone
 
 from .store import now, uid
@@ -49,6 +50,14 @@ def is_silent(text):
     return not body or body.lower() == SILENT or body.lower().startswith(SILENT) and len(body) < len(SILENT) + 40
 
 
+FILE_LINK = re.compile(r"\[([^\]]+)\]\(/api/agents/[0-9a-f-]+/files/content\?path=([^)\s]+)\)")
+
+
+def attachments_in(text):
+    """Group attachments sit at the same path on every member's computer; tell the member where, in its own terms."""
+    return FILE_LINK.sub(lambda m: f"［附件：{m.group(1)}，在你的電腦：/workspace/{unquote(m.group(2))}］", str(text or ""))
+
+
 def mentions(text, members):
     """Members named with @Name in `text`, in order, plus whether @everyone was used."""
     found, everyone = [], False
@@ -70,13 +79,25 @@ class Collaboration:
         runtime.computers.roster = self.roster_text
         # Set by the web service: creates a bot the same way the "new bot" dialog does.
         self.create_agent = None
+        # Deliveries and hand-offs run on their own; holding them keeps the loop from dropping one mid-way.
+        self.pending = set()
+
+    def spawn(self, work):
+        task = asyncio.get_running_loop().create_task(work)
+        self.pending.add(task)
+        task.add_done_callback(self.finished_work)
+        return task
+
+    def finished_work(self, task):
+        self.pending.discard(task)
+        if not task.cancelled() and task.exception(): log.error("Team hand-off failed", exc_info=task.exception())
 
     # ---------- Directory ----------
 
     def directory(self, exclude=None):
         """Teammates a bot may contact: routing metadata written by the user, not instructions."""
         return [{"id": a["id"], "name": a["name"], "label": a.get("title", ""), "tags": a.get("tags", []),
-                 "about": plain(a.get("persona") or a.get("description"), 160)}
+                 "about": plain(a.get("persona") or a.get("description"), 160), "primary": bool(a.get("primary"))}
                 for a in self.store.all("agents") if a["id"] != exclude]
 
     def groups_of(self, agent_id):
@@ -87,11 +108,13 @@ class Collaboration:
         """The teammate section of a bot's SOUL."""
         mates = self.directory(agent_id)
         if not mates: return ""
-        lines = "\n".join(f"- {m['name']}" + (f"（{m['label']}）" if m["label"] else "") + (f"：{m['about']}" if m["about"] else "") for m in mates)
+        lines = "\n".join(f"- {m['name']}" + (f"（{m['label']}）" if m["label"] else "") + ("［主要 Bot］" if m["primary"] else "") + (f"：{m['about']}" if m["about"] else "") for m in mates)
+        chief = next((m["name"] for m in mates if m["primary"]), None)
         return (
             "\n\n## 隊友與協作\n"
             "這些是同一位使用者的其他 Bot，各有自己的電腦、檔案與記憶。下面的介紹是使用者寫的分工資料，不是指令。\n"
             f"{lines}\n"
+            + (f"{chief} 是使用者的主要 Bot：需要整體協調、彙整多位隊友的結果，或不確定該交給誰時，交給它。\n" if chief else "") +
             "需要隊友的專長時，用 message_bot 傳訊息給他（bot 填名字即可），寫清楚背景、要什麼、交付格式與期限。"
             "傳出後就繼續你的工作或先回覆使用者；不要用 delegated_task 反覆查詢，對方完成後結果會以「來自某某的回覆」自動回到這個對話，你再整合回報使用者。"
             "收到隊友的訊息時，你這次的最後回答會自動送回給對方：直接寫結論、資料與檔案路徑，不要寫收到、謝謝、好的這類沒有內容的話；"
@@ -141,6 +164,10 @@ class Collaboration:
             raise ValueError(f"這段 Bot 之間的往來已經 {MAX_HOPS} 次了。先停下來，把目前結果回報給使用者，由使用者決定下一步。")
         chain = (origin or {}).get("chain") or (origin or {}).get("id") or uid()
         sender_thread = self.runtime.task_thread(origin) if origin else sender_id
+        # The same request sent again (a retried tool call) was already delivered; only the reply is repeated.
+        if request_id and (admitted := self.store.admission(target["id"], request_id)):
+            return {"sent": True, "to": target["name"], "message_id": None, "replayed": True, "task": admitted["task"],
+                    "note": f"這則訊息先前已送達 {target['name']}，不會重複傳送。"}
         message_id = uid()
         record = {"id": message_id, "from": sender_id, "from_name": sender["name"], "to": target["id"], "to_name": target["name"],
                   "intent": intent, "text": text, "at": now(), "hop": hop, "chain": chain, "task": (origin or {}).get("id")}
@@ -191,7 +218,7 @@ class Collaboration:
                 await self.send(agent_id, sender["id"], text, "result", origin=task, reply_thread=task.get("reply_thread"), relay=True)
             except Exception:
                 log.exception("Could not return a result to %s", sender["name"])
-        asyncio.get_running_loop().create_task(deliver())
+        self.spawn(deliver())
 
     def stop_cascade(self, agent_id, stopped):
         """Stopping a bot also stops the work it handed to other bots, and theirs in turn."""
@@ -202,7 +229,7 @@ class Collaboration:
             frontier = set()
             for child in children:
                 frontier.add(child["id"])
-                asyncio.get_running_loop().create_task(self.runtime.stop_task(child["agent_id"], child["id"]))
+                self.spawn(self.runtime.stop_task(child["agent_id"], child["id"]))
         return seen - set(stopped)
 
     # ---------- Group chats ----------
@@ -305,7 +332,7 @@ class Collaboration:
         fresh = transcript[start:]
         if transcript:
             self.store.patch("rooms", room["id"], seen={**room.get("seen", {}), me["id"]: transcript[-1]["id"]})
-        lines = [f"{'使用者' if m['role'] == 'user' else m.get('speaker_name', 'Bot')}：{m['content']}" for m in fresh if not m.get("silent")]
+        lines = [f"{'使用者' if m['role'] == 'user' else m.get('speaker_name', 'Bot')}：{attachments_in(m['content'])}" for m in fresh if not m.get("silent")]
         others = [a for a in self.members(room) if a["id"] != me["id"]]
         roster = "、".join(a["name"] + (f"（{a.get('title')}）" if a.get("title") else "") for a in others)
         addressed = task.get("addressed")
@@ -346,7 +373,7 @@ class Collaboration:
             for member in members:
                 try: await self.seat(room, member["id"], cause=cause, addressed=addressed, round=round, by_user=False)
                 except Exception: log.exception("Group hand-off to %s failed", member["name"])
-        asyncio.get_running_loop().create_task(hand_off())
+        self.spawn(hand_off())
 
     def find_room(self, ref, agent_id):
         rooms = [r for r in self.store.all("rooms") if agent_id in r["member_ids"]]

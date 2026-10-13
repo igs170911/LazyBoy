@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 import pytest
@@ -148,3 +149,28 @@ async def test_a_restart_discards_an_unfinished_demonstration(box):
     Teaching(box.store, box.runtime, box.runtime.computers).recover()
     assert box.store.get("lessons", lesson["id"])["state"] == "cancelled"
     assert (box.teach.folder(box.id, lesson["id"]) / ".stop").exists()
+
+
+async def test_the_computer_is_held_while_it_starts_for_a_demonstration(box):
+    """Starting the computer can take a minute; queued work must not slip in before the recording begins."""
+    store, runtime, id, teach = box.store, box.runtime, box.id, box.teach
+    gate = asyncio.Event()
+    async def slow_status(_id, refresh=False):
+        await gate.wait()
+        return {"ready": True}
+    teach.computers.status = slow_status
+    starting = asyncio.create_task(teach.start(id, "查訂單"))
+    await asyncio.sleep(0)
+    assert runtime.teaching.get(id)  # held before the computer answers
+    queued = (await runtime.submit(id, "幫我查天氣"))["queued"]
+    await runtime._queue(id)
+    assert store.get("tasks", queued)["state"] == "queued"
+    gate.set()
+    lesson = await starting
+    assert runtime.teaching[id] == lesson["id"]
+
+
+async def test_a_failed_start_releases_the_computer(box):
+    box.state.code = 1  # the computer has no recorder
+    with pytest.raises(ValueError): await box.teach.start(box.id)
+    assert box.id not in box.runtime.teaching and box.kicks[-1] == box.id

@@ -76,7 +76,7 @@ def test_start_bot_stops_desktop_and_reports_host_failure(tmp_path):
         if process.poll() is None: process.kill()
 
 
-async def test_worker_relay_closes_client_when_product_is_unreachable(tmp_path, monkeypatch):
+async def test_worker_relay_answers_502_and_reuses_one_client_when_product_is_unreachable(tmp_path, monkeypatch):
     host = load("hermes_host_unreachable", "box/hermes_host.py")
     (tmp_path / ".worker-key").write_text("worker-fixture")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -88,8 +88,10 @@ async def test_worker_relay_closes_client_when_product_is_unreachable(tmp_path, 
                                                        Timeout=httpx.Timeout, HTTPError=httpx.HTTPError))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=host.app), base_url="http://worker") as worker:
         response = await worker.post("/product", headers={"authorization": "Bearer worker-fixture"}, json={})
-    assert response.status_code == 502
-    assert clients and clients[0].is_closed
+        again = await worker.post("/product", headers={"authorization": "Bearer worker-fixture"}, json={})
+    assert response.status_code == again.status_code == 502
+    # The relay keeps one client for the product socket instead of building one per request.
+    assert len(clients) == 1
 
 
 async def test_desktop_type_timeout_scales_with_text_length(monkeypatch):

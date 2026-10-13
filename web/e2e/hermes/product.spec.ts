@@ -57,6 +57,8 @@ test("create, choose model, save native skill, export and import an independent 
   await expect(mine).toHaveCount(1);
   await settings.getByRole("button", { name: "停用 web-verified-workflow" }).click();
   await expect(mine).toContainText("已停用");
+  // Sharing saves the profile, so it lives on the profile tab.
+  await settings.getByRole("tab", { name: "基本設定" }).click();
   await settings.getByRole("button", { name: "儲存並分享 Bot" }).click();
   const sharing = page.getByRole("dialog", { name: "分享 Bot", exact: true });
   await expect(sharing).toContainText("web-verified-workflow · 已停用");
@@ -101,7 +103,11 @@ test("upload into this computer and manage a future routine from the web", async
   const saved = await response.json();
   await expect(page.locator(".composer-dock")).toContainText("web-proof.txt");
   expect(await (await request.get(saved.url)).text()).toBe("WEB_UPLOAD_VERIFIED\n");
-  await page.getByRole("button", { name:"定時任務", exact:true }).click();
+  if (info.project.name === "mobile") {
+    // A phone header keeps three actions; 定時任務 is in its menu.
+    await page.getByRole("button", { name:"更多", exact:true }).click();
+    await page.getByRole("menuitem", { name:"定時任務", exact:true }).click();
+  } else await page.getByRole("button", { name:"定時任務", exact:true }).click();
   const dialog = page.getByRole("dialog", { name:"定時任務", exact:true });
   await dialog.getByRole("button", { name:/新增定時任務/ }).click();
   await dialog.getByLabel("任務名稱").fill("Web future routine");

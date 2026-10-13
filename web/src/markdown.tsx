@@ -303,8 +303,20 @@ function MarkdownImage({
   );
 }
 
+const AUDIO_FILE = /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|webm)$/i;
+
 export function FileChip({ file, onOpen }: { file: PreviewFile; onOpen: () => void }) {
   const { t } = useI18n();
+  // A voice memo or recording plays right in the conversation (Grok's "Play voice memo").
+  if (AUDIO_FILE.test(file.path || file.title)) {
+    return (
+      <span className="chat-file chat-audio">
+        <span className="chat-file-name" title={file.path || file.title}>{file.title}</span>
+        <audio controls preload="metadata" src={file.url} aria-label={`播放 ${file.title}`} />
+        <a className="file-download" href={downloadUrl(file.url)} download aria-label={`${t.fileDownload} ${file.title}`}>{t.fileDownload}</a>
+      </span>
+    );
+  }
   return (
     <span className="chat-file">
       <span className="chat-file-name" title={file.path || file.title}>{file.title}</span>

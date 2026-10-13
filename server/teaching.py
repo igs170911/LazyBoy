@@ -187,17 +187,23 @@ class Teaching:
     async def start(self, id, goal="", trial=True, thread=None):
         if self.runtime.teaching.get(id): return self.view(self.current(id))
         if self.runtime.busy(id): raise ValueError("Bot 正在工作，請等它完成或先停止，再開始教學")
-        status = await self.computers.status(id, refresh=True)
-        if not status.get("ready"): await self.computers.start(id)
-        code, _, _ = await computers_module.docker("exec", self.computers.name(id), "test", "-x", "/usr/local/bin/box-teach-desktop", check=False, timeout=10)
-        if code: raise ValueError("這台電腦的環境還不支援教學，請先在電腦區按「更新電腦環境」")
         lesson_id = uid()
+        # Held from here: starting the computer can take a minute, and queued work must not begin meanwhile.
+        self.runtime.teaching[id] = lesson_id
+        try:
+            status = await self.computers.status(id, refresh=True)
+            if not status.get("ready"): await self.computers.start(id)
+            code, _, _ = await computers_module.docker("exec", self.computers.name(id), "test", "-x", "/usr/local/bin/box-teach-desktop", check=False, timeout=10)
+            if code: raise ValueError("這台電腦的環境還不支援教學，請先在電腦區按「更新電腦環境」")
+        except BaseException:
+            self.runtime.teaching.pop(id, None)
+            self.runtime.kick(id)
+            raise
         folder = self.folder(id, lesson_id)
         (folder / "shots").mkdir(parents=True)
         lesson = {"id": lesson_id, "agent_id": id, "kind": "demo", "goal": str(goal or "").strip()[:200], "trial": bool(trial),
                   "thread_id": thread, "state": "recording", "started_at": now(), "notes": [], "dropped": []}
         self.store.put("lessons", lesson_id, lesson)
-        self.runtime.teaching[id] = lesson_id
         inside = f"/workspace/lessons/{lesson_id}"
         try:
             await self.exec(id, "node", "/usr/local/bin/box-teach-browser.mjs", inside, detach=True)
@@ -211,7 +217,8 @@ class Teaching:
             await self.stop_recorders(id, folder)
             self.runtime.teaching.pop(id, None)
             self.store.remove("lessons", lesson_id)
-            shutil.rmtree(folder, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, folder, True)
+            self.runtime.kick(id)
             raise
         self.watchers[id] = asyncio.create_task(self.watch(id, lesson_id))
         self.announce(id)
@@ -296,7 +303,7 @@ class Teaching:
         self.ending.discard(lesson_id)
         self.runtime.teaching.pop(id, None)
         self.store.remove("lessons", lesson_id)
-        shutil.rmtree(folder, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, folder, True)
         self.announce(id)
         self.runtime.kick(id)
         return {"lesson": None, "cancelled": lesson_id}

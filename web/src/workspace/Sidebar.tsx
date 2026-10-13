@@ -3,12 +3,13 @@ import type { AgentGroup, AgentRow, RoomRow } from "../api";
 import { Avatar } from "../avatar";
 import type { AvatarShape } from "../types";
 import { readStorage, writeStorage } from "../storage";
-import { ChevronDown, Ellipsis, FolderPlus, Import, MessagesSquare, Plus, Search, Settings, X } from "../ui/icons";
+import { ChevronDown, FolderPlus, Import, LayoutGrid, MessagesSquare, PanelLeft, Plug, Plus, Search, Settings, Star, X } from "../ui/icons";
 import { RoomAvatar } from "./Team";
-import { MenuButton, type MenuItem } from "../ui/overlay";
+import { MenuButton, useContextMenu, type MenuItem } from "../ui/overlay";
 import { listTime } from "./format";
 import { useMood } from "./mood";
 import { activityStatus } from "./status";
+import { moveGroup } from "./order";
 
 const COLLAPSED_KEY = "lazyhermes.collapsedGroups";
 
@@ -25,25 +26,39 @@ function readCollapsed(): string[] {
   catch { return []; }
 }
 
-const BotRow = memo(function BotRow({ agent, active, onSelect, actions, unread = false }: { agent: AgentRow; active: boolean; onSelect: (id: string) => void; actions: MenuItem[]; unread?: boolean }) {
+/** Where a dragged bot can land: a section of the sidebar. */
+export type DropTarget = { pinned: true } | { hidden: true } | { group: string };
+type Drag = { kind: "bot"; id: string } | { kind: "group"; id: string } | null;
+
+/** Dragging is for a mouse or trackpad; on a touch screen a long press opens the menu instead. */
+const canDrag = () => typeof window !== "undefined" && window.matchMedia?.("(pointer: fine)").matches;
+
+const BotRow = memo(function BotRow({ agent, active, onSelect, actions, unread = false, onDrag }: {
+  agent: AgentRow; active: boolean; onSelect: (id: string) => void; actions: () => MenuItem[]; unread?: boolean; onDrag?: (drag: Drag) => void;
+}) {
   const status = activityStatus(agent.activity);
   const busy = status.tone === "busy";
   const mood = useMood(agent.activity?.state, { lastAt: agent.last_at });
   const subtitle = agent.preview?.replace(/\s+/g, " ").trim() || agent.title || agent.description || "開始交辦第一件工作";
+  const { bind, menu, opened } = useContextMenu(`${agent.name} 的選項`, actions);
+  const draggable = !!onDrag && canDrag();
   return (
-    <li className={`bot-row${active ? " active" : ""}${unread ? " unread" : ""}`} data-tone={status.tone}>
-      <button type="button" className="bot-row-main" aria-current={active ? "page" : undefined} onClick={() => onSelect(agent.id)}>
+    <li className={`bot-row${active ? " active" : ""}${unread ? " unread" : ""}${opened ? " menu-open" : ""}`} data-tone={status.tone} {...bind}
+      draggable={draggable || undefined}
+      onDragStart={draggable ? event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", agent.name); onDrag!({ kind: "bot", id: agent.id }); } : undefined}
+      onDragEnd={draggable ? () => onDrag!(null) : undefined}>
+      <button type="button" className="bot-row-main" aria-current={active ? "page" : undefined} aria-haspopup="menu" title={agent.name} onClick={() => onSelect(agent.id)}>
         <Avatar {...avatarProps(agent)} size={36} gaze={false} thinking={busy} mood={mood} />
         <span className="bot-row-text">
           <span className="bot-row-top">
-            <strong>{agent.name}</strong>
+            <strong>{agent.name}{agent.primary ? <Star className="primary-star" aria-label="主要 Bot" /> : null}</strong>
             {status.tone !== "idle" ? <span className={`status-pill ${status.tone}`}>{status.label}</span> : <time>{listTime(agent.last_at)}</time>}
             {unread ? <i className="unread-dot" aria-label="有新訊息" /> : null}
           </span>
           <span className="bot-row-sub">{subtitle}</span>
         </span>
       </button>
-      <MenuButton label={`${agent.name} 的選項`} icon={<Ellipsis />} className="icon-btn small bot-row-more" items={actions} />
+      {menu}
     </li>
   );
 });
@@ -53,7 +68,7 @@ const RoomRowItem = memo(function RoomRowItem({ room, active, onSelect, unread =
   const working = room.members.filter(m => room.working.includes(m.id));
   return (
     <li className={`bot-row room-row${active ? " active" : ""}${unread ? " unread" : ""}`} data-tone={working.length ? "busy" : "idle"}>
-      <button type="button" className="bot-row-main" aria-current={active ? "page" : undefined} onClick={() => onSelect(room.id)}>
+      <button type="button" className="bot-row-main" aria-current={active ? "page" : undefined} title={room.name} onClick={() => onSelect(room.id)}>
         <RoomAvatar members={room.members} size={36} />
         <span className="bot-row-text">
           <span className="bot-row-top">
@@ -68,7 +83,17 @@ const RoomRowItem = memo(function RoomRowItem({ room, active, onSelect, unread =
   );
 });
 
-export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, onImport, onCreateGroup, onSettings, agentActions, groupActions, rooms = [], activeRoomId = null, onSelectRoom, onCreateRoom, unread }: {
+export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, onImport, onCreateGroup, onSettings, agentActions, groupActions, rooms = [], activeRoomId = null, onSelectRoom, onCreateRoom, unread, onMove, onReorderGroups, compact = false, onToggleCompact, onSearch, onConnectApps, onNew, onTemplates }: {
+  /** Avatars only (Grok's compact sidebar, Ctrl/⌘+B). */
+  compact?: boolean;
+  onToggleCompact?: () => void;
+  /** Open the full search (messages, files, routines), optionally with what was typed here. */
+  onSearch?: (query?: string) => void;
+  onConnectApps?: () => void;
+  /** Grok's "New" button: one dialog for a new bot, a template, an import or a group chat. */
+  onNew?: () => void;
+  /** Grok's sidebar "Marketplace": ready bots to start from. */
+  onTemplates?: () => void;
   unread?: (id: string, at?: string | null) => boolean;
   rooms?: RoomRow[];
   activeRoomId?: string | null;
@@ -85,9 +110,15 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
   onSettings: () => void;
   agentActions: (agent: AgentRow) => MenuItem[];
   groupActions: (group: AgentGroup) => MenuItem[];
+  /** A bot was dragged onto another section. */
+  onMove?: (agent: AgentRow, target: DropTarget) => void;
+  /** A section was dragged to a new place; the ids in their new order. */
+  onReorderGroups?: (ids: string[]) => void;
 }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<string[]>(readCollapsed);
+  const [drag, setDrag] = useState<Drag>(null);
+  const [over, setOver] = useState<string | null>(null);
   const toggle = (id: string) => setCollapsed(current => {
     const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id];
     writeStorage(COLLAPSED_KEY, JSON.stringify(next));
@@ -119,12 +150,50 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
     { label: "新增分區", icon: <FolderPlus />, onSelect: onCreateGroup, disabled: agents.length === 0 },
   ];
 
+  const dragBot = drag?.kind === "bot" ? agents.find(agent => agent.id === drag.id) : undefined;
+  // Chrome drops a drag whose source moves while it starts, so the drop zones appear on the next frame.
+  const startDrag = onMove && !query ? (next: Drag) => {
+    if (next) window.setTimeout(() => setDrag(next), 0);
+    else { setDrag(null); setOver(null); }
+  } : undefined;
+  /** Whether the dragged bot or section would change anything by landing on this section. */
+  const accepts = (key: string) => {
+    if (drag?.kind === "group") return key.startsWith("g:") && key !== `g:${drag.id}`;
+    if (!dragBot) return false;
+    if (key === "pinned") return !(dragBot.pinned && !dragBot.hidden);
+    if (key === "hidden") return !dragBot.hidden;
+    const group = key === "loose" ? "" : key.slice(2);
+    return !!dragBot.pinned || !!dragBot.hidden || (dragBot.group_id || "") !== group;
+  };
+  const dropZone = (key: string) => !drag ? {} : {
+    onDragOver: (event: React.DragEvent) => { if (!accepts(key)) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (over !== key) setOver(key); },
+    onDragLeave: (event: React.DragEvent) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOver(current => current === key ? null : current); },
+    onDrop: (event: React.DragEvent) => {
+      event.preventDefault();
+      if (accepts(key)) {
+        if (drag.kind === "group") {
+          onReorderGroups?.(moveGroup(groups.map(group => group.id), drag.id, key.slice(2)));
+        } else if (dragBot) {
+          onMove?.(dragBot, key === "pinned" ? { pinned: true } : key === "hidden" ? { hidden: true } : { group: key === "loose" ? "" : key.slice(2) });
+        }
+      }
+      setDrag(null); setOver(null);
+    },
+  };
+  const zoneClass = (key: string) => drag && accepts(key) ? (over === key ? " drop-target drop-over" : " drop-target") : "";
+  const row = (agent: AgentRow, withUnread = true) => (
+    <BotRow key={agent.id} agent={agent} active={agent.id === activeId} onSelect={onSelect} actions={() => agentActions(agent)}
+      unread={withUnread && !!unread?.(agent.id, agent.last_at)} onDrag={startDrag} />
+  );
+
   return (
-    <aside className="sidebar" aria-label="Bot 清單">
+    <aside className={`sidebar${drag ? " is-dragging" : ""}${compact ? " compact" : ""}`} aria-label="Bot 清單">
       <header className="sidebar-head">
         <div className="brand"><img src="/lazyboy-round.svg" width={28} height={28} alt="" /><span>LazyBoy</span></div>
-        <MenuButton label="新增" icon={<Plus />} items={createItems} placement="bottom-end" />
+        {onNew ? <button type="button" className="icon-btn" aria-label="新增" title="新增 Bot 或群組對話（Ctrl Alt N）" onClick={onNew}><Plus /></button>
+          : <MenuButton label="新增" icon={<Plus />} items={createItems} placement={compact ? "bottom-start" : "bottom-end"} />}
       </header>
+      {compact && onSearch ? <button type="button" className="icon-btn sidebar-search-icon" aria-label="搜尋" title="搜尋（Ctrl K）" onClick={() => onSearch()}><Search /></button> : null}
       <div className="sidebar-search">
         <Search aria-hidden="true" />
         <input type="search" aria-label="搜尋 Bot" placeholder="搜尋 Bot 或群組" value={query} onChange={event => setQuery(event.target.value)}
@@ -149,15 +218,20 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
       </div>
       <nav className="bot-list">
         {!loaded ? <div className="bot-skeleton" aria-hidden="true"><i /><i /><i /></div> : null}
-        {loaded && sections.empty ? (
+        {loaded && sections.empty && !(query && visibleRooms.length) ? (
           <div className="sidebar-empty">
             {query ? <p>找不到符合「{query}」的 Bot</p> : <><p>還沒有 Bot</p><button type="button" className="btn primary" onClick={onCreate}><Plus />建立第一個 Bot</button></>}
           </div>
         ) : null}
-        {sections.pinned.length ? (
-          <section className="bot-section pinned-section">
+        {query.trim() && onSearch ? (
+          <button type="button" className="search-everywhere" onClick={() => { onSearch(query.trim()); setQuery(""); }}>
+            <Search aria-hidden="true" /><span>在所有訊息、檔案與定時任務中搜尋「{query.trim()}」</span>
+          </button>
+        ) : null}
+        {sections.pinned.length || dragBot ? (
+          <section className={`bot-section pinned-section${zoneClass("pinned")}`} {...dropZone("pinned")}>
             <div className="bot-section-head"><span>已釘選</span></div>
-            <ul>{sections.pinned.map(agent => <BotRow key={agent.id} agent={agent} active={agent.id === activeId} onSelect={onSelect} actions={agentActions(agent)} unread={!!unread?.(agent.id, agent.last_at)} />)}</ul>
+            {sections.pinned.length ? <ul>{sections.pinned.map(agent => row(agent))}</ul> : <p className="bot-section-empty">放開以釘選到最上面</p>}
           </section>
         ) : null}
         {visibleRooms.length && onSelectRoom ? (
@@ -166,40 +240,59 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
             <ul>{visibleRooms.map(room => <RoomRowItem key={room.id} room={room} active={room.id === activeRoomId} onSelect={onSelectRoom} unread={!!unread?.(room.id, room.last_at)} />)}</ul>
           </section>
         ) : null}
-        {sections.loose.length ? (
-          <section className="bot-section">
+        {sections.loose.length || (dragBot && sections.rows.length) ? (
+          <section className={`bot-section${zoneClass("loose")}`} {...dropZone("loose")}>
             {sections.rows.length ? <div className="bot-section-head"><span>未分區</span></div> : null}
-            <ul>{sections.loose.map(agent => <BotRow key={agent.id} agent={agent} active={agent.id === activeId} onSelect={onSelect} actions={agentActions(agent)} unread={!!unread?.(agent.id, agent.last_at)} />)}</ul>
+            {sections.loose.length ? <ul>{sections.loose.map(agent => row(agent))}</ul> : <p className="bot-section-empty">放開以移出分區</p>}
           </section>
         ) : null}
-        {sections.rows.map(({ group, agents: members }) => {
-          const closed = collapsed.includes(group.id) && !query;
-          return (
-            <section className="bot-section" key={group.id}>
-              <div className="bot-section-head">
-                <button type="button" className="bot-section-toggle" aria-expanded={!closed} onClick={() => toggle(group.id)}>
-                  <ChevronDown className={closed ? "collapsed" : ""} aria-hidden="true" /><span>{group.name}</span><small>{members.length}</small>
-                </button>
-                <MenuButton label={`${group.name} 分區選項`} icon={<Ellipsis />} className="icon-btn small" items={groupActions(group)} />
-              </div>
-              {!closed ? (members.length ? <ul>{members.map(agent => <BotRow key={agent.id} agent={agent} active={agent.id === activeId} onSelect={onSelect} actions={agentActions(agent)} unread={!!unread?.(agent.id, agent.last_at)} />)}</ul> : <p className="bot-section-empty">還沒有 Bot，可從 Bot 選單「移到分區」加入</p>) : null}
-            </section>
-          );
-        })}
-        {sections.hidden.length ? (
-          <section className="bot-section hidden-section">
+        {sections.rows.map(({ group, agents: members }) => <GroupSection key={group.id} group={group} members={members} query={query}
+          closed={collapsed.includes(group.id) && !query} onToggle={() => toggle(group.id)} actions={() => groupActions(group)}
+          className={zoneClass(`g:${group.id}`)} zone={dropZone(`g:${group.id}`)} row={row}
+          onDrag={startDrag && onReorderGroups && groups.length > 1 ? startDrag : undefined} />)}
+        {sections.hidden.length || dragBot ? (
+          <section className={`bot-section hidden-section${zoneClass("hidden")}`} {...dropZone("hidden")}>
             <div className="bot-section-head">
               <button type="button" className="bot-section-toggle" aria-expanded={collapsed.includes(HIDDEN_OPEN)} onClick={() => toggle(HIDDEN_OPEN)}>
                 <ChevronDown className={collapsed.includes(HIDDEN_OPEN) ? "" : "collapsed"} aria-hidden="true" /><span>已隱藏</span><small>{sections.hidden.length}</small>
               </button>
             </div>
-            {collapsed.includes(HIDDEN_OPEN) ? <ul>{sections.hidden.map(agent => <BotRow key={agent.id} agent={agent} active={agent.id === activeId} onSelect={onSelect} actions={agentActions(agent)} />)}</ul> : null}
+            {!sections.hidden.length ? <p className="bot-section-empty">放開以從側欄隱藏</p>
+              : collapsed.includes(HIDDEN_OPEN) ? <ul>{sections.hidden.map(agent => row(agent, false))}</ul> : null}
           </section>
         ) : null}
       </nav>
       <footer className="sidebar-foot">
-        <button type="button" className="btn ghost" onClick={onSettings}><Settings />設定</button>
+        {onTemplates ? <button type="button" className="btn ghost" onClick={onTemplates} title="Bot 範本"><LayoutGrid /><span>Bot 範本</span></button> : null}
+        {onConnectApps ? <button type="button" className="btn ghost" onClick={onConnectApps} title="連接應用程式"><Plug /><span>連接應用程式</span></button> : null}
+        <div className="sidebar-foot-row">
+          <button type="button" className="btn ghost" onClick={onSettings} title="設定"><Settings /><span>設定</span></button>
+          {onToggleCompact ? <button type="button" className="icon-btn" aria-label={compact ? "展開側欄" : "精簡側欄"} title={`${compact ? "展開側欄" : "精簡側欄"}（Ctrl B）`} onClick={onToggleCompact}><PanelLeft /></button> : null}
+        </div>
       </footer>
     </aside>
+  );
+}
+
+/** A user-made section: right-click (or long-press) its name for its options; drag the name to reorder sections. */
+function GroupSection({ group, members, query, closed, onToggle, actions, className, zone, row, onDrag }: {
+  group: AgentGroup; members: AgentRow[]; query: string; closed: boolean; onToggle: () => void; actions: () => MenuItem[];
+  className: string; zone: Record<string, unknown>; row: (agent: AgentRow) => React.ReactNode; onDrag?: (drag: Drag) => void;
+}) {
+  const { bind, menu } = useContextMenu(`${group.name} 分區選項`, actions);
+  const draggable = !!onDrag && canDrag();
+  return (
+    <section className={`bot-section${className}`} {...zone}>
+      <div className="bot-section-head" {...bind} draggable={draggable || undefined}
+        onDragStart={draggable ? event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", group.name); onDrag!({ kind: "group", id: group.id }); } : undefined}
+        onDragEnd={draggable ? () => onDrag!(null) : undefined}>
+        <button type="button" className="bot-section-toggle" aria-expanded={!closed} aria-haspopup="menu" onClick={onToggle}>
+          <ChevronDown className={closed ? "collapsed" : ""} aria-hidden="true" /><span>{group.name}</span><small>{members.length}</small>
+        </button>
+        {menu}
+      </div>
+      {!closed ? (members.length ? <ul>{members.map(agent => row(agent))}</ul>
+        : <p className="bot-section-empty">{query ? "" : "把 Bot 拖到這裡，或在 Bot 上按右鍵「移到分區」"}</p>) : null}
+    </section>
   );
 }

@@ -264,19 +264,28 @@ async def test_watchdog_never_fires_while_waiting_for_the_user(product):
     await asyncio.wait_for(watcher, 1)
 
 
-async def test_stream_writes_are_throttled_but_every_delta_is_journaled(product):
+async def test_stream_writes_are_throttled_and_deltas_journaled_in_batches(product):
     store, _, _, runtime, id = product
     task = uid(); runtime.active[id] = task
     store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
     writes = []
     original = store.message
     store.message = lambda *a, **k: writes.append(a) or original(*a, **k)
+    deltas = lambda: [e["payload"]["delta"] for e in store.events(id) if e["payload"].get("type") == "message_delta"]
     for word in ["一", "二", "三", "四"]:
         await runtime.event(id, {"type": "message.delta", "payload": {"text": word}})
     assert len(writes) == 1
-    assert [e["payload"]["delta"] for e in store.events(id) if e["payload"].get("type") == "message_delta"] == ["一", "二", "三", "四"]
+    # The first words go out with the first save; tokens arriving together after that become one event, not one each.
+    assert deltas() == ["一"]
+    await asyncio.sleep(runtime.DELTA_INTERVAL * 3)
+    assert deltas() == ["一", "二三四"]
+    await runtime.event(id, {"type": "message.delta", "payload": {"text": "五"}})
     runtime.finish(id, task, "answer", "")
-    assert store.transcript(id)[-1]["content"] == "一二三四"
+    # The end of the turn first journals the text still waiting, so nothing arrives after turn_ended.
+    assert deltas() == ["一", "二三四", "五"]
+    kinds = [e["payload"].get("type") for e in store.events(id) if e["kind"] == "runtime"]
+    assert kinds.index("turn_ended") > len(kinds) - 1 - kinds[::-1].index("message_delta")
+    assert store.transcript(id)[-1]["content"] == "一二三四五"
 
 
 async def test_listeners_wake_on_new_events(product):
@@ -450,3 +459,105 @@ def test_only_a_stopped_turn_cuts_off_model_requests(product):
     for task, state, verdict in [("a", "terminal", "answer"), ("b", "terminal", "cancelled"), ("c", "stopping", None), ("d", "running", None)]:
         store.put("tasks", task, {"id": task, "agent_id": id, "state": state, "verdict": verdict})
     assert [runtime.halted(t) for t in "abcd"] == [False, True, True, False] and not runtime.halted(None)
+
+
+class FakeClient:
+    alive = True
+    def __init__(self): self.calls = []; self.answers = []
+    async def call(self, method, params=None, **_):
+        self.calls.append((method, params))
+        return {"status": "queued"}
+    async def answer(self, rid, result): self.answers.append((rid, result))
+
+
+async def test_a_picture_sent_mid_turn_waits_for_its_own_turn(product):
+    store, _, _, runtime, id = product
+    runtime.closed = True
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "thread_id": id, "state": "running", "session_id": "s", "created_at": now()})
+    client = runtime.clients[id] = FakeClient()
+    store.put("uploads", "u1", {"id": "u1", "agent_id": id, "name": "photo.png", "path": "uploads/photo.png", "media_type": "image/png"})
+    result = await runtime.submit(id, "看這張 [photo.png](/api/x/u1)")
+    assert "queued" in result and not [c for c in client.calls if c[0] == "session.steer"]
+    steered = await runtime.submit(id, "順便查一下價格")
+    assert steered == {"steered": task}
+
+
+async def test_answers_show_what_was_chosen(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "thread_id": id, "state": "waiting_approval", "created_at": now()})
+    client = runtime.clients[id] = FakeClient()
+    runtime.pending_requests[id] = {"id": 7, "method": "approval", "params": {}}
+    await runtime.answer(id, 7, choice="always")
+    runtime.pending_requests[id] = {"id": 8, "method": "clarify", "params": {"questions": [{"qid": "a", "question": "要寄給誰？"}, {"qid": "b", "question": "什麼時候？"}]}}
+    await runtime.answer(id, 8, answers={"a": "王經理", "b": "明天早上"})
+    assert [m["content"] for m in store.transcript(id)] == ["一律允許", "- 要寄給誰？：王經理\n- 什麼時候？：明天早上"]
+    assert client.answers[0] == (7, {"choice": "always"})
+
+
+async def test_background_report_in_another_thread_is_kept(product):
+    store, _, _, runtime, id = product
+    side = uid()
+    store.put("threads", side, {"id": side, "agent_id": id, "title": "研究"})
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "thread_id": id, "state": "running", "session_id": "main-sid", "created_at": now()})
+    client = runtime.clients[id] = FakeClient()
+    client.product_sessions = {side: "side-sid"}
+    await runtime.event(id, {"type": "message.complete", "session_id": "side-sid", "payload": {"text": "背景研究完成：三個來源都確認了"}})
+    assert [(m["thread"], m["content"]) for m in store.transcript(id)] == [(side, "背景研究完成：三個來源都確認了")]
+    assert store.get("tasks", task)["state"] == "running"
+
+
+def test_reply_for_a_deleted_group_chat_stays_silent(product):
+    store, _, _, runtime, id = product
+    task = uid()
+    store.put("tasks", task, {"id": task, "agent_id": id, "thread_id": id, "room_id": "gone", "state": "running", "created_at": now()})
+    runtime.finish(id, task, "cancelled", "已停止")
+    assert store.transcript(id)[-1]["silent"] is True
+
+
+async def test_a_saved_stream_says_which_events_it_already_holds(product):
+    store, _, _, runtime, id = product
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "state": "running", "created_at": now()})
+    await runtime.event(id, {"type": "message.delta", "payload": {"text": "第一段"}})
+    saved = store.transcript(id)[-1]
+    delta_events = [e for e in store.events(id) if e["payload"].get("type") == "message_delta"]
+    # Everything in the saved copy has been journaled, up to the event it names.
+    assert saved["content"] == "第一段" and delta_events and delta_events[-1]["id"] <= saved["stream_event"]
+    assert "".join(e["payload"]["delta"] for e in delta_events) == saved["content"]
+
+
+async def test_late_events_of_a_turn_given_up_on_do_not_reach_the_next_task(product):
+    store, _, _, runtime, id = product
+    old, new = uid(), uid()
+    store.put("tasks", old, {"id": old, "agent_id": id, "thread_id": id, "state": "stopping", "session_id": "s", "created_at": now()})
+    runtime.active[id] = old; runtime.finished[old] = asyncio.Event()
+    runtime.STOP_GRACE, runtime.WATCH_INTERVAL = 0, 0.01
+    runtime.stalled[old] = 0
+    await asyncio.wait_for(runtime.watch(id, old), 1)
+    assert store.get("tasks", old)["verdict"] == "cancelled" and runtime.draining == {"s": True}
+    runtime.release(id, old)
+    store.put("tasks", new, {"id": new, "agent_id": id, "thread_id": id, "state": "running", "session_id": "s", "created_at": now()})
+    runtime.active[id] = new; runtime.finished[new] = asyncio.Event()
+    await runtime.event(id, {"type": "message.delta", "session_id": "s", "payload": {"text": "舊的回覆"}})
+    await runtime.event(id, {"type": "message.complete", "session_id": "s", "payload": {"text": "舊的回覆"}})
+    assert store.get("tasks", new)["state"] == "running" and "s" not in runtime.draining
+    await runtime.event(id, {"type": "message.start", "session_id": "s", "payload": {}})
+    await runtime.event(id, {"type": "message.complete", "session_id": "s", "payload": {"text": "新的回覆"}})
+    assert store.get("tasks", new)["state"] == "terminal" and store.transcript(id)[-1]["content"] == "新的回覆"
+
+
+def test_daily_cleanup_prunes_model_usage_with_the_usage_module():
+    from server import cleanup, usage
+    assert cleanup.model_usage.prune is usage.prune and callable(cleanup.usage)
+
+
+def test_ask_first_boundaries_are_written_into_the_bots_instructions(product):
+    store, _, computers, _, id = product
+    store.patch("agents", id, ask_first=["pay", "send"])
+    soul = (computers.prepare(id) / "hermes" / "SOUL.md").read_text()
+    assert "先用 clarify" in soul and "付款、購買" in soul and "寄出或傳送訊息" in soul and "公開發佈" not in soul
+    store.patch("agents", id, ask_first=[])
+    assert "先用 clarify 說明要做什麼" not in (computers.prepare(id) / "hermes" / "SOUL.md").read_text()

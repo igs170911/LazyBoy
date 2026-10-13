@@ -163,12 +163,7 @@ function AppSheet({ app, agentId, onChange, onClose }: { app: ConnectorApp; agen
           <strong><i aria-hidden="true" />{working && busy === "test" ? "檢查連線中…" : stateLine(app)}</strong>
           {app.checked_at && app.state !== "checking" ? <small>上次檢查 {ago(app.checked_at)}</small> : null}
           {app.state === "error" && app.error ? <p className="pane-error">{app.error}</p> : null}
-          {app.tools.length ? (
-            <details>
-              <summary>Bot 可以使用的工具</summary>
-              <ul>{app.tools.map(tool => <li key={tool.name}><code>{tool.name}</code>{tool.description ? <span>{tool.description}</span> : null}</li>)}</ul>
-            </details>
-          ) : null}
+          {app.tools.length || app.disabled_tools?.length ? <ToolSwitches app={app} busy={!!busy} onSave={disabled => void run("tools", { disabled })} /> : null}
           {confirm ? (
             <div className="app-sheet-confirm">
               <span>中斷後所有 Bot 都不能再使用 {app.title}，{app.auth === "oauth" ? "登入資料也會刪除" : "設定會移除"}。</span>
@@ -192,6 +187,35 @@ function AppSheet({ app, agentId, onChange, onClose }: { app: ConnectorApp; agen
 }
 
 /**
+ * Each tool of a connected app can be switched off for every bot (Grok: individual plugin tools). Fewer tools also
+ * means a shorter tool list sent with every model request.
+ */
+function ToolSwitches({ app, busy, onSave }: { app: ConnectorApp; busy: boolean; onSave: (disabled: string[]) => void }) {
+  const off = new Set(app.disabled_tools || []);
+  const known = new Map(app.tools.map(tool => [tool.name, tool.description || ""]));
+  for (const name of off) if (!known.has(name)) known.set(name, "");
+  const rows = [...known].sort(([a], [b]) => Number(off.has(a)) - Number(off.has(b)) || a.localeCompare(b));
+  const flip = (name: string) => onSave(off.has(name) ? [...off].filter(item => item !== name) : [...off, name]);
+  return (
+    <details className="tool-switches">
+      <summary>Bot 可以使用的工具 <small>已開啟 {rows.length - off.size} / {rows.length}</small></summary>
+      <p className="muted">關掉用不到的工具：Bot 比較不會用錯，每次送給模型的工具說明也比較短。</p>
+      <ul>
+        {rows.map(([name, description]) => (
+          <li key={name}>
+            <label>
+              <input type="checkbox" checked={!off.has(name)} disabled={busy} onChange={() => flip(name)} />
+              <span><code>{name}</code>{description ? <small>{description}</small> : null}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {off.size ? <button type="button" className="link-btn" disabled={busy} onClick={() => onSave([])}>全部開啟</button> : null}
+    </details>
+  );
+}
+
+/**
  * Apps the bots can use, connected once for all of them: what is connected on top, a searchable gallery below, and
  * custom MCP servers for anything not in the gallery.
  */
@@ -209,8 +233,10 @@ export function ConnectApps({ agentId }: { agentId?: string | null }) {
   useEffect(() => {
     api.connectors().then(data => {
       if (!alive.current) return;
-      setApps(data.apps); setCategories(data.categories);
-      void recheck(data.apps);
+      // A reply without the lists (an older server, a proxy error page) shows an empty gallery, not a crash.
+      const rows = Array.isArray(data?.apps) ? data.apps : [];
+      setApps(rows); setCategories(Array.isArray(data?.categories) ? data.categories : []);
+      void recheck(rows);
     }).catch(err => setError(message(err)));
   }, []);
 

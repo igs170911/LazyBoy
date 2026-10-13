@@ -287,6 +287,9 @@ async function selfContained(html: string, resolve: (src: string) => string | un
   return "<!doctype html>\n" + doc.documentElement.outerHTML;
 }
 
+/** A converted spreadsheet carries everything inline. One constant, so a re-render does not rebuild the page. */
+const NO_RESOURCES = () => undefined;
+
 function HtmlPage({ html, resolve, scripts = true, title }: { html: string; resolve: (src: string) => string | undefined; scripts?: boolean; title: string }) {
   const [page, setPage] = useState<string | null>(null);
   useEffect(() => {
@@ -327,7 +330,7 @@ function Office({ agentId, file }: { agentId?: string; file: PreviewFile }) {
   }, [agentId, file.path]);
   if (state.status === "loading") return <Status>正在用 Bot 的電腦開啟這份文件，第一次可能要十幾秒…</Status>;
   if (state.status === "error") return <Fallback file={file} reason={state.error} />;
-  if (state.status === "html") return <HtmlPage html={state.html} resolve={() => undefined} scripts={false} title={file.title} />;
+  if (state.status === "html") return <HtmlPage html={state.html} resolve={NO_RESOURCES} scripts={false} title={file.title} />;
   return <Pdf url={state.url} title={file.title} />;
 }
 
@@ -337,9 +340,12 @@ function Archive({ agentId, file }: { agentId?: string; file: PreviewFile }) {
   useEffect(() => {
     if (!agentId || !file.path) return;
     setData(null); setError("");
-    fetch(`/api/agents/${encodeURIComponent(agentId)}/files/archive?path=${encodeURIComponent(file.path)}`)
+    // An answer for a file already left behind must not replace the one on screen.
+    const controller = new AbortController();
+    fetch(`/api/agents/${encodeURIComponent(agentId)}/files/archive?path=${encodeURIComponent(file.path)}`, { signal: controller.signal })
       .then(async response => { const body = await response.json(); if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`); setData(body); })
-      .catch(err => setError(err instanceof Error ? err.message : String(err)));
+      .catch(err => { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err)); });
+    return () => controller.abort();
   }, [agentId, file.path]);
   if (error) return <Fallback file={file} reason={error} />;
   if (!data) return <Status>讀取壓縮檔內容…</Status>;

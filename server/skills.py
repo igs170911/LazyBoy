@@ -1,8 +1,26 @@
+import hashlib
 import shutil
 import yaml
+
+# The C parser, when PyYAML was built with it, is about ten times faster.
+YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 from .config import private_write
 from .files import contained
 from .store import now, uid
+
+
+CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+
+
+def dir_hash(directory):
+    """Hermes' package hash: MD5 over each file's relative path and bytes, generated caches left out."""
+    hasher = hashlib.md5()
+    for path in sorted(directory.rglob("*")):
+        relative = path.relative_to(directory)
+        cache = any(part in CACHE_DIRS for part in relative.parts[:-1]) or (path.suffix in {".pyc", ".pyo"} and path.with_suffix(".py").is_file())
+        if not cache and path.is_file():
+            hasher.update(str(relative).encode("utf-8")); hasher.update(path.read_bytes())
+    return hasher.hexdigest()
 
 
 class Skills:
@@ -12,7 +30,7 @@ class Skills:
 
     def config(self, id):
         path = self.root(id) / "config.yaml"
-        return yaml.safe_load(path.read_text()) or {} if path.exists() else {}
+        return yaml.load(path.read_text(), Loader=YAML_LOADER) or {} if path.exists() else {}
 
     def list(self, id):
         root = self.root(id) / "skills"
@@ -27,7 +45,7 @@ class Skills:
             if raw.startswith("---\n"):
                 parts = raw.split("---", 2)
                 if len(parts) == 3:
-                    try: meta = yaml.safe_load(parts[1]) or {}
+                    try: meta = yaml.load(parts[1], Loader=YAML_LOADER) or {}
                     except yaml.YAMLError: meta = {}
                     instructions = parts[2].strip()
             if not isinstance(meta, dict): meta = {}
@@ -36,6 +54,25 @@ class Skills:
                          "instructions": instructions, "enabled": name not in disabled and rel not in disabled,
                          "updated_at": now(), "source": "Hermes"})
         return rows
+
+    def bundled_unchanged(self, id):
+        """Hermes' own skills, synced into the bot and never edited (same check Hermes makes: tools/skills_sync.py).
+        Every bot can get these from Hermes, so they are not part of a bot's shareable setup."""
+        root = self.root(id) / "skills"
+        try: lines = (root / ".bundled_manifest").read_text().splitlines()
+        except OSError: return set()
+        origin = dict(line.split(":", 1) for line in lines if ":" in line)
+        unchanged = set()
+        for path in root.rglob("SKILL.md"):
+            folder = path.parent
+            if origin.get(folder.name) and dir_hash(folder) == origin[folder.name]: unchanged.add(str(folder.relative_to(root)))
+        return unchanged
+
+    def count(self, id):
+        """How many skills a bot has, without reading them (the sidebar asks every few seconds)."""
+        root = self.root(id) / "skills"
+        resolved = root.resolve()
+        return sum(1 for path in root.rglob("SKILL.md") if path.resolve().is_relative_to(resolved))
 
     def manage(self, id, body):
         action = body.get("action", "list")

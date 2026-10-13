@@ -69,7 +69,7 @@ export function AttachmentPicker({agentId, disabled, files, busy, onChange, onBu
     finally { inFlight.current = false; onBusy(false); }
   };
   // Everything here is read by the bot's tools in /workspace; only pictures need a model that can see.
-  const accept = [".txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml,.html,.htm,.docx,.xlsx,.xls,.pptx,.zip,.py,.js,.ts,.sql", caps?.images ? ".png,.jpg,.jpeg,.webp,.gif" : "", caps?.pdf ? ".pdf" : ""].filter(Boolean).join(",");
+  const accept = [".txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml,.html,.htm,.docx,.xlsx,.xls,.pptx,.zip,.py,.js,.ts,.sql,.mp3,.m4a,.wav,.ogg,.opus,.flac,.mp4,.mov,.webm", caps?.images ? ".png,.jpg,.jpeg,.webp,.gif" : "", caps?.pdf ? ".pdf" : ""].filter(Boolean).join(",");
   return <div className="attachment-picker">
     <div className="composer-add-wrap" ref={menu} onBlur={event=>{if(event.relatedTarget&&!event.currentTarget.contains(event.relatedTarget as Node))setMenuOpen(false);}} onKeyDown={event=>{
       if(event.key==='Escape'){event.stopPropagation();setMenuOpen(false);trigger.current?.focus();}

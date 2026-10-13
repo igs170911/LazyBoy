@@ -131,11 +131,14 @@ def catalog():
     return dict(sorted(items.items(), key=lambda kv: (rank.get(kv[0], len(rank)), kv[1]["title"].lower())))
 
 
-def server_config(item):
-    """The shared connector entry for a catalog app; `catalog` marks it so the settings show it as an app."""
+def server_config(item, disabled=()):
+    """The shared connector entry for a catalog app; `catalog` marks it so the settings show it as an app.
+    `disabled` are tools the person switched off (Grok: individual plugin tools can be turned off)."""
     entry = {"url": item["url"], "catalog": item["id"], "enabled": True}
     if item["auth"] == "oauth": entry["auth"] = "oauth"
-    if item["exclude"]: entry["tools"] = {"exclude": item["exclude"]}
+    exclude = [*item["exclude"], *[t for t in disabled if t not in item["exclude"]]]
+    if exclude: entry["tools"] = {"exclude": exclude}
+    if disabled: entry["disabled_tools"] = sorted(set(disabled))
     return entry
 
 
@@ -211,6 +214,7 @@ class Connectors:
         else: state = "checking"
         public = {k: item[k] for k in ("id", "title", "description", "category", "auth", "keywords", "hosts", "token_hint", "token_url") if k in item}
         return {**public, "featured": item["id"] in FEATURED, "state": state, "tools": (status or {}).get("tools") or [],
+                "disabled_tools": (entry or {}).get("disabled_tools", []) if mine else [],
                 "error": (status or {}).get("error") if state == "error" else None, "checked_at": (status or {}).get("at"),
                 "signin": {"agent": flow["agent"], "auth_url": flow["auth_url"]} if flow else None}
 
@@ -227,7 +231,7 @@ class Connectors:
         entries = self.store.get("mcp", SHARED, {})
         current = entries.get(id)
         if current and current.get("catalog") != id: raise ValueError(f"已有名為「{id}」的自訂串接，請先在下方移除它")
-        entry = {**server_config(item), **({k: current[k] for k in ("headers",) if current and k in current})}
+        entry = {**server_config(item, (current or {}).get("disabled_tools", ())), **({k: current[k] for k in ("headers",) if current and k in current})}
         if item["auth"] == "token":
             token = str(token or "").strip()
             if token: entry["headers"] = {item["token_header"]: token if token.lower().startswith("bearer ") else f"Bearer {token}"}
@@ -255,6 +259,18 @@ class Connectors:
         await self.relay(id, address, self.item(id)["title"])
         return self.view(self.item(id))
 
+    async def set_tools(self, id, disabled):
+        """Switch individual tools of a connected app off (or back on) for every bot."""
+        item = self.item(id)
+        entries = self.store.get("mcp", SHARED, {})
+        entry = entries.get(id)
+        if not entry or entry.get("catalog") != id: raise ValueError("請先連接這個應用程式")
+        names = sorted({str(name).strip() for name in disabled or [] if str(name).strip()})[:500]
+        entries[id] = {**server_config(item, names), **{k: entry[k] for k in ("headers",) if k in entry}, "enabled": entry.get("enabled", True)}
+        self.store.put("mcp", SHARED, entries)
+        await self.apply(SHARED)
+        return self.view(item)
+
     async def disconnect(self, id):
         item = self.item(id)
         await self.cancel(id)
@@ -262,7 +278,9 @@ class Connectors:
         if entries.get(id, {}).get("catalog") == id:
             entries.pop(id); self.store.put("mcp", SHARED, entries)
         self.store.remove("mcp_status", f"{SHARED}:{id}")
-        self.forget_tokens(id)
+        # Tokens are kept per connector name: another bot's own connector with this name still signs in with them.
+        if not any(id in self.store.get("mcp", owner, {}) for owner in [SHARED, *[a["id"] for a in self.store.all("agents")]]):
+            self.forget_tokens(id)
         await self.apply(SHARED)
         return self.view(item)
 
@@ -355,7 +373,8 @@ class Connectors:
         """The app's icon, fetched once from its own site (or DuckDuckGo's favicon service) and kept on disk."""
         item = self.item(id)
         self.icons.mkdir(parents=True, exist_ok=True)
-        cached = next(iter(self.icons.glob(f"{safe_filename(id)}.*")), None)
+        # A real icon wins over the marker left by an earlier failed fetch.
+        cached = min(self.icons.glob(f"{safe_filename(id)}.*"), key=lambda path: path.suffix == ".none", default=None)
         # An icon that could not be fetched is tried again the next day.
         if cached and (cached.suffix != ".none" or time.time() - cached.stat().st_mtime < 86400): return cached
         missing = self.icons / f"{safe_filename(id)}.none"
@@ -369,6 +388,7 @@ class Connectors:
                         suffix = {"image/png": ".png", "image/svg+xml": ".svg", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(kind, ".ico")
                         path = self.icons / f"{safe_filename(id)}{suffix}"
                         path.write_bytes(response.content)
+                        missing.unlink(missing_ok=True)
                         return path
         missing.write_bytes(b"")
         return missing

@@ -59,8 +59,11 @@ export function AgentSettingsDialog({
   onSaved,
   onShare,
   initialSection = "profile",
+  preset,
 }: {
   agent?: AgentRow | null;
+  /** A new bot's starting profile (from a template); only used when creating. */
+  preset?: Partial<AgentRow> | null;
   mode?: "create" | "edit";
   onClose: () => void;
   onSaved: (row: AgentRow) => void;
@@ -68,6 +71,7 @@ export function AgentSettingsDialog({
   initialSection?: "profile" | "skills" | "memory";
 }) {
   const creating = mode === "create";
+  const seed: Partial<AgentRow> | null | undefined = creating ? preset : agent;
   const [section,setSection] = useState<"profile" | "skills" | "memory">(initialSection);
   const [skillEditing,setSkillEditing] = useState(false);
   const { t } = useI18n();
@@ -106,14 +110,15 @@ export function AgentSettingsDialog({
     } catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "生圖失敗，請重試"); }
     finally { if (generation.current === controller) { setGenerating(false); generation.current = null; } }
   }
-  const [name, setName] = useState(agent?.name || "");
-  const [groupId, setGroupId] = useState(agent?.group_id || "");
-  const [persona, setPersona] = useState(agent?.persona?.trim() ? agent.persona : agent?.description || "");
+  const [name, setName] = useState(seed?.name || "");
+  const [groupId, setGroupId] = useState(seed?.group_id || "");
+  const [persona, setPersona] = useState(seed?.persona?.trim() ? seed.persona : seed?.description || "");
   const [groups,setGroups] = useState<AgentGroup[]>([]);
   const [providers, setProviders] = useState<SettingsProvider[]>([]);
   const [chatProvider, setChatProvider] = useState(agent?.provider || "");
   const [chatModel, setChatModel] = useState(agent?.model || "");
-  const [replyStyle, setReplyStyle] = useState(agent?.reply_style || "");
+  const [replyStyle, setReplyStyle] = useState(seed?.reply_style || "");
+  const [askFirst, setAskFirst] = useState<string[]>(seed?.ask_first || []);
   useEffect(()=>{ void api.agents().then(data=>setGroups(data.groups)).catch(()=>{}); },[]);
   useEffect(() => {
     void api.settings().then((data) => {
@@ -137,13 +142,13 @@ export function AgentSettingsDialog({
     }).catch(() => {}).finally(() => { if (alive) setModelChecking(false); });
     return () => { alive = false; setModelChecking(false); };
   }, [chatProvider, chatModel, !!chosenRow?.check, !!chosenRow]);
-  const [title, setTitle] = useState(agent?.title || "");
-  const [color, setColor] = useState(agent?.avatar_color ? defaultColor(agent.avatar_color) : initialLook.color);
-  const [eyes, setEyes] = useState<AvatarTraits>(() => cleanTraits(agent?.avatar_traits));
-  const [expression, setExpression] = useState(agent?.avatar_expression || "idle");
+  const [title, setTitle] = useState(seed?.title || "");
+  const [color, setColor] = useState(seed?.avatar_color ? defaultColor(seed.avatar_color) : initialLook.color);
+  const [eyes, setEyes] = useState<AvatarTraits>(() => cleanTraits(seed?.avatar_traits));
+  const [expression, setExpression] = useState(seed?.avatar_expression || "idle");
   const [previewMood, setPreviewMood] = useState<Mood>("idle");
-  const [shape, setShape] = useState<BlobatarShape>(agent?.avatar_shape ? resolveBlobatarShape(agent.avatar_shape) : initialLook.shape);
-  const [tagText, setTagText] = useState(joinTags(agent?.tags));
+  const [shape, setShape] = useState<BlobatarShape>(seed?.avatar_shape ? resolveBlobatarShape(seed.avatar_shape) : initialLook.shape);
+  const [tagText, setTagText] = useState(joinTags(seed?.tags));
   const [photoUrl, setPhotoUrl] = useState(agent?.avatar_url || "");
   const [source, setSource] = useState<AvatarImage | null>(null);
   const [crop, setCrop] = useState<AvatarCrop | null>(null);
@@ -154,8 +159,8 @@ export function AgentSettingsDialog({
   const [error, setError] = useState("");
   const dismissing = useRef(false);
   const ateOutside = useRef(false);
-  const live = useRef({ creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, eyes, expression });
-  live.current = { creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, eyes, expression };
+  const live = useRef({ creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, askFirst, eyes, expression });
+  live.current = { creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, askFirst, eyes, expression };
 
   useEffect(() => {
     if (creating || !agent) return;
@@ -172,6 +177,7 @@ export function AgentSettingsDialog({
     setChatProvider(agent.provider || "");
     setChatModel(agent.model || "");
     setReplyStyle(agent.reply_style || "");
+    setAskFirst(agent.ask_first || []);
     setError("");
     // Roster polling returns fresh arrays every few seconds. Initialize a new
     // identity once; subsequent snapshots must not replace unsaved form fields.
@@ -193,6 +199,7 @@ export function AgentSettingsDialog({
       provider: state.chatProvider,
       model: state.chatModel,
       reply_style: state.replyStyle,
+      ask_first: state.askFirst,
       avatar_traits: state.eyes,
       avatar_expression: state.expression,
     };
@@ -547,6 +554,13 @@ export function AgentSettingsDialog({
               <option value="detailed">詳細：完整說明</option>
             </select></label>
             <label>{t.persona}<textarea required={creating} value={persona} maxLength={8000} rows={4} onChange={e=>setPersona(e.target.value)} placeholder={t.personaPlaceholder} /></label>
+            <fieldset className="ask-first">
+              <legend>這些事先問我</legend>
+              <small>勾選的動作，Bot 會先說明要做什麼並等你同意；定時任務或隊友交辦時，10 分鐘沒回覆就不做。</small>
+              {[["send", "寄出或傳送訊息給別人"], ["publish", "公開發佈內容"], ["pay", "付款或購買"], ["delete", "刪除資料或檔案"]].map(([key, label]) => (
+                <label key={key}><input type="checkbox" checked={askFirst.includes(key)} onChange={e => setAskFirst(list => e.target.checked ? [...list, key] : list.filter(item => item !== key))} />{label}</label>
+              ))}
+            </fieldset>
             {!creating && agent ? <StoragePanel agentId={agent.id} /> : null}
             </div>
             {!creating && agent ? <div id="agent-skills-panel" role="tabpanel" aria-labelledby="agent-skills-tab" hidden={section!=="skills"}><SkillsPanel agentId={agent.id} onEditingChange={setSkillEditing}/></div> : <small>建立後即可加入技能與教學流程。</small>}

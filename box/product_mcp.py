@@ -18,7 +18,7 @@ async def call(action, **body):
 
 @mcp.tool()
 async def routines_manage(action: str = "list", title: str = "", instructions: str = "", schedule: dict | None = None, id: str = "") -> dict:
-    """Manage this bot's scheduled tasks shown in the web UI. Actions list/create/update/delete/pause/resume/run/history. schedule: frequency once/daily/weekdays/weekly/monthly, timezone e.g. Asia/Taipei, time HH:MM, optional date YYYY-MM-DD, weekdays 1=Mon..7=Sun, day_of_month. Clarify missing timing first. Only this scheduler triggers jobs."""
+    """Manage this bot's scheduled tasks shown in the web UI. Actions list/create/update/delete/pause/resume/run/history. schedule: frequency once/daily/weekdays/weekly/monthly/interval, timezone e.g. Asia/Taipei, time HH:MM, optional date YYYY-MM-DD, weekdays 1=Mon..7=Sun, day_of_month; interval repeats every every_minutes (5 to 10080) counted from time; trigger has no schedule and runs when its web address (hook_path in the list) is called. At most 50 routines per bot. Clarify missing timing first. Only this scheduler triggers jobs."""
     return await call("routines", body={"action": action, "title": title, "instructions": instructions, "schedule": schedule or {}, "id": id or None})
 
 

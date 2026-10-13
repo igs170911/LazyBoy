@@ -11,11 +11,13 @@ import json
 import mimetypes
 from pathlib import Path
 import secrets
+import weakref
 import shutil
 from urllib.parse import urlparse, quote
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.datastructures import MutableHeaders
 from .routing import routed_payload
 import httpx
 import yaml
@@ -32,7 +34,9 @@ from .scheduling import Scheduler
 from .collab import Collaboration
 from .connectors import Connectors
 from .previews import Previews, archive_entries
-from . import cleanup, memory
+from .logins import Logins
+from . import cleanup, memory, scheduling, usage
+from .search import search as search_all
 from .files import contained, filename
 from .sharing import portable_connectors, scrub_known
 
@@ -46,10 +50,14 @@ scheduler = Scheduler(store, runtime)
 collab = Collaboration(store, runtime)
 connectors = Connectors(store, runtime, computers)
 previews = Previews(store, computers)
+logins = Logins(computers)
 
 
 FACE_TRAITS = {"eye.scale", "eye.ratio", "eye.gap", "eye.lean", "body.rot"}
 EXPRESSIONS = {"idle", "happy", "sad", "mad", "surprised", "wink", "sleepy", "smug", "unsure", "scared", "love", "shy", "sick", "thinking"}
+
+ASK_FIRST = {"send", "publish", "pay", "delete"}
+
 
 def clean_face(row):
     """Avatar tuning is a few 0-1 positions and one named pose; anything else is dropped."""
@@ -59,12 +67,14 @@ def clean_face(row):
                                 if k in FACE_TRAITS and isinstance(v, (int, float)) and not isinstance(v, bool) and v == v}
     if "avatar_expression" in row and row["avatar_expression"] not in EXPRESSIONS:
         row["avatar_expression"] = "idle"
+    if "ask_first" in row:
+        row["ask_first"] = sorted({str(v) for v in row["ask_first"] if str(v) in ASK_FIRST}) if isinstance(row["ask_first"], list) else []
     return row
 
 def make_agent(body):
     name = str(body.get("name", "")).strip()
     if not name or len(name) > 100: raise ValueError("Bot 名稱須為 1 至 100 字元")
-    keys = ["name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression"]
+    keys = ["name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression", "ask_first"]
     row = clean_face({k: body[k] for k in keys if k in body})
     row.update(id=uid(), name=name, created_at=now(), hermes_session=None, live_session=None)
     store.put("agents", row["id"], row)
@@ -83,7 +93,7 @@ async def lifespan(app):
     sweeper = asyncio.create_task(cleanup.daily(store, computers, runtime))
     yield
     sweeper.cancel()
-    teaching.recover(); await scheduler.close(); await runtime.shutdown()
+    teaching.recover(); await scheduler.close(); await runtime.shutdown(); await close_model_http()
 
 
 app = FastAPI(title="LazyBoy", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -109,15 +119,28 @@ def authenticated(request):
     return (local_client(request) or hmac.compare_digest(token, settings.access_token)) and valid_origin(request)
 
 
-@app.middleware("http")
-async def auth(request, call_next):
-    path = request.url.path
-    if (path.startswith("/api/") or path.startswith("/novnc/")) and path not in {"/api/auth/status", "/api/auth/login"}:
-        if not authenticated(request): return JSONResponse({"error": "請先登入 LazyBoy"}, status_code=401)
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    if path.startswith("/api/"): response.headers["Cache-Control"] = "no-store"
-    return response
+class Guard:
+    """Login check and response headers as plain ASGI: unlike @app.middleware("http"), it does not copy every chunk
+    of a long stream (live events, model replies) through an extra in-memory channel."""
+    def __init__(self, app): self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http": return await self.app(scope, receive, send)
+        path = scope["path"]
+        if (path.startswith("/api/") or path.startswith("/novnc/")) and path not in {"/api/auth/status", "/api/auth/login"}:
+            if not authenticated(Request(scope)):
+                return await JSONResponse({"error": "請先登入 LazyBoy"}, status_code=401)(scope, receive, send)
+        async def headed(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["X-Content-Type-Options"] = "nosniff"
+                # API answers are live data; a route that sets its own caching (connector icons) keeps it.
+                if path.startswith("/api/") and "cache-control" not in headers: headers["Cache-Control"] = "no-store"
+            await send(message)
+        await self.app(scope, receive, headed)
+
+
+app.add_middleware(Guard)
 
 
 @app.exception_handler(ValueError)
@@ -142,15 +165,17 @@ async def login(request: Request):
     return response
 
 
-def agent_row(id):
+def agent_row(id, threads=None):
+    """One sidebar row. Polled every few seconds for every bot, so it reads only the newest visible message, the
+    bot's unfinished tasks and a count of skill files, never the whole conversation or every task."""
     agent = runtime.agent(id)
-    seats = {t["id"] for t in store.all("threads") if t.get("agent_id") == id and t.get("room_id")}
-    transcript = [m for m in store.transcript(id) if m.get("thread") not in seats and not m.get("silent")]
+    seats = {t["id"] for t in (store.all("threads") if threads is None else threads) if t.get("agent_id") == id and t.get("room_id")}
+    last = store.last_message(id, keep=lambda m: m.get("thread") not in seats and not m.get("silent"))
     activity = runtime.activity(id)
     result = {k: v for k, v in agent.items() if k not in {"hermes_session", "live_session"}}
     avatar = store.agent_directory(id) / "avatar.png"
-    result.update(expertise=agent.get("title", ""), preview=plain_text(transcript[-1]["content"], 140) if transcript else "", last_at=transcript[-1].get("at") if transcript else None,
-                  running=activity["running"], activity=activity, skill_count=len(skills.list(id)), has_avatar=avatar.exists(), avatar_url=f"/api/agents/{id}/avatar?updated={avatar.stat().st_mtime_ns}" if avatar.exists() else None)
+    result.update(expertise=agent.get("title", ""), preview=plain_text(last["content"], 140) if last else "", last_at=last.get("at") if last else None,
+                  running=activity["running"], activity=activity, skill_count=skills.count(id), has_avatar=avatar.exists(), avatar_url=f"/api/agents/{id}/avatar?updated={avatar.stat().st_mtime_ns}" if avatar.exists() else None)
     return result
 
 
@@ -256,7 +281,9 @@ async def generate_avatar(request: Request):
 
 
 @app.get("/api/agents")
-async def agents(): return {"agents": [agent_row(a["id"]) for a in store.all("agents")], "groups": sorted(store.all("groups"), key=lambda g: g.get("position", 0))}
+async def agents():
+    threads = store.all("threads")
+    return {"agents": [agent_row(a["id"], threads) for a in store.all("agents")], "groups": sorted(store.all("groups"), key=lambda g: g.get("position", 0))}
 @app.post("/api/agents")
 async def create_agent(request: Request): return agent_row(make_agent(await request.json())["id"])
 @app.get("/api/agents/{id}")
@@ -338,7 +365,7 @@ async def thread_delete(id: str, thread_id: str):
 async def update_agent(id: str, request: Request):
     runtime.agent(id); body = await request.json()
     if "name" in body and (not str(body["name"]).strip() or len(str(body["name"])) > 100): raise ValueError("請填寫 Bot 名稱")
-    keys = {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression"}
+    keys = {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression", "ask_first"}
     store.patch("agents", id, **clean_face({k: v for k, v in body.items() if k in keys}))
     computers.prepare(id)
     # Runtime/session model reconfiguration is applied when idle, through a fresh native
@@ -354,23 +381,25 @@ async def delete_agent(id: str):
     if runner:
         runner.cancel(); await asyncio.gather(runner, return_exceptions=True)
     await computers.delete(id)
-    for routine in scheduler.list(id): store.remove("routines", routine["id"])
+    for routine in [r for r in store.all("routines") if r.get("agent_id") == id]: store.remove("routines", routine["id"])
     for thread in store.all("threads"):
         if thread.get("agent_id") == id: store.remove("threads", thread["id"])
     collab.forget_agent(id)
     store.remove("agents", id); store.purge_agent(id)
-    shutil.rmtree(store.agent_directory(id))
+    # A bot's folder can hold tens of thousands of files; deleting them must not freeze every live stream.
+    await asyncio.to_thread(shutil.rmtree, store.agent_directory(id))
     return {"ok": True, "id": id, "name": agent["name"]}
 @app.post("/api/agents/{id}/duplicate")
 async def duplicate_agent(id: str):
-    """"<name> 副本": same look, persona, model, skills and own connectors; no conversation, memory, files or routines."""
+    """"<name> 副本" (Grok's duplicate): same look, persona, model, skills, own connectors and routines (paused, so the
+    copy never runs a job twice before its new owner looks at it); no conversation, memory or files."""
     agent = runtime.agent(id)
     names = {a["name"] for a in store.all("agents")}
     name = f"{agent['name']} 副本"
     for n in range(2, 100):
         if name not in names: break
         name = f"{agent['name']} 副本 {n}"
-    keep = {"title", "description", "persona", "tags", "avatar_color", "avatar_shape", "avatar_traits", "avatar_expression", "provider", "model", "group_id", "reply_style"}
+    keep = {"title", "description", "persona", "tags", "avatar_color", "avatar_shape", "avatar_traits", "avatar_expression", "provider", "model", "group_id", "reply_style", "ask_first"}
     row = make_agent({**{k: v for k, v in agent.items() if k in keep}, "name": name})
     # The whole skills folder (Hermes' own, the product's and the user's, as edited) and which of them are switched off.
     source, target = store.agent_directory(id) / "hermes", store.agent_directory(row["id"]) / "hermes"
@@ -384,7 +413,21 @@ async def duplicate_agent(id: str):
     if own := store.get("mcp", id): store.put("mcp", row["id"], own); computers.prepare(row["id"])
     avatar = store.agent_directory(id) / "avatar.png"
     if avatar.exists(): shutil.copyfile(avatar, store.agent_directory(row["id"]) / "avatar.png")
+    for routine in [r for r in store.all("routines") if r.get("agent_id") == id]:
+        copy = uid()
+        store.put("routines", copy, {**{k: routine[k] for k in ("title", "instructions", "schedule") if k in routine}, "id": copy, "agent_id": row["id"],
+                                     "enabled": False, "next_run_at": None, "last_run_at": None, "last_task_id": None, "last_error": None, "retry_at": None, "failures": 0})
     return agent_row(row["id"])
+@app.post("/api/agents/{id}/primary")
+async def agent_primary(id: str, request: Request):
+    """Grok's Primary Bot: the one bot the others hand coordination to (one at a time, marked with a star)."""
+    runtime.agent(id); on = bool((await request.json()).get("primary", True))
+    for agent in store.all("agents"):
+        want = on and agent["id"] == id
+        if bool(agent.get("primary")) != want: store.patch("agents", agent["id"], primary=want)
+    # Every bot's SOUL names the primary bot in its teammate list.
+    for agent in store.all("agents"): await asyncio.to_thread(computers.prepare, agent["id"])
+    return {"agents": [agent_row(a["id"]) for a in store.all("agents")]}
 @app.post("/api/agents/{id}/sidebar")
 async def agent_sidebar(id: str, request: Request):
     """Pin or hide a bot in the sidebar; only how it is listed changes, so its computer and connection are left alone."""
@@ -412,6 +455,36 @@ async def clear(id: str, thread: str | None = None):
     return {"ok": True, "cleared_at": now(), "thread_id": current["id"]}
 
 
+# True once the service begins to stop: live streams end at once instead of holding the shutdown for its timeout.
+stopping = False
+
+
+def begin_shutdown(loop):
+    """Called from the signal handler (serve.py), so it takes no lock: a second signal (Ctrl+C reaches both uv and
+    Python) can arrive while the first is still being handled, and a lock taken there would never be released."""
+    global stopping
+    if stopping: return
+    stopping = True
+    def wake_all():
+        for wakes in runtime.listeners.values():
+            for wake in list(wakes): wake.set()
+    with contextlib.suppress(RuntimeError): loop.call_soon_threadsafe(wake_all)
+
+
+def replayable(batch):
+    """A finished turn's streamed text is already in the transcript; replaying it token by token only floods a page
+    that reconnects (a tab coming back from the background) and briefly doubles the reply on screen."""
+    finished, keep = {}, []
+    for event in batch:
+        payload = event["payload"]
+        if event["kind"] == "runtime" and event["task_id"] and isinstance(payload, dict) and payload.get("type") == "message_delta":
+            task = event["task_id"]
+            if task not in finished: finished[task] = (store.fields("tasks", task, "state") or ("terminal",))[0] == "terminal"
+            if finished[task]: continue
+        keep.append(event)
+    return keep
+
+
 @app.get("/api/agents/{id}/events")
 async def events(id: str, request: Request):
     runtime.agent(id)
@@ -420,12 +493,13 @@ async def events(id: str, request: Request):
         nonlocal since
         yield ": connected\n\n"
         with runtime.listen(id) as wake:
-            while not await request.is_disconnected():
+            while not stopping and not await request.is_disconnected():
                 wake.clear()
                 batch = store.events(id, since)
                 if batch:
                     since = batch[-1]["id"]
-                    yield "id: " + str(since) + "\ndata: " + json.dumps({"events": batch}, ensure_ascii=False) + "\n\n"
+                    shown = replayable(batch)
+                    if shown: yield "id: " + str(since) + "\ndata: " + json.dumps({"events": shown}, ensure_ascii=False) + "\n\n"
                     # Coalesce a burst of token deltas into one frame.
                     await asyncio.sleep(.03)
                     continue
@@ -434,6 +508,44 @@ async def events(id: str, request: Request):
                     async with asyncio.timeout(10): await wake.wait()
                 if not wake.is_set(): yield ": keepalive\n\n"
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+
+CONTEXT_PARTS = {"system_prompt": "人設與系統說明", "tool_definitions": "內建工具", "rules": "專案規則", "skills": "技能清單",
+                 "mcp": "應用程式工具", "subagent_definitions": "子工作說明", "memory": "記憶", "conversation": "對話紀錄"}
+
+
+def live_session(id, thread_id):
+    client = runtime.clients.get(id)
+    sid = runtime.cached_session(id, client, thread_id) if client and client.alive else None
+    return client, sid
+
+
+@app.get("/api/agents/{id}/context")
+async def agent_context(id: str, thread: str | None = None):
+    """How full the model's context window is for one conversation, and what fills it (Hermes' /context)."""
+    current = runtime.thread(id, thread)
+    client, sid = live_session(id, current["id"])
+    if not sid: return {"available": False, "reason": "這段對話還沒在 Bot 的電腦上開始；交辦一件事之後就能查看。"}
+    try: data = await client.call("session.context_breakdown", {"session_id": sid}, timeout=30)
+    except Exception as exc: return {"available": False, "reason": f"暫時讀不到：{str(exc)[:200]}"}
+    parts = [{"id": c.get("id"), "label": CONTEXT_PARTS.get(c.get("id"), c.get("label") or c.get("id")), "tokens": int(c.get("tokens") or 0)}
+             for c in data.get("categories") or [] if isinstance(c, dict)]
+    return {"available": True, "used": int(data.get("context_used") or 0), "max": int(data.get("context_max") or 0),
+            "percent": int(data.get("context_percent") or 0), "estimated": bool(data.get("context_estimated")), "model": data.get("model") or "",
+            "parts": sorted(parts, key=lambda p: -p["tokens"])}
+
+
+@app.post("/api/agents/{id}/context/compress")
+async def compress_context(id: str, thread: str | None = None):
+    """Summarize the older part of a conversation so it takes less of the context window, keeping the recent turns."""
+    current = runtime.thread(id, thread)
+    if thread_busy(id, current["id"]): raise ValueError("Bot 正在這段對話工作，等它完成再壓縮")
+    client, sid = live_session(id, current["id"])
+    if not sid: raise ValueError("這段對話還沒有可以壓縮的內容")
+    result = await client.call("session.compress", {"session_id": sid}, timeout=300)
+    # Compression continues in a new stored session; resume that one from now on.
+    if stored := (result.get("info") or {}).get("stored_session_id"): runtime.patch_thread(id, current["id"], hermes_session=stored)
+    return {k: result.get(k) for k in ("status", "removed", "before_messages", "after_messages", "before_tokens", "after_tokens")}
 
 
 @app.get("/api/agents/{id}/computer")
@@ -445,6 +557,15 @@ async def computer_start(id: str, request: Request):
     if action != "start" and runtime.busy(id): raise ValueError("請先停止工作再重新啟動電腦")
     if action != "start" and id in runtime.clients: await runtime.clients.pop(id).close()
     return await computers.start(id, action)
+@app.get("/api/agents/{id}/logins")
+async def agent_logins(id: str):
+    """Sites this bot's browser is signed in to (names only), to share with other bots."""
+    runtime.agent(id); return {"sites": await logins.sites(id)}
+@app.post("/api/agents/{id}/logins/copy")
+async def copy_logins(id: str, request: Request):
+    """Grok's bots share one computer's sign-ins; here they are copied to another bot's browser on request."""
+    runtime.agent(id); body = await request.json(); target = str(body.get("to") or ""); runtime.agent(target)
+    return await logins.copy(id, target, body.get("sites") or [])
 @app.get("/api/agents/{id}/files")
 async def file_list(id: str): runtime.agent(id); return {"files": await runtime.refresh_files(id)}
 def agent_file(id, path):
@@ -488,6 +609,29 @@ async def upload(id: str, request: Request, name: str = "attachment"):
         target.unlink(missing_ok=True); raise
     row = {"id": key, "agent_id": id, "name": name, "path": rel, "media_type": mimetypes.guess_type(name)[0] or "application/octet-stream", "bytes": count, "url": f"/api/agents/{id}/files/content?path={quote(rel)}"}
     store.put("uploads", key, row); return row
+@app.post("/api/rooms/{room_id}/uploads")
+async def room_upload(room_id: str, request: Request, name: str = "attachment"):
+    """A file attached in a group chat goes to every member's computer, at the same path in each, so whoever takes
+    the task can open it. The link in the message points at the first member's copy."""
+    room = collab.room(room_id); members = collab.members(room)
+    if not members: raise ValueError("群組沒有成員")
+    key = uid(); name = filename(name); rel = "uploads/" + key + "/" + name
+    image = (mimetypes.guess_type(name)[0] or "").startswith("image/")
+    cap = UPLOAD_LIMITS["image_bytes" if image else "file_bytes"]
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > cap: raise ValueError(f"{'圖片' if image else '附件'}最多 {cap // MB} MB")
+    media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    def write_all():
+        for member in members:
+            target = contained(store.agent_directory(member["id"]) / "workspace", rel)
+            target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(bytes(data))
+            store.put("uploads", f"{key}-{member['id']}", {"id": f"{key}-{member['id']}", "agent_id": member["id"], "name": name, "path": rel, "media_type": media,
+                                                        "bytes": len(data), "url": f"/api/agents/{member['id']}/files/content?path={quote(rel)}", "room_id": room_id})
+    await asyncio.to_thread(write_all)
+    first = members[0]["id"]
+    return {"id": key, "name": name, "path": rel, "media_type": media, "bytes": len(data), "url": f"/api/agents/{first}/files/content?path={quote(rel)}"}
 @app.get("/api/tasks/{id}")
 async def task_detail(id: str): return runtime.task(id)
 @app.post("/api/tasks/{id}/approve")
@@ -530,6 +674,17 @@ async def manage_skills(id: str, request: Request):
     if body.get("action", "list") != "list":
         runtime.emit(id, "skills_changed", {"count": len(result), "changed": True})
     return {"skills": result}
+@app.post("/hooks/routines/{token}")
+async def routine_hook(token: str, request: Request):
+    """A routine's own web address (no login: the address is the secret). Slack, GitHub or any service can POST here;
+    the body reaches the bot as data along with the routine's instructions."""
+    body = await request.body()
+    if len(body) > scheduling.HOOK_BYTES: return JSONResponse({"error": "內容太大"}, status_code=413)
+    try: task = await scheduler.hook(token, body.decode("utf-8", "replace"))
+    except KeyError: return JSONResponse({"error": "找不到這個觸發網址"}, status_code=404)
+    except PermissionError as exc: return JSONResponse({"error": str(exc)}, status_code=409)
+    except TimeoutError as exc: return JSONResponse({"error": str(exc)}, status_code=429)
+    return {"ok": True, "task_id": task}
 @app.get("/api/agents/{id}/routines")
 async def routines(id: str): runtime.agent(id); return {"routines": scheduler.list(id)}
 @app.post("/api/agents/{id}/routines")
@@ -586,13 +741,38 @@ async def agent_usage(id: str, days: int = 7):
         models[name] = models.get(name, 0) + int((t["usage"] or {}).get("total") or 0)
     return {"days": days, "turns": len(turns), "prompt": total("prompt"), "completion": total("completion"), "total": total("total"),
             "models": sorted(({"model": k, "total": v} for k, v in models.items() if v), key=lambda m: -m["total"])}
+REACTIONS = ("👍", "❤️", "😂", "🎉", "🙏", "👀")
+
+
+@app.post("/api/conversations/{owner}/messages/{message_id}/reactions")
+async def react(owner: str, message_id: str, request: Request):
+    """Grok's lightweight acknowledgement on one message of a bot chat or group chat: toggles an emoji."""
+    if not store.get("agents", owner) and not store.get("rooms", owner): raise KeyError(owner)
+    emoji = str((await request.json()).get("emoji") or "")
+    if emoji not in REACTIONS: raise ValueError("不支援的表情")
+    current = store.get_message(owner, message_id)
+    if current is None: raise KeyError(message_id)
+    reactions = [r for r in current.get("reactions") or [] if r in REACTIONS]
+    reactions = [r for r in reactions if r != emoji] if emoji in reactions else [*reactions, emoji]
+    store.update_message(owner, message_id, reactions=reactions)
+    return {"id": message_id, "reactions": reactions}
+
+
+@app.get("/api/search")
+async def search_everything(q: str = ""):
+    """Bots, group chats, messages, files and routines matching a query (the command palette)."""
+    return await asyncio.to_thread(search_all, store, q)
+@app.get("/api/usage")
+async def model_usage(days: int = 30):
+    """Tokens each model provider served, counted at the proxy every model request passes through."""
+    return await asyncio.to_thread(usage.summary, store, days, settings.read().get("providers", {}))
 @app.get("/api/agents/{id}/memory")
 async def agent_memory(id: str):
     runtime.agent(id); return memory.read(store.agent_directory(id) / "hermes")
 @app.put("/api/agents/{id}/memory")
 async def save_agent_memory(id: str, request: Request):
     runtime.agent(id); body = await request.json()
-    return await asyncio.to_thread(memory.write, store.agent_directory(id) / "hermes", body.get("target"), body.get("entries"))
+    return await asyncio.to_thread(memory.write, store.agent_directory(id) / "hermes", body.get("target"), body.get("entries"), body.get("previous"))
 @app.get("/api/agents/{id}/storage")
 async def agent_storage(id: str):
     runtime.agent(id)
@@ -611,22 +791,55 @@ async def clear_avatar(id: str): runtime.agent(id); (store.agent_directory(id) /
 async def get_avatar(id: str): runtime.agent(id); return FileResponse(contained(store.agent_directory(id), "avatar.png", exists=True))
 
 
-@app.get("/api/agents/{id}/template")
-async def export_template(id: str):
+def template_of(id):
+    """A bot as a portable template: profile, look, skills and connector settings, with every secret removed."""
     agent = runtime.agent(id)
-    profile = {k: v for k, v in agent.items() if k in {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "reply_style", "avatar_traits", "avatar_expression"}}
+    profile = {k: v for k, v in agent.items() if k in {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "reply_style", "avatar_traits", "avatar_expression", "ask_first"}}
     entries = {**store.get("mcp", "shared", {}), **store.get("mcp", id, {})}
     mcp, known_secrets = portable_connectors(entries)
     known_secrets.extend(p.get("api_key", "") for p in settings.read().get("providers", {}).values())
     env_path = store.agent_directory(id) / "hermes" / ".env"
     if env_path.exists(): known_secrets.extend(line.partition("=")[2].strip().strip("\"'") for line in env_path.read_text().splitlines() if "=" in line and not line.lstrip().startswith("#"))
     avatar = store.agent_directory(id) / "avatar.png"
-    result = {"format": "lazyboy.agent-template", "version": 1, "profile": profile, "skills": skills.list(id), "mcp": {"mcpServers": mcp}, "notes": ["API key、登入、對話、記憶與 MCP 秘密設定不包含在分享檔案中。"]}
+    # Hermes' own built-in skills travel with Hermes, not with the bot; edited ones are the bot's and are kept.
+    builtin = skills.bundled_unchanged(id)
+    own = [row for row in skills.list(id) if row["id"] not in builtin]
+    result = {"format": "lazyboy.agent-template", "version": 1, "profile": profile, "skills": own, "mcp": {"mcpServers": mcp}, "notes": ["API key、登入、對話、記憶與 MCP 秘密設定不包含在分享檔案中。"]}
     if avatar.exists(): result["avatar_png"] = base64.b64encode(avatar.read_bytes()).decode()
     if len(result["skills"]) > 64 or len(mcp) > 64: raise ValueError("分享最多 64 個技能與 64 個串接")
     for field in ("profile", "skills", "mcp"): result[field] = scrub_known(result[field], known_secrets)
     if len(json.dumps(result).encode()) > 12*1024*1024: raise ValueError("分享檔超過 12 MB")
     return result
+
+
+@app.get("/api/agents/{id}/template")
+async def export_template(id: str): return await asyncio.to_thread(template_of, id)
+
+
+def saved_row(row):
+    return {k: row.get(k) for k in ("id", "name", "title", "blurb", "avatar_color", "avatar_shape", "created_at", "skill_count")}
+
+
+@app.post("/api/agents/{id}/save-template")
+async def save_template(id: str):
+    """Grok's "Create template": keep this bot's setup to start new bots from (listed in the New dialog)."""
+    template = await asyncio.to_thread(template_of, id)
+    profile = template["profile"]; key = uid()
+    row = {"id": key, "name": profile.get("name", "Bot"), "title": profile.get("title", ""), "blurb": plain_text(profile.get("persona") or profile.get("description") or "", 80),
+           "avatar_color": profile.get("avatar_color"), "avatar_shape": profile.get("avatar_shape"), "created_at": now(), "skill_count": len(template.get("skills", [])), "template": template}
+    store.put("saved_templates", key, row)
+    return saved_row(row)
+@app.get("/api/saved-templates")
+async def saved_templates(): return {"templates": [saved_row(r) for r in sorted(store.all("saved_templates"), key=lambda r: r.get("created_at") or "", reverse=True)]}
+@app.get("/api/saved-templates/{key}")
+async def saved_template(key: str):
+    row = store.get("saved_templates", key)
+    if not row: raise KeyError(key)
+    return row["template"]
+@app.delete("/api/saved-templates/{key}")
+async def delete_saved_template(key: str):
+    if not store.get("saved_templates", key): raise KeyError(key)
+    store.remove("saved_templates", key); return {"ok": True}
 @app.put("/api/templates/{key}")
 async def import_template(key: str, request: Request):
     body = await request.json(); template = body["template"]
@@ -745,6 +958,7 @@ async def connector_action(id: str, request: Request):
     if action == "cancel": await connectors.cancel(id); return connectors.view(connectors.item(id))
     if action == "test": await connectors.test("shared", id, prefer, auto=bool(body.get("auto"))); return connectors.view(connectors.item(id))
     if action == "disconnect": return await connectors.disconnect(id)
+    if action == "tools": return await connectors.set_tools(id, body.get("disabled") or [])
     raise ValueError("無效的應用程式操作")
 
 
@@ -778,12 +992,53 @@ class WorkerUnauthorized(Exception): pass
 async def worker_unauthorized(request, exc): return JSONResponse({"error": str(exc)}, status_code=401)
 
 
+MODEL_REQUESTS_KEPT = 40
+# The first line of the system prompt Hermes gives every delegate_task child (tools/delegate_tool_progress.py).
+CHILD_PROMPT = "You are a focused subagent working on a specific delegated task."
+
+
+def delegated_child(payload):
+    """Whether a model request comes from a delegated child rather than the bot's own conversation."""
+    if not isinstance(payload, dict): return False
+    def opening(value):
+        if isinstance(value, str): return value
+        if isinstance(value, list) and value and isinstance(value[0], dict): return str(value[0].get("text") or "")
+        return ""
+    for field in ("system", "instructions"):  # Anthropic Messages, OpenAI Responses
+        if opening(payload.get(field)).startswith(CHILD_PROMPT): return True
+    for field in ("messages", "input"):  # Chat Completions, Responses input items
+        items = payload.get(field)
+        if isinstance(items, list) and items and isinstance(items[0], dict) and items[0].get("role") in {"system", "developer"}:
+            return opening(items[0].get("content")).startswith(CHILD_PROMPT)
+    return False
+
+
 def worker(request):
     supplied = request.headers.get("authorization", "")
     if not supplied.startswith("Bearer "): raise WorkerUnauthorized("Worker authentication required")
     for agent in store.all("agents"):
         if hmac.compare_digest(supplied[7:], computers.key(agent["id"])): return agent
     raise WorkerUnauthorized("Worker authentication failed")
+
+
+# Model requests share one pooled client per event loop: a fresh connection costs a TLS handshake on every call
+# (0.25–0.3 s to some providers), and a long task makes well over a hundred calls.
+_model_clients = weakref.WeakKeyDictionary()
+
+
+def model_http():
+    loop = asyncio.get_running_loop()
+    client = _model_clients.get(loop)
+    if client is None or client.is_closed:
+        client = _model_clients[loop] = httpx.AsyncClient(timeout=httpx.Timeout(300, connect=15),
+                                                          limits=httpx.Limits(max_connections=100, max_keepalive_connections=32, keepalive_expiry=60))
+    return client
+
+
+async def close_model_http():
+    for client in list(_model_clients.values()):
+        with contextlib.suppress(Exception): await client.aclose()
+    _model_clients.clear()
 
 
 async def wait_model(awaitable, task_id):
@@ -810,6 +1065,7 @@ async def provider_proxy(provider: str, path: str, request: Request):
     active, model, p = settings.effective(agent)
     task_id = runtime.active.get(agent["id"])
     if task_id in runtime.provider_bindings: active, model, p = runtime.provider_bindings[task_id]
+    elif provider != active and (last := runtime.last_bindings.get(agent["id"])) and last[0] == provider: active, model, p = last
     route = runtime.routes.get(task_id)
     if provider != (route.input_provider if route else active): raise ValueError("Bot cannot use another provider's credentials")
     allowed = {"chat/completions", "responses", "messages", "models", "embeddings", "images/generations", "audio/transcriptions"}
@@ -817,6 +1073,10 @@ async def provider_proxy(provider: str, path: str, request: Request):
     content = await request.body()
     payload = json.loads(content) if path in {"chat/completions", "responses", "messages"} else None
     foreground = bool(route and isinstance(payload, dict) and payload.get("tools"))
+    # A delegate_task child (possibly of an earlier task that is still working in the background) is routed like
+    # the task's own requests, but the current turn's stop and request log are not about it.
+    child = foreground and delegated_child(payload)
+    owned = foreground and not child
     routed = foreground and route.enabled
     if routed and route.executed_tools(payload): route.promote()
     candidates = route.candidates() if routed else [route.input_binding if route else (active, model, p)]
@@ -824,7 +1084,7 @@ async def provider_proxy(provider: str, path: str, request: Request):
         candidates = [b for b in candidates if b[0] == active and b[1] == payload.get("model")]
     if not candidates: raise ValueError("沒有符合這個任務圖片或對話能力的分流模型")
     for index, binding in enumerate(candidates):
-        if foreground and runtime.halted(task_id): raise ValueError("這個工作已停止")
+        if owned and runtime.halted(task_id): raise ValueError("這個工作已停止")
         selected_provider, model, p = binding
         url = p.get("base_url", "").rstrip("/") + "/" + path
         if urlparse(url).scheme not in {"http", "https"}: raise ValueError("請先設定模型供應商與服務網址")
@@ -837,19 +1097,23 @@ async def provider_proxy(provider: str, path: str, request: Request):
             if settings.protocol(p, model) == "messages":
                 headers.update({"x-api-key": p["api_key"], "anthropic-version": request.headers.get("anthropic-version", "2023-06-01")})
                 if request.headers.get("anthropic-beta"): headers["anthropic-beta"] = request.headers["anthropic-beta"]
-        body = json.dumps(routed_payload(payload, binding, settings.protocol(p, model), settings, other_provider=selected_provider != route.input_provider)).encode() if routed else content
+        # ensure_ascii would double the size of Chinese conversations on every request.
+        body = json.dumps(routed_payload(payload, binding, settings.protocol(p, model), settings, other_provider=selected_provider != route.input_provider), ensure_ascii=False, separators=(",", ":")).encode() if routed else content
         deadline = route.deadline(binding) if routed else 300
         record = {"provider":selected_provider,"model":model if routed else payload.get("model",model) if foreground else model,"protocol":settings.protocol(p,model),"role":route.role if routed else "fixed","reasoning_effort":settings.reasoning(p,model)}
-        if foreground:
+        if owned:
             task = runtime.task(task_id)
-            runtime.store.patch("tasks",task_id,model_requests=[*task.get("model_requests",[]),record])
-        client = httpx.AsyncClient(timeout=httpx.Timeout(deadline, connect=min(15, deadline)))
+            # The newest requests are enough to show what ran; the count keeps the total.
+            earlier = task.get("model_requests", [])
+            runtime.store.patch("tasks",task_id,model_requests=[*earlier[-(MODEL_REQUESTS_KEPT-1):],record],model_request_count=int(task.get("model_request_count") or len(earlier))+1)
+        client = model_http()
         upstream = None
         iterator = None
         first_chunk = None
         try:
-            sending = client.send(client.build_request(request.method, url, headers=headers, params=request.query_params, content=body), stream=True)
-            upstream = await wait_model(sending, task_id) if foreground else await sending
+            sending = client.send(client.build_request(request.method, url, headers=headers, params=request.query_params, content=body,
+                                                       timeout=httpx.Timeout(deadline, connect=min(15, deadline))), stream=True)
+            upstream = await wait_model(sending, task_id) if owned else await sending
             if routed and upstream.is_success and "text/event-stream" in upstream.headers.get("content-type", ""):
                 iterator = upstream.aiter_bytes()
                 async with asyncio.timeout(deadline):
@@ -857,16 +1121,16 @@ async def provider_proxy(provider: str, path: str, request: Request):
                 if first_chunk is None: raise httpx.ReadError("模型串流未提供任何內容")
         except BaseException as exc:
             if upstream: await upstream.aclose()
-            await client.aclose()
             if isinstance(exc, (httpx.TransportError, TimeoutError)) and index + 1 < len(candidates):
                 runtime.emit(agent["id"], "model_fallback", {"provider":selected_provider,"model":model,"reason":"connection"}, task_id)
                 continue
+            if isinstance(exc, TimeoutError): raise httpx.ReadTimeout("模型在時限內沒有開始回應") from exc
             raise
         if upstream.status_code in {429, 500, 502, 503, 504} and index + 1 < len(candidates):
-            await upstream.aclose(); await client.aclose()
+            await upstream.aclose()
             runtime.emit(agent["id"], "model_fallback", {"provider":selected_provider,"model":model,"status":upstream.status_code}, task_id)
             continue
-        if foreground and upstream.is_success:
+        if owned and upstream.is_success:
             if routed: route.last = binding
             runtime.provider_bindings[task_id] = binding
             runtime.store.patch("tasks",task_id,**record,routing={"intent":route.intent,"role":route.role,"enabled":route.enabled,"promoted":route.promoted})
@@ -874,11 +1138,24 @@ async def provider_proxy(provider: str, path: str, request: Request):
         break
     # Never retry after response bytes start. Hermes receives the original
     # transport, including tool IDs and paired results, on every model request.
+    metered = path in {"chat/completions", "responses", "messages", "embeddings"}
+    meter = usage.Meter("text/event-stream" in upstream.headers.get("content-type", "")) if metered else None
+    named = payload
+    if path == "embeddings":
+        with contextlib.suppress(ValueError): named = json.loads(content)
+    used_model = model if routed or not isinstance(named, dict) else str(named.get("model") or model)
     async def chunks():
         try:
-            if first_chunk is not None: yield first_chunk
-            async for chunk in iterator if iterator is not None else upstream.aiter_bytes(): yield chunk
-        finally: await upstream.aclose(); await client.aclose()
+            if first_chunk is not None:
+                if meter: meter.feed(first_chunk)
+                yield first_chunk
+            async for chunk in iterator if iterator is not None else upstream.aiter_bytes():
+                if meter: meter.feed(chunk)
+                yield chunk
+        finally:
+            await upstream.aclose()
+            if meter:
+                with contextlib.suppress(Exception): usage.record(store, selected_provider, used_model, meter.result(), upstream.is_success)
     return StreamingResponse(chunks(), status_code=upstream.status_code, media_type=upstream.headers.get("content-type", "application/json"))
 
 
@@ -902,25 +1179,30 @@ async def product_tool(request: Request):
 
 def member_row(agent, room_id=None):
     avatar = store.agent_directory(agent["id"]) / "avatar.png"
+    live = store.agent_tasks(agent["id"], live=True)
     seat = "idle"
     if room_id:
-        for task in store.all("tasks"):
-            if task["agent_id"] == agent["id"] and task.get("room_id") == room_id and task["state"] != "terminal":
+        for task in live:
+            if task.get("room_id") == room_id and task["state"] != "terminal":
                 seat = "queued" if task["state"] == "queued" else "waiting" if task["state"].startswith("waiting") else "working"
                 if seat != "queued": break
     return {**{k: agent.get(k) for k in ("id", "name", "title", "avatar_color", "avatar_shape", "avatar_traits", "avatar_expression")},
             "avatar_url": f"/api/agents/{agent['id']}/avatar?updated={avatar.stat().st_mtime_ns}" if avatar.exists() else None,
-            "activity": runtime.activity(agent["id"]), "seat": seat}
+            "activity": runtime.activity(agent["id"], live), "seat": seat}
 
 
 def room_row(room, transcript=None):
-    transcript = store.transcript(room["id"], room["id"]) if transcript is None else transcript
-    last = next((m for m in reversed(transcript) if not m.get("silent")), None)
+    if transcript is None:
+        last = store.last_message(room["id"], room["id"], keep=lambda m: not m.get("silent"))
+        count = store.count_messages(room["id"], room["id"])
+    else:
+        last = next((m for m in reversed(transcript) if not m.get("silent")), None)
+        count = len(transcript)
     members = [member_row(a, room["id"]) for a in collab.members(room)]
     who = "你" if last and last["role"] == "user" else (last or {}).get("speaker_name", "")
     return {**{k: room.get(k) for k in ("id", "name", "member_ids", "auto_name", "created_at", "updated_at")}, "members": members,
             "preview": f"{who}：{plain_text(last['content'], 120)}" if last else "", "last_at": last["at"] if last else room.get("created_at"),
-            "working": [m["id"] for m in members if m["seat"] in {"working", "waiting"}], "message_count": len(transcript)}
+            "working": [m["id"] for m in members if m["seat"] in {"working", "waiting"}], "message_count": count}
 
 
 @app.get("/api/rooms")
@@ -961,7 +1243,7 @@ async def room_events(room_id: str, request: Request):
         nonlocal since
         yield ": connected\n\n"
         with runtime.listen(room_id) as wake:
-            while not await request.is_disconnected():
+            while not stopping and not await request.is_disconnected():
                 wake.clear()
                 batch = store.events(room_id, since)
                 if batch:

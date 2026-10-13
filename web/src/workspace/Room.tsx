@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { api, type AgentRow, type RoomDetail, type RoomMember, type RoomMessage, type RoomRow } from "../api";
+import { api, type AgentRow, type RoomDetail, type RoomMember, type RoomMessage, type RoomRow, type Upload } from "../api";
 import { Avatar } from "../avatar";
 import { ChatMessageBody, type PreviewFile } from "../markdown";
-import { ArrowUp, AtSign, ChevronDown, ChevronLeft, Ellipsis, Eraser, LoaderCircle, Pencil, Reply, Square, Trash2, Users } from "../ui/icons";
+import { ArrowUp, AtSign, ChevronDown, ChevronLeft, Ellipsis, Eraser, LoaderCircle, Paperclip, Pencil, Reply, Square, Trash2, Users, X } from "../ui/icons";
 import { ConfirmDialog, MenuButton, toast, type MenuItem } from "../ui/overlay";
 import { randomUUID } from "../uuid";
 import { clock, dayLabel, sameDay } from "./format";
 import { useMood } from "./mood";
 import { avatarProps } from "./Sidebar";
 import { RoomAvatar } from "./Team";
+import { FindBar } from "./FindBar";
+import { ReactButton, ReactionList } from "./MessageActions";
+import { useFocusMessage, type FocusTarget } from "./focus";
+import { readDraft, writeDraft } from "./drafts";
 
 const EVERYONE = { id: "everyone", name: "everyone", label: "所有人" };
 
@@ -23,9 +27,12 @@ function useRoom(roomId: string) {
   const [room, setRoom] = useState<RoomDetail | null>(null);
   const [error, setError] = useState("");
   const timer = useRef(0);
+  const version = useRef(0);
   const load = useCallback(async () => {
-    try { const data = await api.room(roomId); setRoom(data); setError(""); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    // Polls, events and sends overlap; an older answer arriving last must not roll the room back.
+    const request = ++version.current;
+    try { const data = await api.room(roomId); if (request === version.current) { setRoom(data); setError(""); } }
+    catch (err) { if (request === version.current) setError(err instanceof Error ? err.message : String(err)); }
   }, [roomId]);
   const soon = useCallback(() => { window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void load(), 150); }, [load]);
   useEffect(() => {
@@ -56,9 +63,9 @@ function MemberFace({ member, size = 28 }: { member: RoomMember; size?: number }
   return <Avatar {...avatarProps(member as AgentRow)} size={size} gaze={false} alive={member.seat !== "idle"} mood={mood} />;
 }
 
-function RoomBubble({ message, room, showHead, onReply, onOpenBot, onOpen }: {
+function RoomBubble({ message, room, showHead, onReply, onOpenBot, onOpen, onReact }: {
   message: RoomMessage; room: RoomDetail; showHead: boolean;
-  onReply: (name: string) => void; onOpenBot: (id: string) => void; onOpen: (file: PreviewFile) => void;
+  onReply: (name: string) => void; onOpenBot: (id: string) => void; onOpen: (file: PreviewFile) => void; onReact: (message: RoomMessage, emoji: string) => void;
 }) {
   const speaker = room.members.find(m => m.id === message.speaker_id);
   const text = useMemo(() => highlight(message.content, room.members), [message.content, room.members]);
@@ -77,9 +84,11 @@ function RoomBubble({ message, room, showHead, onReply, onOpenBot, onOpen }: {
       <div className="msg-body">
         {showHead ? <button type="button" className="room-speaker" onClick={() => speaker && onOpenBot(speaker.id)}>{face.name}{speaker?.title ? <small>{speaker.title}</small> : null}</button> : null}
         <ChatMessageBody content={text} agentId={face.id} knownPaths={[]} onOpen={onOpen} />
+        <ReactionList reactions={message.reactions} onToggle={emoji => onReact(message, emoji)} />
         <div className="room-msg-foot">
           <time className="msg-time">{clock(message.at)}</time>
           {speaker ? <button type="button" className="room-reply" onClick={() => onReply(speaker.name)}><Reply aria-hidden="true" />回覆</button> : null}
+          {!message.pending ? <ReactButton chosen={message.reactions} onToggle={emoji => onReact(message, emoji)} /> : null}
         </div>
       </div>
     </div>
@@ -103,10 +112,22 @@ function Seats({ members, onOpenBot }: { members: RoomMember[]; onOpenBot: (id: 
   );
 }
 
-function RoomComposer({ room, draft, setDraft, onSend, autoFocus, area }: {
+function RoomComposer({ room, draft, setDraft, onSend, autoFocus, area, files, setFiles }: {
   room: RoomDetail; draft: string; setDraft: (value: string) => void; onSend: () => void; autoFocus: boolean;
   area: RefObject<HTMLTextAreaElement | null>;
+  files: Upload[]; setFiles: (files: Upload[]) => void;
 }) {
+  const [uploading, setUploading] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+  /** Files go to every member's computer (Grok: you can attach files in groups). */
+  const attach = async (chosen: File[]) => {
+    if (!chosen.length) return;
+    setUploading(true);
+    const added = [...files];
+    try { for (const file of chosen) { added.push(await api.roomUpload(room.id, file)); setFiles([...added]); } }
+    catch (err) { toast(err instanceof Error ? err.message : String(err), "error"); }
+    finally { setUploading(false); }
+  };
   const [query, setQuery] = useState<string | null>(null);
   const [pick, setPick] = useState(0);
   useLayoutEffect(() => {
@@ -148,8 +169,16 @@ function RoomComposer({ room, draft, setDraft, onSend, autoFocus, area }: {
           })}
         </ul>
       ) : null}
-      <form className="composer" onSubmit={event => { event.preventDefault(); onSend(); }}>
+      {files.length ? (
+        <ul className="room-attachments" aria-label="附件">
+          {files.map(file => <li key={file.id}><Paperclip aria-hidden="true" /><span>{file.name}</span><button type="button" className="icon-btn small" aria-label={`移除 ${file.name}`} onClick={() => setFiles(files.filter(item => item.id !== file.id))}><X /></button></li>)}
+        </ul>
+      ) : null}
+      <form className="composer" onSubmit={event => { event.preventDefault(); if (!uploading) onSend(); }}
+        onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+        onDrop={event => { if (!event.dataTransfer.files.length) return; event.preventDefault(); void attach([...event.dataTransfer.files]); }}>
         <textarea ref={area} rows={1} value={draft} aria-label="群組訊息" maxLength={12000}
+          onPaste={event => { const pasted = [...event.clipboardData.files]; if (pasted.length) { event.preventDefault(); void attach(pasted); } }}
           placeholder={`傳訊息到「${room.name}」，用 @ 指定負責的 Bot…`}
           onChange={event => { setDraft(event.target.value); track(event.target.value, event.target.selectionStart ?? event.target.value.length); }}
           onKeyDown={event => {
@@ -163,15 +192,21 @@ function RoomComposer({ room, draft, setDraft, onSend, autoFocus, area }: {
           }} />
         <div className="composer-bar">
           <button type="button" className="composer-plus" aria-label="點名成員" title="點名成員" onClick={() => { const el = area.current; setDraft(draft + (draft && !draft.endsWith(" ") ? " @" : "@")); setQuery(""); requestAnimationFrame(() => el?.focus()); }}><AtSign /></button>
+          <button type="button" className="composer-plus" aria-label="加入檔案" title="加入檔案（每位成員的電腦都會收到）" disabled={uploading} onClick={() => picker.current?.click()}>{uploading ? <LoaderCircle className="spin" /> : <Paperclip />}</button>
+          <input ref={picker} type="file" multiple hidden onChange={event => { void attach([...(event.target.files || [])]); event.target.value = ""; }} />
           <span className="composer-hint">沒有點名時，由成員自己判斷要不要回答 · Enter 送出</span>
-          <button type="submit" className="composer-send" aria-label="送出" disabled={!draft.trim()}><ArrowUp /></button>
+          <button type="submit" className="composer-send" aria-label="送出" disabled={(!draft.trim() && !files.length) || uploading}><ArrowUp /></button>
         </div>
       </form>
     </div>
   );
 }
 
-export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot, onOpenFile, onChanged }: {
+export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot, onOpenFile, onChanged, finding = false, onCloseFind, focusMessage, onFocused }: {
+  finding?: boolean;
+  onCloseFind?: () => void;
+  focusMessage?: FocusTarget | null;
+  onFocused?: () => void;
   roomId: string;
   mobile: boolean;
   onBack: () => void;
@@ -182,7 +217,14 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
   onChanged: () => void;
 }) {
   const { room, setRoom, error, load } = useRoom(roomId);
-  const [draft, setDraft] = useState("");
+  // Like a bot chat, an unsent group message waits here while you look at other conversations.
+  const draftId = `room:${roomId}`;
+  const [draft, setDraftState] = useState(() => readDraft(draftId).text);
+  const setDraft = useCallback((value: string | ((current: string) => string)) => setDraftState(current => {
+    const next = typeof value === "function" ? value(current) : value;
+    writeDraft(draftId, { text: next });
+    return next;
+  }), [draftId]);
   const [confirm, setConfirm] = useState<"clear" | "delete" | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -192,20 +234,30 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
   const toBottom = useCallback((smooth = false) => { const el = scroller.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" }); }, []);
   useLayoutEffect(() => { pinned.current = true; toBottom(); }, [roomId, toBottom]);
   useLayoutEffect(() => { if (pinned.current) toBottom(); }, [count, room?.working.length, toBottom]);
+  useFocusMessage(scroller, focusMessage, room?.transcript, pinned, onFocused);
 
+  const [files, setFiles] = useState<Upload[]>([]);
+  useEffect(() => { setFiles([]); }, [roomId]);
   const send = async () => {
-    const text = draft.trim();
+    const text = [draft.trim(), ...files.map(file => `[${file.name}](${file.url})`)].filter(Boolean).join("\n\n");
     if (!text || !room) return;
+    const sentFiles = files;
+    setFiles([]);
     const local: RoomMessage = { id: `local:${randomUUID()}`, role: "user", content: text, at: new Date().toISOString(), pending: true };
     setRoom({ ...room, transcript: [...room.transcript, local] }); setDraft(""); pinned.current = true;
     try { await api.postRoom(room.id, text, local.id); await load(); onChanged(); }
-    catch (err) { setDraft(text); setRoom(current => current && { ...current, transcript: current.transcript.filter(m => m.id !== local.id) }); toast(err instanceof Error ? err.message : String(err), "error"); }
+    catch (err) { setDraft(draft); setFiles(sentFiles); setRoom(current => current && { ...current, transcript: current.transcript.filter(m => m.id !== local.id) }); toast(err instanceof Error ? err.message : String(err), "error"); }
   };
   const reply = (name: string) => {
     setDraft(current => current.startsWith(`@${name} `) ? current : `@${name} ${current}`);
     requestAnimationFrame(() => area.current?.focus());
   };
   const openFile = (file: PreviewFile) => onOpenFile(file);
+  const react = (message: RoomMessage, emoji: string) => {
+    const flip = (list?: string[]) => list?.includes(emoji) ? list.filter(item => item !== emoji) : [...(list || []), emoji];
+    setRoom(current => current && { ...current, transcript: current.transcript.map(m => m.id === message.id ? { ...m, reactions: flip(m.reactions) } : m) });
+    void api.react(roomId, message.id, emoji).catch(err => { toast(err instanceof Error ? err.message : String(err), "error"); void load(); });
+  };
 
   if (!room) {
     return (
@@ -247,6 +299,7 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
           <MenuButton label="更多" icon={<Ellipsis />} items={menu} />
         </div>
       </header>
+      {finding && onCloseFind ? <FindBar scroller={scroller} version={room.transcript} pinned={pinned} onClose={onCloseFind} /> : null}
       <div className="chat-scroll" ref={scroller} onScroll={event => {
         const el = event.currentTarget;
         const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -267,9 +320,9 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
             const newDay = !previous || !sameDay(previous.at, message.at);
             const showHead = message.role === "assistant" && (newDay || previous?.role !== "assistant" || previous?.speaker_id !== message.speaker_id);
             return (
-              <div key={message.id} className="msg-wrap">
+              <div key={message.id} className="msg-wrap" data-msg={message.id}>
                 {newDay && message.at ? <div className="day-sep"><span>{dayLabel(message.at)}</span></div> : null}
-                <RoomBubble message={message} room={room} showHead={showHead} onReply={reply} onOpenBot={onOpenBot} onOpen={openFile} />
+                <RoomBubble message={message} room={room} showHead={showHead} onReply={reply} onOpenBot={onOpenBot} onOpen={openFile} onReact={react} />
               </div>
             );
           })}
@@ -278,7 +331,7 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
       </div>
       <div className="chat-bottom">
         {showJump ? <button type="button" className="jump-latest" onClick={() => { pinned.current = true; toBottom(true); }}><ChevronDown />最新訊息</button> : null}
-        <RoomComposer room={room} draft={draft} setDraft={setDraft} onSend={() => void send()} autoFocus={!mobile} area={area} />
+        <RoomComposer room={room} draft={draft} setDraft={setDraft} onSend={() => void send()} autoFocus={!mobile} area={area} files={files} setFiles={setFiles} />
       </div>
       {confirm === "clear" ? (
         <ConfirmDialog title="清除群組訊息" confirmLabel="清除" danger onClose={() => setConfirm(null)}

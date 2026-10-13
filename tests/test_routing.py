@@ -320,3 +320,35 @@ async def test_stop_cancels_waiting_first_byte_without_starting_fallback(product
         product.store.patch("tasks",task,state="stopping")
         response=await asyncio.wait_for(posting,1)
     assert response.status_code==400 and cancelled.is_set() and len(seen)==1
+
+
+async def test_a_stop_does_not_cut_off_delegated_children(product,monkeypatch):
+    """A stopped turn's own requests are refused; a delegate_task child (maybe of an earlier task) still gets through."""
+    task,route=await start_route(product)
+    main=importlib.import_module("server.main")
+    for name in ("store","settings","computers","runtime"): monkeypatch.setattr(main,name,getattr(product,name))
+    original=httpx.AsyncClient
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(lambda request: httpx.Response(200,json={"ok":True})),**kwargs))
+    product.store.patch("tasks",task,state="stopping")
+    headers={"Authorization":"Bearer "+product.computers.key(product.agent["id"])}
+    own=protocol_payload("chat_completions")
+    child={**own,"messages":[{"role":"system","content":main.CHILD_PROMPT+"\nCONTEXT: compare prices"},*own["messages"]]}
+    before=len(product.runtime.task(task).get("model_requests",[]))
+    async with original(transport=httpx.ASGITransport(app=main.app),base_url="http://localhost") as client:
+        assert (await client.post("/internal/providers/primary/v1/chat/completions",headers=headers,json=own)).status_code==400
+        assert (await client.post("/internal/providers/primary/v1/chat/completions",headers=headers,json=child)).status_code==200
+    assert len(product.runtime.task(task).get("model_requests",[]))==before
+    assert main.delegated_child({"system":main.CHILD_PROMPT}) and main.delegated_child({"instructions":main.CHILD_PROMPT})
+    assert not main.delegated_child(own) and not main.delegated_child(None)
+
+
+async def test_a_turn_that_never_starts_answering_is_a_gateway_timeout(product,monkeypatch):
+    main=importlib.import_module("server.main")
+    for name in ("store","settings","computers","runtime"): monkeypatch.setattr(main,name,getattr(product,name))
+    original=httpx.AsyncClient
+    def silent(request): raise TimeoutError("first byte never came")
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(silent),**kwargs))
+    headers={"Authorization":"Bearer "+product.computers.key(product.agent["id"])}
+    async with original(transport=httpx.ASGITransport(app=main.app),base_url="http://localhost") as client:
+        response=await client.post("/internal/providers/primary/v1/chat/completions",headers=headers,json={"model":"fast","messages":[]})
+    assert response.status_code==502 and "error" in response.json()
