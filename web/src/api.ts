@@ -11,6 +11,8 @@ export type HumanQuestion = {
   method?: string;
   hermes_questions?: {qid: string; question: string; choices?: string[] | null; multi_select: boolean}[];
   question?: string; reason?: string; prompt?: string; action_label?: string; options?: unknown[]; kind?: string;
+  /** Questions from work the user did not start expire (ISO time). */
+  expires_at?: string;
   task_id?: string; question_id?: string; site_url?: string; surface?: string;
   handover?: boolean; submitted?: boolean;
   name?: string; label?: string; description?: string;
@@ -37,6 +39,8 @@ export type AgentActivity = {
   latest_task_id?: string | null;
   queued_task_ids?: string[];
   thread_id?: string | null;
+  /** Set while the bot is speaking in a group chat. */
+  room_id?: string | null;
   queued_thread_ids?: string[];
   question?: HumanQuestion | null;
   questions?: HumanQuestion[];
@@ -106,6 +110,8 @@ export type Worker = {
 
 export type TaskDetail = {
   collaboration?: {message_id:number;sender_name:string;recipient_name:string;content:string;at:string}[];
+  /** Set when another bot (or a group chat) started this turn. */
+  from_agent?: string; from_name?: string; intent?: string; room_id?: string;
   id: string;
   state: string;
   goal: string;
@@ -135,6 +141,12 @@ export type AgentGroup = { id: string; name: string; position?: number };
 export type AgentSkill = { id: string; name: string; description: string; instructions: string; enabled: boolean; updated_at: string; source?: string };
 
 export type AgentRow = {
+  /** Kept at the top of the sidebar. */
+  pinned?: boolean;
+  /** Folded into "已隱藏" at the bottom of the sidebar. */
+  hidden?: boolean;
+  /** Set when another bot created this one (a helper bot). */
+  created_by?: string;
   group_id?: string;
   avatar_traits?: Record<string, number>;
   avatar_expression?: string;
@@ -175,7 +187,9 @@ export type AgentProfile = {
   model?: string;
 };
 
-export type TranscriptItem = { id?: string; role: "user" | "assistant"; content: string; at?: string; streaming?: boolean; narration?: string[]; routine_id?: string; routine_title?: string; lesson_id?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
+/** Who a message came from when it was not the user: another bot ("message_in"), or this bot's hand-off ("message_out"). */
+export type PeerFields = { room_id?: string; event?: "message_in" | "message_out" | "group_created" | "group_post" | "bot_created" | "profile_updated" | "question_expired"; from_agent?: string; from_name?: string; peer_id?: string; peer_name?: string; intent?: "request" | "question" | "result" | "fyi"; message_id?: string; silent?: boolean };
+export type TranscriptItem = PeerFields & { id?: string; role: "user" | "assistant" | "event"; content: string; at?: string; streaming?: boolean; narration?: string[]; routine_id?: string; routine_title?: string; lesson_id?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
 
 export type ModelProtocol = "chat_completions" | "responses" | "messages";
 export type ModelCheck = { status: "ok" | "protocol" | "unavailable" | "auth" | "busy" | "unknown"; message: string; detail?: string; at?: number; v?: number; protocol?: ModelProtocol | null };
@@ -247,6 +261,18 @@ export type AgentDetail = AgentRow & {
 /** Bytes a bot uses on disk, by kind. */
 export type StorageUsage = { workspace: number; uploads: number; caches: number; browser: number; tools: number; other: number; total: number };
 
+export type RoomMember = Pick<AgentRow, "id" | "name" | "title" | "avatar_color" | "avatar_shape" | "avatar_url" | "avatar_traits" | "avatar_expression"> & {
+  activity?: AgentActivity; seat: "idle" | "queued" | "working" | "waiting";
+};
+export type RoomRow = { id: string; name: string; member_ids: string[]; auto_name?: boolean; created_at?: string; updated_at?: string;
+  members: RoomMember[]; preview: string; last_at?: string | null; working: string[]; message_count: number };
+export type RoomMessage = { id: string; role: "user" | "assistant"; content: string; at?: string; speaker_id?: string; speaker_name?: string; mentions?: string[]; failed?: boolean; pending?: boolean };
+export type RoomDetail = RoomRow & { transcript: RoomMessage[] };
+export type BotMessage = { id: string; from: string; from_name: string; to: string; to_name: string; intent: string; text: string; at: string };
+
+export type MemoryList = { entries: string[]; used: number; limit: number };
+export type MemoryState = { user: MemoryList; memory: MemoryList };
+
 export type AgentFile = { path: string; title: string; media_type: string; bytes: number; updated_at: string; important?: boolean };
 
 export type TeamEvent = {
@@ -290,6 +316,9 @@ export const api = {
   routingHealth: () => request<{ready: boolean; supported?: boolean; engines?: {semantic?: string; laya?: string}; backend?: string}>("/api/settings/routing/health"),
   routines: (id: string) => request<{routines: Routine[]}>(`/api/agents/${encodeURIComponent(id)}/routines`),
   manageRoutine: (id: string, body: Record<string, unknown>) => request<{routine?: Routine; task_id?: string; runs?: RoutineRun[]}>(`/api/agents/${encodeURIComponent(id)}/routines`, {method:"POST",body:JSON.stringify(body)}),
+  connectors: () => request<{ apps: ConnectorApp[]; categories: string[] }>("/api/connectors"),
+  connector: (id: string, body: Record<string, unknown>) =>
+    request<ConnectorApp>(`/api/connectors/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(body) }, 150000),
   mcp: (body: Record<string, unknown>, timeout = 30000) => request<{servers: McpServer[];scope?:string;skipped?:boolean}>("/api/mcp", {method:"POST",body:JSON.stringify(body)}, timeout),
   media: (id?: string) => request<{model: string; capabilities: MediaCapabilities; limits?: UploadLimits}>("/api/media" + (id ? `?agent_id=${encodeURIComponent(id)}` : "")),
   avatarModels: () => request<{provider: string; models: string[]}>("/api/avatar/models", undefined, 25000),
@@ -328,6 +357,9 @@ export const api = {
   skills: (id: string, body: Record<string, unknown> = {action:"list"}) => request<{skills: AgentSkill[]}>(`/api/agents/${encodeURIComponent(id)}/skills`, {method:"POST",body:JSON.stringify(body)}),
   createAgent: (profile: AgentProfile) =>
     request<AgentRow>("/api/agents", { method: "POST", body: JSON.stringify(profile) }),
+  duplicate: (id: string) => request<AgentRow>(`/api/agents/${encodeURIComponent(id)}/duplicate`, { method: "POST" }, 60000),
+  usage: (id: string, days = 7) => request<{ days: number; turns: number; prompt: number; completion: number; total: number; models: { model: string; total: number }[] }>(`/api/agents/${encodeURIComponent(id)}/usage?days=${days}`),
+  sidebar: (id: string, change: { pinned?: boolean; hidden?: boolean }) => request<AgentRow>(`/api/agents/${encodeURIComponent(id)}/sidebar`, { method: "POST", body: JSON.stringify(change) }),
   updateAgent: (id: string, profile: AgentProfile) =>
     request<AgentRow>(`/api/agents/${id}`, { method: "PATCH", body: JSON.stringify(profile) }),
   renameAgent: (id: string, name: string) =>
@@ -355,8 +387,19 @@ export const api = {
     request<ThreadRow>(`/api/agents/${encodeURIComponent(id)}/threads`, { method: "POST", body: JSON.stringify({ title }) }),
   renameThread: (id: string, thread: string, title: string) =>
     request<ThreadRow>(`/api/agents/${encodeURIComponent(id)}/threads/${encodeURIComponent(thread)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  rooms: () => request<{ rooms: RoomRow[] }>("/api/rooms"),
+  room: (id: string) => request<RoomDetail>(`/api/rooms/${encodeURIComponent(id)}`),
+  createRoom: (member_ids: string[], name = "") => request<RoomRow>("/api/rooms", { method: "POST", body: JSON.stringify({ member_ids, name }) }),
+  updateRoom: (id: string, change: { name?: string; member_ids?: string[] }) => request<RoomRow>(`/api/rooms/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(change) }),
+  deleteRoom: (id: string) => request<{ ok: boolean }>(`/api/rooms/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  postRoom: (id: string, text: string, request_id: string) => request<{ woke: string[] }>(`/api/rooms/${encodeURIComponent(id)}/messages`, { method: "POST", body: JSON.stringify({ text, request_id }) }),
+  stopRoom: (id: string) => request<RoomRow>(`/api/rooms/${encodeURIComponent(id)}/stop`, { method: "POST" }),
+  clearRoom: (id: string) => request<RoomRow>(`/api/rooms/${encodeURIComponent(id)}/messages`, { method: "DELETE" }),
+  peerMessages: (id: string, peer: string) => request<{ bots: { id: string; name: string }[]; messages: BotMessage[] }>(`/api/agents/${encodeURIComponent(id)}/peers/${encodeURIComponent(peer)}`),
   deleteThread: (id: string, thread: string) =>
     request<{ ok: boolean }>(`/api/agents/${encodeURIComponent(id)}/threads/${encodeURIComponent(thread)}`, { method: "DELETE" }),
+  memory: (id: string) => request<MemoryState>(`/api/agents/${encodeURIComponent(id)}/memory`),
+  saveMemory: (id: string, target: "user" | "memory", entries: string[]) => request<MemoryState>(`/api/agents/${encodeURIComponent(id)}/memory`, { method: "PUT", body: JSON.stringify({ target, entries }) }),
   storage: (id: string) => request<StorageUsage>(`/api/agents/${encodeURIComponent(id)}/storage`, undefined, 30000),
   cleanStorage: (id: string) => request<{ freed: number; usage: StorageUsage }>(`/api/agents/${encodeURIComponent(id)}/storage/clean`, { method: "POST" }, 90000),
   agentFiles: (id: string) => request<{ files: AgentFile[] }>(`/api/agents/${encodeURIComponent(id)}/files`, undefined, 8000),
@@ -407,4 +450,11 @@ export const api = {
 export type AgentTemplate = {format:"lazyboy.agent-template";version:1;profile:AgentProfile;skills:Pick<AgentSkill,"name"|"description"|"instructions"|"enabled">[];mcp:{mcpServers:Record<string,{command?:string;args?:string[];url?:string;headers?:Record<string,string>;env?:Record<string,string>;enabled?:boolean}>};avatar_png?:string;notes:string[]};
 
 export type McpTest = { ok: boolean; error?: string | null; tools?: {name: string; description?: string}[]; at: string };
-export type McpServer = { scope?: string; scope_name?: string; last_test?: McpTest | null; enabled?:boolean; missing_fields?:string[]; server: string; transport: string; url?: string; command?: string; args?: string[]; header_names?: string[]; env_names?: string[]; status?: string; serverStatus?: string; serverError?: string; tools?: {name: string; description?: string}[] };
+export type SignIn = { agent: string; auth_url: string };
+export type ConnectorApp = {
+  id: string; title: string; description: string; category: string; auth: "oauth" | "none" | "token";
+  keywords: string[]; hosts: string[]; token_hint?: string; token_url?: string; featured: boolean;
+  state: "available" | "signing_in" | "needs_signin" | "checking" | "connected" | "error" | "off";
+  tools: { name: string; description?: string }[]; error?: string | null; checked_at?: string | null; signin?: SignIn | null;
+};
+export type McpServer = { auth?: string | null; catalog?: string | null; signed_in?: boolean | null; signin?: SignIn | null; scope?: string; scope_name?: string; last_test?: McpTest | null; enabled?:boolean; missing_fields?:string[]; server: string; transport: string; url?: string; command?: string; args?: string[]; header_names?: string[]; env_names?: string[]; status?: string; serverStatus?: string; serverError?: string; tools?: {name: string; description?: string}[] };

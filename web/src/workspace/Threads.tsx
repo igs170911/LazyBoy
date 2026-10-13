@@ -15,7 +15,13 @@ export function ThreadBar({ threads, threadId, workingId, onOpen, onCreate, onRe
 }) {
   const strip = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    strip.current?.querySelector<HTMLElement>("[aria-selected=true]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Scroll only the strip: scrollIntoView would also scroll the app sideways while this page sits off screen on a phone.
+    const row = strip.current, tab = row?.querySelector<HTMLElement>("[aria-selected=true]")?.parentElement;
+    if (row && tab) {
+      const left = tab.offsetLeft - row.offsetLeft, right = left + tab.offsetWidth;
+      if (left < row.scrollLeft) row.scrollLeft = left;
+      else if (right > row.scrollLeft + row.clientWidth) row.scrollLeft = right - row.clientWidth;
+    }
   }, [threadId]);
   return (
     <div className="thread-bar">

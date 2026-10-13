@@ -32,11 +32,11 @@ export function GroupEditor({ group, agents, onClose, onSaved }: {
   }
 
   return (
-    <Modal label={group ? "編輯群組" : "新增群組"} onClose={() => { if (!busy) onClose(); }} className="group-dialog">
+    <Modal label={group ? "編輯分區" : "新增分區"} onClose={() => { if (!busy) onClose(); }} className="group-dialog">
       <form onSubmit={event => { event.preventDefault(); void save(); }}>
-        <ModalHeader title={group ? "編輯群組" : "新增群組"} onClose={onClose} disabled={busy} />
+        <ModalHeader title={group ? "編輯分區" : "新增分區"} onClose={onClose} disabled={busy} />
         <label className="field">
-          <span>群組名稱</span>
+          <span>分區名稱</span>
           <input autoFocus value={name} maxLength={40} placeholder="例如：研究、行銷、日常" onChange={event => setName(event.target.value)} />
         </label>
         <fieldset className="member-picker">
@@ -59,7 +59,7 @@ export function GroupEditor({ group, agents, onClose, onSaved }: {
         {error ? <p className="pane-error" role="alert">{error}</p> : null}
         <div className="dialog-actions">
           <button type="button" disabled={busy} onClick={onClose}>取消</button>
-          <button type="submit" className="primary" disabled={busy || !name.trim()}>{busy ? "儲存中…" : group ? "儲存" : "建立群組"}</button>
+          <button type="submit" className="primary" disabled={busy || !name.trim()}>{busy ? "儲存中…" : group ? "儲存" : "建立分區"}</button>
         </div>
       </form>
     </Modal>
@@ -88,8 +88,8 @@ export function MoveDialog({ agent, groups, onClose, onSaved }: {
   return (
     <Modal label={`移動 ${agent.name}`} onClose={() => { if (!busy) onClose(); }} className="group-dialog">
       <ModalHeader title={`把「${agent.name}」移到…`} onClose={onClose} disabled={busy} />
-      <div className="choice-stack" role="radiogroup" aria-label="群組">
-        {[{ id: "", name: "未分組" }, ...groups].map(group => (
+      <div className="choice-stack" role="radiogroup" aria-label="分區">
+        {[{ id: "", name: "未分區" }, ...groups].map(group => (
           <button type="button" key={group.id || "none"} role="radio" aria-checked={target === group.id} className={target === group.id ? "picked" : ""} onClick={() => setTarget(group.id)}>
             <span>{group.name}</span>{target === group.id ? <Check aria-hidden="true" /> : null}
           </button>

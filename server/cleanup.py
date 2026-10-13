@@ -1,7 +1,7 @@
 """Keep each bot's disk from filling up with things that come back on their own.
 
 Work products in /workspace are never touched. What is cleaned:
-- Hermes scratch files older than SCRATCH_DAYS.
+- Hermes scratch files older than SCRATCH_DAYS, and file previews (converted Office documents) older than PREVIEW_DAYS.
 - Attachments the user uploaded, after UPLOAD_DAYS.
 - The bot's Chromium caches once they pass BROWSER_CACHE_LIMIT. Logins (cookies, local storage, IndexedDB) stay.
 """
@@ -18,6 +18,8 @@ log = logging.getLogger(__name__)
 
 DAY = 86400
 SCRATCH_DAYS = 3
+PREVIEW_DAYS = 7
+PREVIEWS = "home/.cache/lazyboy-preview"
 UPLOAD_DAYS = 30
 BROWSER_CACHE_LIMIT = 200 * 1024 * 1024
 # Chromium rebuilds all of these by itself.
@@ -58,14 +60,15 @@ def usage(root: Path) -> dict:
     workspace, uploads = size(root / "workspace"), size(root / "workspace" / "uploads")
     browser_cache = sum(size(profile / name) for name in BROWSER_CACHES)
     scratch, tools = size(root / "hermes" / "cache" / "scratch"), size(root / "hermes" / "tools")
+    previews = size(root / PREVIEWS)
     hermes, home, browser = size(root / "hermes"), size(root / "home"), size(profile)
     parts = {
         "workspace": workspace - uploads,
         "uploads": uploads,
-        "caches": scratch + browser_cache,
+        "caches": scratch + browser_cache + previews,
         "browser": browser - browser_cache,
         "tools": tools,
-        "other": (hermes - scratch - tools) + (home - browser),
+        "other": (hermes - scratch - tools) + (home - browser - previews),
     }
     return {**parts, "total": sum(parts.values())}
 
@@ -125,6 +128,7 @@ async def clean_bot(store, computers, agent_id: str, now: float | None = None) -
     now = now or time.time()
     root = store.agent_directory(agent_id)
     scratch = await asyncio.to_thread(_remove_old, root / "hermes" / "cache" / "scratch", now - SCRATCH_DAYS * DAY)
+    scratch += await asyncio.to_thread(_remove_old, root / PREVIEWS, now - PREVIEW_DAYS * DAY)
     uploads = await asyncio.to_thread(expire_uploads, store, agent_id, root, now)
     try: item = await computers.inspect(agent_id)
     except Exception: item = None

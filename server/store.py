@@ -127,7 +127,8 @@ class Store:
     def purge_orphans(self):
         """Rows left behind by bots deleted before purge_agent existed. Returns how many bots were cleaned."""
         with self.lock:
-            live = {row[0] for row in self.conn.execute("SELECT id FROM objects WHERE bucket='agents'")}
+            # Group chats keep their transcript and events under the room id, like a bot does under its own.
+            live = {row[0] for row in self.conn.execute("SELECT id FROM objects WHERE bucket IN ('agents','rooms')")}
             owners = {row[0] for row in self.conn.execute("SELECT agent FROM events UNION SELECT agent FROM admissions UNION SELECT agent FROM messages")}
             owners |= {row[0] for row in self.conn.execute(f"SELECT json_extract(data,'$.agent_id') FROM objects WHERE bucket IN ({','.join('?' * len(self.OWNED))})", self.OWNED) if row[0]}
             owners |= {row[0] for row in self.conn.execute("SELECT id FROM objects WHERE bucket='files'")}

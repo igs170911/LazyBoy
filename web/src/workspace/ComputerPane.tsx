@@ -12,7 +12,7 @@ const BUSY_LABEL: Record<Action, string> = {
   update: "正在更新電腦，可能需要幾分鐘…",
 };
 
-function viewerUrl(url: string, mobile: boolean) {
+export function viewerUrl(url: string, mobile: boolean) {
   const parsed = new URL(url, window.location.origin);
   parsed.searchParams.set("t", String(Date.now()));
   if (mobile) {

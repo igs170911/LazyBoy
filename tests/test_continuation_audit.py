@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from server.config import Settings
+from server.connectors import Connectors
 from server.runtime import Runtime
 from server.scheduling import Scheduler, next_occurrence
 from server.skills import Skills
@@ -331,6 +332,7 @@ async def api_client(product, monkeypatch):
     for field in ["store","settings","runtime","computers"]: monkeypatch.setattr(main, field, getattr(product, field))
     monkeypatch.setattr(main, "skills", Skills(product.store))
     monkeypatch.setattr(main, "scheduler", Scheduler(product.store, product.runtime))
+    monkeypatch.setattr(main, "connectors", Connectors(product.store, product.runtime, product.computers))
     product.runtime.closed=True
     transport=httpx.ASGITransport(app=main.app, client=("127.0.0.1",1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
@@ -547,3 +549,54 @@ async def test_mcp_list_covers_every_scope_and_remembers_tests(api_client, produ
     assert again[0]["last_test"]["ok"] and again[1]["last_test"]["ok"] is False
     edited=(await client.post("/api/mcp", json={"action":"save","server":"docs","url":"http://example.test/v2","all":True})).json()["servers"]
     assert edited[0]["last_test"] is None
+
+
+@pytest.mark.asyncio
+async def test_http_group_chats_and_bot_messages(api_client, product, monkeypatch):
+    from server import main
+    from server.collab import Collaboration
+    monkeypatch.setattr(main, "collab", Collaboration(product.store, product.runtime))
+    client, first=api_client
+    second=(await client.post("/api/agents", json={"name":"Writer","title":"文案"})).json()["id"]
+    assert (await client.post("/api/rooms", json={"member_ids":[first]})).status_code==400
+    room=(await client.post("/api/rooms", json={"member_ids":[first,second]})).json()
+    assert room["name"]=="API Test、Writer" and len(room["members"])==2
+    posted=(await client.post(f"/api/rooms/{room['id']}/messages", json={"text":"@Writer 寫一段介紹"})).json()
+    assert posted["woke"]==["Writer"]
+    detail=(await client.get(f"/api/rooms/{room['id']}")).json()
+    assert detail["transcript"][0]["content"]=="@Writer 寫一段介紹"
+    assert {m["name"]:m["seat"] for m in detail["members"]}=={"API Test":"idle","Writer":"queued"}
+    assert (await client.get("/api/rooms")).json()["rooms"][0]["preview"].startswith("你：")
+    # The group's hidden seat thread is not one of the bot's own thread tabs.
+    assert len((await client.get(f"/api/agents/{second}/threads")).json()["threads"])==1
+    renamed=(await client.patch(f"/api/rooms/{room['id']}", json={"name":"發表會小組"})).json()
+    assert renamed["name"]=="發表會小組" and not renamed["auto_name"]
+    # A bot's own product tool: the directory and an async message, authenticated by its worker key.
+    product.computers.key=lambda id: "key-"+id
+    headers={"Authorization":"Bearer key-"+first}
+    bots=(await client.post("/internal/product", json={"action":"bots"}, headers=headers)).json()["bots"]
+    assert [b["name"] for b in bots]==["Writer"]
+    sent=(await client.post("/internal/product", json={"action":"message","bot":"Writer","text":"幫忙","intent":"question"}, headers=headers)).json()
+    assert sent["sent"] and sent["to"]=="Writer"
+    pair=(await client.get(f"/api/agents/{first}/peers/{second}")).json()
+    assert pair["messages"][0]["text"]=="幫忙"
+    assert (await client.delete(f"/api/rooms/{room['id']}")).json()["ok"]
+    assert (await client.get("/api/rooms")).json()["rooms"]==[]
+
+
+@pytest.mark.asyncio
+async def test_http_duplicate_bot_copies_setup_but_not_history(api_client, product):
+    client, agent=api_client
+    await client.patch(f"/api/agents/{agent}", json={"title":"研究員","persona":"負責查資料","reply_style":"brief"})
+    product.skills=Skills(product.store)
+    skill_dir=product.store.agent_directory(agent)/"hermes"/"skills"/"my-skill"; skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir/"SKILL.md").write_text("---\nname: my-skill\ndescription: x\n---\nDo it")
+    product.store.put("mcp", agent, {"docs":{"url":"http://example.test/mcp","headers":{},"env":{}}})
+    product.store.message(agent,"user","old conversation",thread=agent)
+    copy=(await client.post(f"/api/agents/{agent}/duplicate")).json()
+    assert copy["name"]=="API Test 副本" and copy["title"]=="研究員" and copy["reply_style"]=="brief"
+    assert (product.store.agent_directory(copy["id"])/"hermes"/"skills"/"my-skill"/"SKILL.md").exists()
+    assert product.store.get("mcp", copy["id"])["docs"]["url"]=="http://example.test/mcp"
+    assert product.store.transcript(copy["id"])==[]
+    again=(await client.post(f"/api/agents/{agent}/duplicate")).json()
+    assert again["name"]=="API Test 副本 2"

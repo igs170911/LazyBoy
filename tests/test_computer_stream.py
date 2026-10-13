@@ -2,7 +2,7 @@
 import pytest
 
 from server import computers as module
-from server.computers import LIMITS, Computers
+from server.computers import LIMITS, MOUNTS, Computers
 from server.config import Settings
 from server.store import Store, uid
 
@@ -20,7 +20,7 @@ def box(tmp_path, monkeypatch):
     async def docker(*args, **_):
         calls.append(args)
         if args[0] == "rm": state["item"] = None
-        if args[0] == "run": state["item"] = {"State": {"Running": True}, "Config": {"Labels": {"lazyhermes.bot": agent, "lazyhermes.limits": LIMITS}}}
+        if args[0] == "run": state["item"] = {"State": {"Running": True}, "Config": {"Labels": {"lazyhermes.bot": agent, "lazyhermes.limits": LIMITS, "lazyhermes.mounts": MOUNTS}}}
         return 0, "", ""
 
     async def inspect(_id): return state["item"]
@@ -43,6 +43,8 @@ async def test_new_computers_slice_cpu_in_short_periods(box):
     assert "--cpus" not in run
     assert run[run.index("--cpu-period") + 1] == "10000" and run[run.index("--cpu-quota") + 1] == "20000"
     assert f"lazyhermes.limits={LIMITS}" in run
+    # One sign-in folder for connected apps, shared by every bot.
+    assert f"{computers.store.directory / 'mcp-tokens'}:/hermes/mcp-tokens" in run and f"lazyhermes.mounts={MOUNTS}" in run
 
 
 async def test_old_running_computer_is_kept_until_restart(box):

@@ -79,3 +79,18 @@ async def test_running_browser_is_asked_to_clear_its_own_cache(bot, monkeypatch)
     monkeypatch.setattr(cleanup, "docker", fake_docker)
     assert await cleanup.clear_browser_cache(Stopped(), agent, root, running=True) == 400
     assert calls[0][:2] == ("exec", "box-" + agent)
+
+
+def test_memory_lists_round_trip_within_hermes_limits(tmp_path):
+    from server import memory
+    hermes = tmp_path / "hermes"; (hermes / "memories").mkdir(parents=True)
+    (hermes / "memories" / "MEMORY.md").write_text("first fact\n§\nsecond fact")
+    state = memory.read(hermes)
+    assert state["memory"]["entries"] == ["first fact", "second fact"] and state["memory"]["limit"] == 2200
+    assert state["user"]["entries"] == [] and state["user"]["limit"] == 1375
+    saved = memory.write(hermes, "memory", ["second fact", "  ", "has § inside"])
+    assert saved["memory"]["entries"] == ["second fact", "has   inside"]
+    assert (hermes / "memories" / "MEMORY.md").read_text() == "second fact\n§\nhas   inside"
+    with pytest.raises(ValueError, match="上限"): memory.write(hermes, "user", ["x" * 1000, "y" * 500])
+    (hermes / "config.yaml").write_text("memory:\n  user_char_limit: 5000\n")
+    assert memory.write(hermes, "user", ["x" * 1000, "y" * 500])["user"]["used"] == 1503

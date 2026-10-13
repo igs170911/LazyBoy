@@ -19,6 +19,7 @@
         <value type="int" value="1"/>
         <value type="int" value="6"/>
         <value type="int" value="7"/>
+        <value type="int" value="8"/>
         <value type="int" value="2"/>
         <value type="int" value="3"/>
         <value type="int" value="4"/>
@@ -41,6 +42,11 @@
     <property name="plugin-7" type="string" value="launcher">
       <property name="items" type="array">
         <value type="string" value="lazyboy-terminal.desktop"/>
+      </property>
+    </property>
+    <property name="plugin-8" type="string" value="launcher">
+      <property name="items" type="array">
+        <value type="string" value="lazyboy-files.desktop"/>
       </property>
     </property>
     <property name="plugin-2" type="string" value="tasklist">

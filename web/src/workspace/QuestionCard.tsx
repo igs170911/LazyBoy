@@ -2,6 +2,15 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, type HumanQuestion } from "../api";
 import { Hand, KeyRound, Monitor } from "../ui/icons";
 
+/** Work the user did not start asks with a deadline (Grok Bot: about 10 minutes, then "Expired"). */
+function Expiry({ at }: { at?: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { if (!at) return; const timer = window.setInterval(() => setNow(Date.now()), 15000); return () => window.clearInterval(timer); }, [at]);
+  if (!at) return null;
+  const minutes = Math.max(0, Math.ceil((Date.parse(at) - now) / 60000));
+  return <small className="question-expiry" title="這件工作不是你發起的，沒有回覆會自動過期">{minutes ? `${minutes} 分鐘內沒回覆會過期` : "即將過期"}</small>;
+}
+
 export function questionBlocksComposer(question?: HumanQuestion | null) {
   return !!question && (question.kind === "secret" || question.method === "approval");
 }
@@ -33,11 +42,12 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
   if (question.method === "approval") {
     return (
       <section className="question-card approval" aria-label="需要你的允許">
-        <header><Hand aria-hidden="true" /><strong>需要允許這項操作</strong></header>
+        <header><Hand aria-hidden="true" /><strong>需要允許這項操作</strong><Expiry at={question.expires_at} /></header>
         {prompt ? <pre className="question-prompt">{prompt}</pre> : null}
         {error ? <p className="pane-error" role="alert">{error}</p> : null}
         <div className="question-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void run(() => api.answerQuestion(agentId, { question_id: id, choice: "once" }))}>允許這次</button>
+          {question.options?.includes("一律允許") ? <button type="button" disabled={busy} title="以後同樣的操作不再問" onClick={() => void run(() => api.answerQuestion(agentId, { question_id: id, choice: "always" }))}>一律允許</button> : null}
           <button type="button" disabled={busy} onClick={() => void run(() => api.answerQuestion(agentId, { question_id: id, choice: "deny" }))}>拒絕</button>
         </div>
       </section>
@@ -47,7 +57,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
   if (question.kind === "handoff" || question.kind === "box_help") {
     return (
       <section className="question-card handoff" aria-label="需要你協助操作電腦">
-        <header><Hand aria-hidden="true" /><strong>需要你在電腦上協助</strong></header>
+        <header><Hand aria-hidden="true" /><strong>需要你在電腦上協助</strong><Expiry at={question.expires_at} /></header>
         {prompt ? <p className="question-prompt">{prompt}</p> : null}
         {error ? <p className="pane-error" role="alert">{error}</p> : null}
         <div className="question-actions">
@@ -67,7 +77,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
     };
     return (
       <form className="question-card secret" aria-label="需要秘密輸入" onSubmit={submit}>
-        <header><KeyRound aria-hidden="true" /><strong>需要你輸入資料</strong></header>
+        <header><KeyRound aria-hidden="true" /><strong>需要你輸入資料</strong><Expiry at={question.expires_at} /></header>
         {prompt ? <p className="question-prompt">{prompt}</p> : null}
         <div className="question-fields">
           {fields.map((field, index) => (
@@ -99,7 +109,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
     const quick = questions.length === 1 && !questions[0].multi_select;
     return (
       <form className="question-card clarify" aria-label="Bot 的問題" onSubmit={event => { event.preventDefault(); void submit(); }}>
-        <header><strong>{questions.length > 1 ? `${questions.length} 個問題需要你回答` : "Bot 想確認一件事"}</strong>{loginLike ? <button type="button" className="btn small ghost" onClick={onOpenComputer}><Monitor />打開電腦</button> : null}</header>
+        <header><strong>{questions.length > 1 ? `${questions.length} 個問題需要你回答` : "Bot 想確認一件事"}</strong><Expiry at={question.expires_at} />{loginLike ? <button type="button" className="btn small ghost" onClick={onOpenComputer}><Monitor />打開電腦</button> : null}</header>
         {questions.map(q => (
           <fieldset key={q.qid} disabled={busy}>
             <legend>{q.question}</legend>
@@ -134,7 +144,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
 
   return (
     <form className="question-card" aria-label="Bot 的問題" onSubmit={event => { event.preventDefault(); void run(() => api.answerQuestion(agentId, { question_id: id, text: text.trim() })); }}>
-      <header><strong>Bot 需要你的回覆</strong></header>
+      <header><strong>Bot 需要你的回覆</strong><Expiry at={question.expires_at} /></header>
       {prompt ? <pre className="question-prompt">{prompt}</pre> : null}
       {question.options?.length ? (
         <div className="choice-list">

@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import copy
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -17,6 +18,7 @@ from .skills import Skills
 from .model_check import friendly
 from .store import now, uid
 from .teaching import key_shots, lesson_prompt
+from .collab import is_silent
 
 # A follow-up that points back at a picture: re-attach the thread's recent uploads.
 PHOTO_WORDS = re.compile(r"照片|圖片|相片|截圖|這張|那張|張圖|photo|image|picture|screenshot", re.I)
@@ -117,6 +119,8 @@ class Runtime:
         self.router = Router(settings)
         self.computers.task_binding = lambda id: self.provider_bindings.get(self.active.get(id))
         self.closed = False
+        # Set by Collaboration: routes answers between bots and group chats when a turn ends.
+        self.collab = None
 
     def agent(self, id):
         value = self.store.get("agents", id)
@@ -162,6 +166,7 @@ class Runtime:
                 "background_task_ids": [t["id"] for t in background], "running": bool(working), "queued": bool(queued), "observed_at_ms": int(time.time()*1000),
                 "active_task_ids": [t["id"] for t in working], "queued_task_ids": [t["id"] for t in queued],
                 "thread_id": self.task_thread(working[0]) if working else None,
+                "room_id": working[0].get("room_id") if working else None,
                 "queued_thread_ids": list(dict.fromkeys(self.task_thread(t) for t in queued)),
                 "latest_task_id": latest["id"] if latest else None, "question": question, "questions": [question] if question else []}
 
@@ -250,11 +255,11 @@ class Runtime:
             self._client_cache(client, "product_sessions")[thread_id] = sid
         return sid
 
-    async def submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None):
+    async def submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None, peer=None):
         async with self.admission_locks.setdefault(id, asyncio.Lock()):
-            return await self._submit(id, text, request_id, force_queue=force_queue, routine=routine, thread=thread, lesson=lesson)
+            return await self._submit(id, text, request_id, force_queue=force_queue, routine=routine, thread=thread, lesson=lesson, peer=peer)
 
-    async def _submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None):
+    async def _submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None, peer=None):
         thread_id = self.thread(id, thread)["id"]
         if not isinstance(text,str) or not text.strip(): raise ValueError("請輸入要做的工作")
         if len(text)>64000: raise ValueError("訊息最多 64000 字元")
@@ -282,15 +287,20 @@ class Runtime:
                     return {"steered":active}
         task_id=uid()
         task={"id":task_id,"agent_id":id,"thread_id":thread_id,"goal":text,"state":"queued","verdict":None,"created_at":now(),
-              "result":None,"artifacts":[],"milestones":[],"request_id":request_id,"routine_id":routine,**({"lesson_id":lesson} if lesson else {})}
+              "result":None,"artifacts":[],"milestones":[],"request_id":request_id,"routine_id":routine,**({"lesson_id":lesson} if lesson else {}),
+              # A message from another bot or a group chat: who sent it, and where its answer goes.
+              **{k:v for k,v in (peer or {}).items() if k!="peer_text"}}
         # Persist admission + task + user message together, before any executor starts.
         origin = {"routine_id": routine, "routine_title": (self.store.get("routines", routine) or {}).get("title", "")} if routine else {}
         if lesson: origin["lesson_id"] = lesson
+        if peer:
+            origin.update({k: peer[k] for k in ("from_agent","from_name","intent","message_id","room_id") if peer.get(k)})
+            if peer.get("from_agent"): origin["event"] = "message_in"
         with self.store.transaction():
             self.store.admit(id,request_id,task_id,text)
             self.store.put("tasks",task_id,task)
-            self.store.message(id,"user",text,thread=thread_id,**origin)
-            self.touch_thread(id,thread_id,text)
+            self.store.message(id,"user",(peer or {}).get("peer_text") or text,thread=thread_id,**origin)
+            self.touch_thread(id,thread_id,text if not peer else "")
             self.emit(id,"user_message",{},task_id)
         self.kick(id)
         return {"queued":task_id}
@@ -310,9 +320,14 @@ class Runtime:
         current=self.runners.get(id)
         if not current or current.done(): self.runners[id]=asyncio.create_task(self._queue(id))
 
+    def next_task(self,id):
+        """The user's own messages go before queued messages from other bots (Grok Bot does the same)."""
+        queued=[t for t in self.store.all("tasks") if t["agent_id"]==id and t["state"]=="queued"]
+        return next((t for t in queued if not t.get("low_priority")),queued[0] if queued else None)
+
     async def _queue(self,id):
         while not self.closed:
-            task=next((t for t in self.store.all("tasks") if t["agent_id"]==id and t["state"]=="queued"),None)
+            task=self.next_task(id)
             # The human is demonstrating on this computer; queued work starts when they finish.
             if not task or self.teaching.get(id): return
             turn=self.adopted.get(id)
@@ -338,6 +353,11 @@ class Runtime:
                     with contextlib.suppress(Exception):
                         await client.call("reload.env",{})
                         self.computers.env_dirty.discard(id)
+                if id in self.computers.mcp_dirty:
+                    # New product tools (e.g. message_bot) were written next to the config.
+                    with contextlib.suppress(Exception):
+                        await client.call("reload.mcp",{"confirm":True,"session_id":getattr(client,"product_session",None)})
+                        self.computers.mcp_dirty.discard(id)
                 sid=await self.session(id,client,self.task_thread(task))
                 provider, model, selected = self.provider_bindings[task_id]
                 binding = (provider, model, selected.get("base_url"), self.settings.protocol(selected, model), bool(self.settings.model_row(selected,model).get("vision")))
@@ -439,7 +459,11 @@ class Runtime:
             state=self.task(task_id)["state"]
             clock=time.monotonic()
             if state.startswith("waiting"):
-                self.seen[task_id]=clock; continue
+                self.seen[task_id]=clock
+                expires=(self.task(task_id).get("question") or {}).get("expires_at")
+                if expires and expires<=datetime.now(timezone.utc).isoformat():
+                    with contextlib.suppress(Exception): await self.expire_question(id,task_id)
+                continue
             if state=="stopping" or task_id in self.stalled:
                 since=self.stalled.setdefault(task_id,clock)
                 if clock-since>=self.STOP_GRACE:
@@ -479,6 +503,7 @@ class Runtime:
 
     def _prompt(self,id,text,task=None):
         if lesson := self._lesson(task): return lesson_prompt(lesson)
+        if task and task.get("room_id") and self.collab: return self.collab.room_prompt(task)
         uploads=self._uploads(id,text)
         if uploads:
             text += "\n\n使用者附加的檔案已放在這台電腦的工作目錄：\n"+"\n".join("/workspace/"+u["path"] for u in uploads)
@@ -497,7 +522,8 @@ class Runtime:
         content=text or self.streams.get(task_id,"") or ("已停止，先前檔案與對話已保留。" if verdict=="cancelled" else "工作已結束。")
         hint=friendly(content) if verdict=="failed" else None
         if hint: content=hint+"\n\n> 原始錯誤："+" ".join(content.split())[:600]
-        self.message(id,task_id,"assistant",content,id="delta:"+task_id,streaming=False,narration=self.narration.get(task_id,[]))
+        silent=bool(task.get("from_agent") or task.get("room_id")) and verdict!="failed" and is_silent(content)
+        self.message(id,task_id,"assistant",content,id="delta:"+task_id,streaming=False,narration=self.narration.get(task_id,[]),**({"silent":True} if silent else {}))
         steps=[{**step,"state":"done" if step["state"]=="running" else step["state"]} for step in self.steps.get(task_id,[])]
         trail={"steps":steps,"sources":self.sources.get(task_id,[])} if steps or self.sources.get(task_id) else {}
         self.store.patch("tasks",task_id,state="terminal",verdict=verdict,result={"summary":content},question=None,ended_at=now(),**trail,**fields)
@@ -505,6 +531,7 @@ class Runtime:
         self.emit(id,"reply",{},task_id)
         event=self.finished.get(task_id)
         if event: event.set()
+        if self.collab: self.collab.finished(id,self.task(task_id),verdict,content)
 
     async def event(self,id,event):
         task_id=self.active.get(id)
@@ -688,12 +715,17 @@ class Runtime:
         shown=f"{base}\n{place}" if place and base and place not in base else (place or base or "需要你的回覆")
         question={"question_id":rid,"task_id":task_id,"kind":"hermes","method":method,"prompt":shown, "options":[]}
         if place: question["question"]=place
+        if self.unattended(self.task(task_id)):
+            # Work the user did not start (a teammate's message, a routine): its question expires, as in Grok Bot.
+            question["expires_at"]=datetime.fromtimestamp(time.time()+self.QUESTION_TTL,timezone.utc).isoformat()
         if method=="clarify":
             questions=params.get("questions",[])
             question["hermes_questions"]=questions
             question["prompt"]="\n\n".join(q.get("question","") for q in questions)
             if len(questions)==1: question["options"]=questions[0].get("choices",[])
-        elif method=="approval":question["options"]=["允許這次","拒絕"]
+        elif method=="approval":
+            # Hermes offers "always" unless the command may never be allow-listed; then it is once or deny.
+            question["options"]=["允許這次","一律允許","拒絕"] if "always" in (params.get("choices") or []) else ["允許這次","拒絕"]
         elif method == "vault.save_login":
             question.update(kind="secret",fields=[{"name":"identifier","label":"帳號","kind":"text"},{"name":"password","label":"密碼","kind":"password"}])
         elif method == "vault.code":
@@ -706,7 +738,30 @@ class Runtime:
         self.store.patch("tasks",task_id,state="waiting_approval" if method=="approval" else "waiting_input",question=question)
         self.emit(id,"runtime",{"type":"question","question":question},task_id)
 
-    async def answer(self,id,rid,text="",answers=None,value=None,choice=None):
+    QUESTION_TTL = 600
+
+    @staticmethod
+    def unattended(task):
+        """A turn nobody is watching: started by another bot, a routine, a bot's hand-off in a group, or Hermes itself."""
+        return bool(task.get("from_agent") or task.get("routine_id") or task.get("kind")=="background"
+                    or (task.get("room_id") and task.get("low_priority")))
+
+    async def expire_question(self,id,task_id):
+        """Nobody answered in time: deny an approval, tell the bot the user did not reply, and let the turn finish."""
+        question=(self.store.get("tasks",task_id) or {}).get("question")
+        frame=self.pending_requests.get(id)
+        if not question or not frame or str(frame["id"])!=str(question["question_id"]): return
+        method=frame["method"]
+        silence="（使用者 10 分鐘內沒有回應。不要猜答案；停下需要這個答案或授權的部分，回報目前進度與需要使用者決定的事。）"
+        if method=="clarify":
+            questions=frame.get("params",{}).get("questions",[])
+            await self.answer(id,frame["id"],answers={q["qid"]:silence for q in questions},note="提問已過期：10 分鐘內沒有回覆")
+        elif method=="approval":
+            await self.answer(id,frame["id"],choice="deny",note="審批已過期：10 分鐘內沒有人允許，已自動拒絕")
+        else:
+            await self.answer(id,frame["id"],value="",note="請求已過期：10 分鐘內沒有回覆")
+
+    async def answer(self,id,rid,text="",answers=None,value=None,choice=None,note=None):
         frame=self.pending_requests.get(id)
         if not frame or str(frame["id"])!=str(rid): raise ValueError("這個問題已結束，請重新整理對話")
         method=frame["method"]
@@ -715,8 +770,8 @@ class Runtime:
             if answers is None and len(questions) != 1: raise ValueError("請使用問題卡片逐項回答")
             result={"answers":answers if answers is not None else {q["qid"]:text for q in questions}, "outcome":"answered"}
         elif method=="approval":
-            decision=choice or ("once" if text in {"允許這次","允許","同意","once","approve"} else "deny")
-            if decision not in {"once","deny"}: raise ValueError("核准選項無效")
+            decision=choice or ("always" if text in {"一律允許","always"} else "once" if text in {"允許這次","允許","同意","once","approve"} else "deny")
+            if decision not in {"once","always","deny"}: raise ValueError("核准選項無效")
             result={"choice":decision}
         elif method in {"secret","sudo","vault.code","vault.unlock_prompt","vault.save_login"}:result={"value":value or ""}
         else:result={"settled_by":"user","targets":[]}
@@ -730,12 +785,16 @@ class Runtime:
         task_id=self.active.get(id)
         if not task_id: return {"ok":True}
         self.store.patch("tasks",task_id,state="running",question=None)
-        if method not in {"secret","sudo","vault.code","vault.unlock_prompt","vault.save_login"}:
+        if note:
+            self.message(id,task_id,"event",note,event="question_expired")
+        elif method not in {"secret","sudo","vault.code","vault.unlock_prompt","vault.save_login"}:
             self.message(id,task_id,"user",text or "已回覆問題")
         self.emit(id,"question_answered",{},task_id)
         return {"ok":True}
 
     async def stop(self,id):
+        stopped=[t["id"] for t in self.store.all("tasks") if t["agent_id"]==id and t["state"]!="terminal"]
+        if self.collab and stopped: self.collab.stop_cascade(id,stopped)
         for task in self.store.all("tasks"):
             if task["agent_id"]==id and task["state"]=="queued":self.store.patch("tasks",task["id"],state="terminal",verdict="cancelled",ended_at=now())
         task_id=self.active.get(id)
@@ -758,6 +817,23 @@ class Runtime:
                 with contextlib.suppress(Exception): await client.call("session.interrupt",{"session_id":sid})
             return {"status":"stopping"}
         return {"status":"idle"}
+
+    async def stop_task(self,id,task_id):
+        """Stop one turn of a bot (a hand-off from another bot, or a group-chat turn) without touching its other work."""
+        task=self.store.get("tasks",task_id)
+        if not task or task["state"]=="terminal": return
+        if task["state"]=="queued":
+            self.store.patch("tasks",task_id,state="terminal",verdict="cancelled",ended_at=now())
+            self.message(id,task_id,"assistant","已停止。",id="delta:"+task_id,streaming=False,silent=True)
+            self.emit(id,"reply",{},task_id)
+            return
+        if self.active.get(id)!=task_id: return
+        self.store.patch("tasks",task_id,state="stopping",question=None)
+        self.stalled.setdefault(task_id,time.monotonic())
+        client=self.clients.get(id)
+        if client and client.alive and task.get("session_id"):
+            with contextlib.suppress(Exception): await client.call("session.interrupt",{"session_id":task["session_id"]})
+        else: self.finish(id,task_id,"cancelled","")
 
     def halted(self,task_id):
         """The user stopped this turn. A turn that simply ended must not cut off its background children."""

@@ -155,7 +155,8 @@ test("model controls and this Bot's MCP settings connect to the native worker", 
   await expect(settings.getByRole("combobox", { name:"推理強度", exact:true }).locator("option[value=high]")).toHaveCount(1);
   await expect(settings.getByRole("checkbox", { name:"讀取圖片", exact:true })).toBeEnabled();
   await expect(settings.getByRole("checkbox", { name:"產生圖片", exact:true })).toBeEnabled();
-  if (info.project.name === "desktop") await settings.getByRole("button", { name:"工具串接", exact:true }).click();
+  if (info.project.name === "desktop") await settings.getByRole("button", { name:"連接應用程式", exact:true }).click();
+  await settings.getByText("自訂連接（MCP）", { exact:true }).click();
   const mcp = settings.locator(".mcp-settings");
   await mcp.getByRole("button", { name:/自訂 MCP 服務/ }).click();
   const editor = mcp.getByRole("region", { name:"編輯 MCP 串接", exact:true });

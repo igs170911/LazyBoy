@@ -11,7 +11,7 @@ export async function backToList(page: Page) {
   await expect(page.getByRole("complementary", { name: "Bot 清單" })).toBeVisible();
 }
 
-export async function openAddMenu(page: Page, item: "新增 Bot" | "匯入 Bot" | "新增群組") {
+export async function openAddMenu(page: Page, item: "新增 Bot" | "匯入 Bot" | "新增分區") {
   await backToList(page);
   await page.getByRole("complementary", { name: "Bot 清單" }).getByRole("button", { name: "新增", exact: true }).click();
   await page.getByRole("menuitem", { name: item, exact: true }).click();

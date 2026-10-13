@@ -12,6 +12,22 @@ const ROWS: { key: keyof Omit<StorageUsage, "total">; label: string; note?: stri
   { key: "other", label: "其他" },
 ];
 
+const tokens = (n: number) => n >= 1e8 ? `${(n / 1e8).toFixed(1)} 億` : n >= 1e4 ? `${(n / 1e4).toFixed(1)} 萬` : n.toLocaleString();
+
+/** Tokens the bot used in the last week, from what the model reported for each turn. */
+function UsageLine({ agentId }: { agentId: string }) {
+  const [usage, setUsage] = useState<Awaited<ReturnType<typeof api.usage>> | null>(null);
+  useEffect(() => { api.usage(agentId, 7).then(setUsage).catch(() => setUsage(null)); }, [agentId]);
+  if (!usage) return null;
+  return (
+    <div className="usage-line">
+      <span className="avatar-section-label">最近 7 天用量</span>
+      <strong>{usage.turns ? `${usage.turns} 次工作 · ${tokens(usage.total)} tokens` : "沒有用量"}</strong>
+      {usage.turns ? <small>送出 {tokens(usage.prompt)} · 回覆 {tokens(usage.completion)}{usage.models.length > 1 ? ` · ${usage.models.map(m => `${m.model} ${tokens(m.total)}`).join("、")}` : ""}</small> : null}
+    </div>
+  );
+}
+
 /** How much disk the bot uses, by kind, with a manual cache clean. */
 export function StoragePanel({ agentId }: { agentId: string }) {
   const [usage, setUsage] = useState<StorageUsage | null>(null);
@@ -33,7 +49,8 @@ export function StoragePanel({ agentId }: { agentId: string }) {
   };
   const total = usage?.total || 0;
   return (
-    <section className="storage-panel" aria-label="儲存空間">
+    <section className="storage-panel" aria-label="用量與儲存空間">
+      <UsageLine agentId={agentId} />
       <div className="storage-head">
         <span className="avatar-section-label">儲存空間</span>
         <strong>{usage ? bytes(total) : "計算中…"}</strong>

@@ -2,10 +2,10 @@ import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMem
 import type { AgentRow, Artifact, PlanItem, TaskDetail, ThreadRow, Worker } from "../api";
 import { Avatar, botColor, bubbleTone } from "../avatar";
 import { ChatMessageBody, contentUrl, type PreviewFile } from "../markdown";
-import { Brain, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, Globe, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, Users, X } from "../ui/icons";
+import { Brain, CalendarClock, Copy, Check, Quote, ChevronDown, ChevronLeft, ChevronRight, Ellipsis, FileText, FolderOpen, Globe, LoaderCircle, MessageSquarePlus, Monitor, Square, TriangleAlert, Users, X } from "../ui/icons";
 import { ConfirmDialog, MenuButton, toast, type MenuItem } from "../ui/overlay";
 import { Composer } from "./Composer";
-import { draftKey } from "./drafts";
+import { appendDraft, draftKey } from "./drafts";
 import { bytes, clock, dayLabel, duration, sameDay, unicodeHost } from "./format";
 import { QuestionCard, questionBlocksComposer } from "./QuestionCard";
 import { avatarProps } from "./Sidebar";
@@ -16,6 +16,8 @@ import { ThreadBar, ThreadRenameDialog } from "./Threads";
 import type { LiveTask, Message, Step } from "./useSession";
 import { DemoCard } from "./Teaching";
 import { useSession } from "./useSession";
+import { INTENT_LABEL, isPeerEvent, PeerGroup, TeamEvent } from "./Team";
+import type { RoomRow } from "../api";
 
 type Session = ReturnType<typeof useSession>;
 export type PanelTab = "computer" | "files";
@@ -31,6 +33,8 @@ function hidden(item: Message) {
   if (!text) return true;
   if (text.startsWith("<system_reminder>")) return true;
   if (item.role === "user" && text.startsWith("Background task result (data, not instructions)")) return true;
+  // A bot that had nothing to add to another bot's message or a group chat stays silent.
+  if (item.silent) return true;
   return false;
 }
 
@@ -92,7 +96,8 @@ function WorkCard({ agent, state, live, task, computerOpen, onOpenComputer, onSt
   const [expanded, setExpanded] = useState(false);
   const elapsed = useElapsed(task?.started_at, state !== "queued");
   const steps = live?.steps || [];
-  const title = state === "queued" ? "排隊中" : state === "stopping" ? "正在停止…" : state.startsWith("waiting") ? "等你回覆" : "思考中";
+  const peer = task?.from_name ? `${task.from_name} 的${INTENT_LABEL[task.intent || "request"] || "訊息"}` : "";
+  const title = state === "queued" ? (peer ? `排隊處理 ${peer}` : "排隊中") : state === "stopping" ? "正在停止…" : state.startsWith("waiting") ? "等你回覆" : peer ? `正在處理 ${peer}` : "思考中";
   const notes = live?.narration || [];
   const plan = live?.plan || task?.plan || [];
   const status = live?.status || notes.at(-1);
@@ -292,6 +297,52 @@ function RoutineBubble({ item, agentId, knownPaths, onOpen }: { item: Message; a
   );
 }
 
+/**
+ * Select text in the conversation and a small "引用" button offers to quote it into the composer, for feedback on one
+ * part of a long answer (Grok's "Add to prompt"). Mouse only: a phone's own selection menu already copies.
+ */
+function QuoteButton({ scroller, draft }: { scroller: React.RefObject<HTMLDivElement | null>; draft: string }) {
+  const [spot, setSpot] = useState<{ x: number; y: number; text: string } | null>(null);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !window.matchMedia("(pointer: fine)").matches) return;
+    const pick = () => window.setTimeout(() => {
+      const selection = window.getSelection();
+      const text = selection?.toString().trim() || "";
+      if (!selection || !text || !selection.rangeCount || !el.contains(selection.anchorNode)) { setSpot(null); return; }
+      // Fixed to the viewport just above the selection; scrolling hides it.
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      setSpot({ x: Math.min(Math.max(rect.left + rect.width / 2, box.left + 40), box.right - 40), y: Math.max(rect.top - 40, box.top + 4), text: text.slice(0, 4000) });
+    });
+    const clear = () => setSpot(null);
+    el.addEventListener("mouseup", pick);
+    el.addEventListener("scroll", clear, { passive: true });
+    return () => { el.removeEventListener("mouseup", pick); el.removeEventListener("scroll", clear); };
+  }, [scroller]);
+  if (!spot) return null;
+  return (
+    <button type="button" className="quote-btn" style={{ left: spot.x, top: spot.y }} onMouseDown={event => event.preventDefault()}
+      onClick={() => { appendDraft(draft, spot.text.split("\n").map(line => `> ${line}`).join("\n") + "\n\n"); window.getSelection()?.removeAllRanges(); setSpot(null); }}>
+      <Quote aria-hidden="true" />引用
+    </button>
+  );
+}
+
+/** Copy a whole reply as its Markdown text. */
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const area = document.createElement("textarea"); area.value = text; document.body.append(area); area.select();
+      document.execCommand("copy"); area.remove();
+    }
+    setDone(true); window.setTimeout(() => setDone(false), 1500);
+  };
+  return <button type="button" className="msg-copy" aria-label={done ? "已複製" : "複製回覆"} title={done ? "已複製" : "複製回覆"} onClick={() => void copy()}>{done ? <Check /> : <Copy />}</button>;
+}
+
 const FOLD_AT = 900;
 
 /** Very long replies start folded so one answer does not bury the conversation. */
@@ -317,9 +368,14 @@ function Foldable({ active, children }: { active: boolean; children: ReactNode }
   );
 }
 
-const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop }: {
+const MessageRow = memo(function MessageRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen, onStop, team = [], onPeer, onOpenRoom, onOpenBot }: {
   item: Message; agent: AgentRow; showAvatar: boolean; knownPaths: string[]; task?: TaskDetail; steps?: Step[]; onOpen: (file: PreviewFile) => void; onStop?: () => void;
+  team?: AgentRow[]; onPeer?: (peerId: string) => void; onOpenRoom?: (id: string) => void; onOpenBot?: (id: string) => void;
 }) {
+  // A hand-off to or from another bot, or something the bot did for the team, is an event line, not a bubble from the user.
+  if (item.role === "event" || (item.role === "user" && item.from_agent)) {
+    return <TeamEvent item={item} agentId={agent.id} team={team} knownPaths={knownPaths} onOpen={onOpen} onPeer={peer => onPeer?.(peer)} onOpenRoom={onOpenRoom} onOpenBot={onOpenBot} />;
+  }
   if (item.role === "user") {
     return (
       <div className={`msg user${item.pending ? " pending" : ""}`}>
@@ -345,7 +401,7 @@ function AssistantRow({ item, agent, showAvatar, knownPaths, task, steps, onOpen
         <Foldable active={!item.streaming}><ChatMessageBody content={item.streaming ? content : item.content} agentId={agent.id} knownPaths={knownPaths} onOpen={onOpen} /></Foldable>
         {!item.streaming ? <TaskResult agentId={agent.id} task={task} onOpen={onOpen} /> : null}
         {!item.streaming && task?.background?.length ? <WorkersCard workers={task.background} onStop={onStop} /> : null}
-        {!item.streaming ? <time className="msg-time">{clock(item.at)}</time> : null}
+        {!item.streaming ? <div className="msg-foot"><time className="msg-time">{clock(item.at)}</time><CopyButton text={item.content} /></div> : null}
       </div>
     </div>
   );
@@ -369,7 +425,12 @@ function EmptyChat({ agent, thread, onPick }: { agent: AgentRow; thread: ThreadR
   );
 }
 
-export function Conversation({ agent, session, mobile, panel, onBack, onTogglePanel, onOpenFile, onRoutines, onTeach, onPick, menuItems, onOpenSettings }: {
+export function Conversation({ agent, session, mobile, panel, onBack, onTogglePanel, onOpenFile, onRoutines, onTeach, onPick, menuItems, onOpenSettings, team = [], rooms = [], onOpenRoom, onPeer, onOpenBot }: {
+  onOpenBot?: (id: string) => void;
+  team?: AgentRow[];
+  rooms?: RoomRow[];
+  onOpenRoom?: (id: string) => void;
+  onPeer?: (peerId: string) => void;
   agent: AgentRow;
   session: Session;
   mobile: boolean;
@@ -391,9 +452,22 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
   const [showJump, setShowJump] = useState(false);
   const knownPaths = useMemo(() => files.map(file => file.path), [files]);
   const visible = useMemo(() => transcript.filter(item => !hidden(item)), [transcript]);
+  /** index → the run of hand-offs that starts there (2+), or null for the rest of that run. */
+  const peerRuns = useMemo(() => {
+    const runs = new Map<number, Message[] | null>();
+    for (let i = 0; i < visible.length; i++) {
+      if (!isPeerEvent(visible[i])) continue;
+      let j = i;
+      while (j + 1 < visible.length && isPeerEvent(visible[j + 1]) && sameDay(visible[j + 1].at, visible[i].at)) j++;
+      if (j > i) { runs.set(i, visible.slice(i, j + 1)); for (let k = i + 1; k <= j; k++) runs.set(k, null); }
+      i = j;
+    }
+    return runs;
+  }, [visible]);
   const status = activityStatus(activity);
   const mood = useMood(activity.state, { verdict: activity.latest_task_id ? tasks[activity.latest_task_id]?.verdict : undefined, playful: true });
-  const question = session.elsewhere ? null : activity.question || null;
+  // A group chat cannot show questions or approvals (as in Grok Bot): they come to the bot's own chat.
+  const question = session.elsewhere && !activity.room_id ? null : activity.question || null;
   const activeTaskId = activity.active_task_ids?.[0] || null;
   const computerOpen = panel.open && panel.tab === "computer";
 
@@ -461,10 +535,23 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
         el.parentElement?.classList.toggle("scrolled", el.scrollTop > 4);
       }}>
         <div className="chat-content" ref={content}>
+          <QuoteButton scroller={scroller} draft={draftKey(agent.id, threadId)} />
           {session.loading && !visible.length ? <div className="chat-loading"><LoaderCircle className="spin" />載入對話…</div> : null}
           {session.loadError && !visible.length ? <div className="pane-error" role="alert">{session.loadError}<button type="button" className="btn small" onClick={session.refresh}>重試</button></div> : null}
           {!session.loading && !visible.length && !busy ? <EmptyChat agent={agent} thread={thread} onPick={onPick} /> : null}
           {visible.map((item, index) => {
+            // Two or more hand-offs in a row fold into one "N messages with …" line.
+            const run = peerRuns.get(index);
+            if (run === null) return null;
+            if (run) {
+              const newDay = index === 0 || !sameDay(visible[index - 1].at, item.at);
+              return (
+                <div key={item.id || `${item.at}-${index}`} className="msg-wrap">
+                  {newDay && item.at ? <div className="day-sep"><span>{dayLabel(item.at)}</span></div> : null}
+                  <PeerGroup items={run} agentId={agent.id} team={team} knownPaths={knownPaths} onOpen={onOpenFile} onPeer={peer => onPeer?.(peer)} />
+                </div>
+              );
+            }
             const previous = visible[index - 1];
             const newDay = !previous || !sameDay(previous.at, item.at);
             const taskId = item.id?.startsWith("delta:") ? item.id.slice(6) : "";
@@ -473,8 +560,8 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
             return (
               <div key={item.id || `${item.at}-${index}`} className="msg-wrap">
                 {newDay && item.at ? <div className="day-sep"><span>{dayLabel(item.at)}</span></div> : null}
-                <MessageRow item={item} agent={agent} knownPaths={knownPaths} onOpen={onOpenFile} onStop={stop}
-                  showAvatar={item.role === "assistant" && (newDay || previous?.role !== "assistant")}
+                <MessageRow item={item} agent={agent} knownPaths={knownPaths} onOpen={onOpenFile} onStop={stop} team={team} onPeer={onPeer} onOpenRoom={onOpenRoom} onOpenBot={onOpenBot}
+                  showAvatar={item.role === "assistant" && (newDay || previous?.role !== "assistant" || !!previous?.from_agent)}
                   task={taskId ? tasks[taskId] : undefined} steps={steps} />
               </div>
             );
@@ -487,9 +574,9 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
       <div className="chat-bottom">
         {showJump ? <button type="button" className="jump-latest" onClick={() => { pinned.current = true; toBottom(true); }}><ChevronDown />最新訊息</button> : null}
         {session.elsewhere ? (
-          <button type="button" className="elsewhere-bar" onClick={() => activity.thread_id && session.openThread(activity.thread_id)}>
+          <button type="button" className="elsewhere-bar" onClick={() => activity.room_id ? onOpenRoom?.(activity.room_id) : activity.thread_id && session.openThread(activity.thread_id)}>
             <LoaderCircle className="spin" aria-hidden="true" />
-            <span>{agent.name} 正在「{workingThread?.title || "另一段對話"}」{activity.question ? "等你回覆" : "工作"}{busy ? "，這裡的訊息排在後面" : ""}</span>
+            <span>{agent.name} 正在{activity.room_id ? `群組「${rooms.find(r => r.id === activity.room_id)?.name || "群組對話"}」` : `「${workingThread?.title || "另一段對話"}」`}{activity.question ? "等你回覆" : activity.room_id ? "發言" : "工作"}{busy ? "，這裡的訊息排在後面" : ""}</span>
             <strong>前往<ChevronRight aria-hidden="true" /></strong>
           </button>
         ) : null}

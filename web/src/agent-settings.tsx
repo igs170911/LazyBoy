@@ -2,6 +2,7 @@ import { useDialogFocus } from "./dialog-focus";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { SkillsPanel } from "./skills-panel";
 import { StoragePanel } from "./storage-panel";
+import { MemoryPanel } from "./memory-panel";
 import { api, type AgentGroup, type AgentProfile, type AgentRow, type SettingsProvider } from "./api";
 import { X } from "./ui/icons";
 import {
@@ -64,10 +65,10 @@ export function AgentSettingsDialog({
   onClose: () => void;
   onSaved: (row: AgentRow) => void;
   onShare?: (row: AgentRow) => void;
-  initialSection?: "profile" | "skills";
+  initialSection?: "profile" | "skills" | "memory";
 }) {
   const creating = mode === "create";
-  const [section,setSection] = useState(initialSection);
+  const [section,setSection] = useState<"profile" | "skills" | "memory">(initialSection);
   const [skillEditing,setSkillEditing] = useState(false);
   const { t } = useI18n();
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -393,7 +394,7 @@ export function AgentSettingsDialog({
           <h2>{creating ? t.addAgent : t.agentSettings}</h2>
           <button type="button" aria-label={t.close} onClick={onClose}><X /></button>
         </div>
-        {!creating&&!pickerOpen?<div className="agent-section-tabs" role="tablist" aria-label="Bot 設定內容" onKeyDown={e=>{if(["ArrowLeft","ArrowRight","Home","End"].includes(e.key)){e.preventDefault();const next=e.key==="Home"?"profile":e.key==="End"?"skills":section==="profile"?"skills":"profile";setSection(next);e.currentTarget.querySelector<HTMLButtonElement>(`#agent-${next}-tab`)?.focus();}}}><button type="button" role="tab" tabIndex={section==="profile"?0:-1} aria-selected={section==="profile"} aria-controls="agent-profile-panel" id="agent-profile-tab" onClick={()=>setSection("profile")}>基本設定</button><button type="button" role="tab" tabIndex={section==="skills"?0:-1} aria-selected={section==="skills"} aria-controls="agent-skills-panel" id="agent-skills-tab" onClick={()=>setSection("skills")}>技能 · {agent?.skill_count || 0}</button></div>:null}
+        {!creating&&!pickerOpen?<div className="agent-section-tabs" role="tablist" aria-label="Bot 設定內容" onKeyDown={e=>{if(["ArrowLeft","ArrowRight","Home","End"].includes(e.key)){e.preventDefault();const order=["profile","skills","memory"] as const;const at=order.indexOf(section);const next=e.key==="Home"?"profile":e.key==="End"?"memory":order[(at+(e.key==="ArrowRight"?1:2))%3];setSection(next);e.currentTarget.querySelector<HTMLButtonElement>(`#agent-${next}-tab`)?.focus();}}}><button type="button" role="tab" tabIndex={section==="profile"?0:-1} aria-selected={section==="profile"} aria-controls="agent-profile-panel" id="agent-profile-tab" onClick={()=>setSection("profile")}>基本設定</button><button type="button" role="tab" tabIndex={section==="skills"?0:-1} aria-selected={section==="skills"} aria-controls="agent-skills-panel" id="agent-skills-tab" onClick={()=>setSection("skills")}>技能 · {agent?.skill_count || 0}</button><button type="button" role="tab" tabIndex={section==="memory"?0:-1} aria-selected={section==="memory"} aria-controls="agent-memory-panel" id="agent-memory-tab" onClick={()=>setSection("memory")}>記憶</button></div>:null}
         <button
           hidden={!creating&&section!=="profile"&&!pickerOpen}
           ref={avatarHitRef}
@@ -525,7 +526,7 @@ export function AgentSettingsDialog({
               {t.tags}
               <input value={tagText} maxLength={120} onChange={(event) => setTagText(event.target.value)} placeholder={t.tagsPlaceholder} />
             </label>
-            <label>分組<select value={groupId} onChange={e=>setGroupId(e.target.value)}><option value="">未分組</option>{groups.map(group=><option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
+            <label>分區<select value={groupId} onChange={e=>setGroupId(e.target.value)}><option value="">未分區</option>{groups.map(group=><option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
             <label>{t.provider}<select value={chatProvider} onChange={(event) => {
               const next = event.target.value;
               setChatProvider(next);
@@ -549,7 +550,8 @@ export function AgentSettingsDialog({
             {!creating && agent ? <StoragePanel agentId={agent.id} /> : null}
             </div>
             {!creating && agent ? <div id="agent-skills-panel" role="tabpanel" aria-labelledby="agent-skills-tab" hidden={section!=="skills"}><SkillsPanel agentId={agent.id} onEditingChange={setSkillEditing}/></div> : <small>建立後即可加入技能與教學流程。</small>}
-            {!creating && agent && onShare ? <button type="button" className="outline" disabled={busy || !ready || skillEditing} onClick={async()=>{if(live.current.busy)return;setBusy(true);setError("");try{let row=await api.updateAgent(agent.id,profileFrom());if(live.current.clearedPhoto&&agent.avatar_url)row=await api.clearAvatar(agent.id);onSaved(row);onShare(row);}catch(e){setError(e instanceof Error?e.message:t.settingsFailed);}finally{setBusy(false);}}}>儲存並分享 Bot</button> : null}
+            {!creating && agent && section==="memory" ? <div id="agent-memory-panel" role="tabpanel" aria-labelledby="agent-memory-tab"><MemoryPanel agentId={agent.id} agentName={agent.name} /></div> : null}
+            {!creating && agent && onShare && section==="profile" ? <button type="button" className="outline" disabled={busy || !ready || skillEditing} onClick={async()=>{if(live.current.busy)return;setBusy(true);setError("");try{let row=await api.updateAgent(agent.id,profileFrom());if(live.current.clearedPhoto&&agent.avatar_url)row=await api.clearAvatar(agent.id);onSaved(row);onShare(row);}catch(e){setError(e instanceof Error?e.message:t.settingsFailed);}finally{setBusy(false);}}}>儲存並分享 Bot</button> : null}
             {skillEditing?<p className="template-note">請先儲存或取消正在編輯的技能，再分享或儲存設定。</p>:null}
             {error ? <div className="pane-error" role="alert">{error}</div> : null}
             <div className="dialog-actions">

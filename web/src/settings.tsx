@@ -2,7 +2,8 @@ import { HermesSettings } from "./hermes-settings";
 import { RoutingPanel } from "./routing-settings";
 import { SearchPanel } from "./search-settings";
 import { useDialogFocus } from "./dialog-focus";
-import { McpSettings } from "./mcp-settings";
+import { ConnectApps } from "./connect-apps";
+import { notifyOn, notifySupported, setNotify } from "./notify";
 import { useEffect, useRef, useState } from "react";
 import { api, type AppSettings, type ModelCheck, type ModelProtocol, type ProviderPreset, type SettingsModel } from "./api";
 import { mergeProviderModels, presetModel } from "./model-settings";
@@ -166,7 +167,25 @@ function GeneralPanel() {
           </select>
         </label>
       </SettingsGroup>
+      <NotifySetting />
     </div>
+  );
+}
+
+/** One switch: a system notification when a bot finishes or waits for you while LazyBoy is in the background. */
+function NotifySetting() {
+  const [on, setOn] = useState(notifyOn);
+  const blocked = notifySupported() && Notification.permission === "denied";
+  return (
+    <SettingsGroup title="通知">
+      <label className="lb-settings-row">
+        <span className="lb-settings-copy">
+          <strong>Bot 完成或等你回覆時通知我</strong>
+          <small>{!notifySupported() ? "這個瀏覽器不支援通知。" : blocked ? "瀏覽器已封鎖通知，請在網址列的網站設定允許。" : "LazyBoy 在背景時跳系統通知；個別 Bot 可以在它的選單關閉。"}</small>
+        </span>
+        <input type="checkbox" role="switch" checked={on} disabled={!notifySupported() || blocked} onChange={event => void setNotify(event.target.checked).then(setOn)} />
+      </label>
+    </SettingsGroup>
   );
 }
 
@@ -720,9 +739,9 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
       <section aria-label={t.modelSection}>
         <ModelPanel />
       </section>
-      <section id="settings-mcp" className="lb-settings-group" aria-label="工具串接">
-        <h3>工具串接</h3>
-        <McpSettings everywhere agentId={agentId} />
+      <section id="settings-mcp" className="lb-settings-group" aria-label="連接應用程式">
+        <h3>連接應用程式</h3>
+        <ConnectApps agentId={agentId} />
       </section>
       <UpdatesPanel computer={computer} />
       {onAbout ? <button type="button" className="shell-action settings-about" onClick={onAbout}>{t.about}</button> : null}
@@ -735,7 +754,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
   const [section, setSection] = useState<SettingsSectionId>(initialSection);
   const headingId = `lb-settings-heading-${section}`;
   const panelId = `lb-settings-panel-${section}`;
-  const sectionLabel = section === "general" ? t.general : section === "model" ? t.modelSection : section === "mcp" ? "工具串接" : t.updates;
+  const sectionLabel = section === "general" ? t.general : section === "model" ? t.modelSection : section === "mcp" ? "連接應用程式" : t.updates;
   if (mobile) return <MobileSettings agentId={agentId} onClose={onClose} onAbout={onAbout} computer={computer} initialSection={initialSection} />;
 
   return (
@@ -755,7 +774,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
                 onClick={() => setSection(item.id)}
               >
                 <item.icon />
-                <span>{item.id === "general" ? t.general : item.id === "model" ? t.modelSection : item.id === "mcp" ? "工具串接" : t.updates}</span>
+                <span>{item.id === "general" ? t.general : item.id === "model" ? t.modelSection : item.id === "mcp" ? "連接應用程式" : t.updates}</span>
               </button>
             );
           })}
@@ -772,7 +791,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
           </button>
           <h2 id={headingId}>{sectionLabel}</h2>
           <div className="lb-settings-body">
-            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "mcp" ? <McpSettings everywhere agentId={agentId} /> : <UpdatesPanel computer={computer} />}
+            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "mcp" ? <ConnectApps agentId={agentId} /> : <UpdatesPanel computer={computer} />}
           </div>
         </section>
       </div>

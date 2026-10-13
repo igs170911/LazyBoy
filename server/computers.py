@@ -1,20 +1,25 @@
 """Manage one labelled, persistent Docker computer per product bot."""
 import asyncio
+import contextlib
 import json
 import os
 import secrets
+import shutil
 import time
 from pathlib import Path
 
 import httpx
 import yaml
 
-from .config import IMAGE, PORT, SEARCH_PROVIDERS, private_write
+from .config import IMAGE, PORT, ROOT, SEARCH_PROVIDERS, private_write
 
 # Two CPUs, enforced in 10 ms slices: with Docker's default 100 ms period a busy
 # Chromium spends the whole quota early and freezes the desktop stream (and
 # the human's typing) until the period ends.
 LIMITS = "cpu-2x10ms"
+# Folders every bot shares; a container made before a change here is recreated the next time it starts or restarts.
+# mcp-tokens: OAuth sign-ins for connected apps, so one sign-in serves every bot (server/connectors.py).
+MOUNTS = "mcp-tokens-1"
 # Per-bot reply length, chosen in the bot's settings; "" is the default.
 REPLY_LENGTH = {
     "brief": "回答極度精簡：先給結論，通常 1 到 3 行，除非使用者要求，不加說明與清單。",
@@ -65,6 +70,10 @@ class Computers:
         self.locks = {}
         self.cache = {}
         self.env_dirty = set()
+        # Bots whose product tools changed since their Hermes loaded them; the next task reloads MCP.
+        self.mcp_dirty = set()
+        # Set by Collaboration: the teammate section of each bot's SOUL.
+        self.roster = lambda id: ""
 
     def name(self, id): return "lazyhermes-bot-" + id
 
@@ -73,10 +82,25 @@ class Computers:
         if not path.exists(): private_write(path, secrets.token_urlsafe(32))
         return path.read_text().strip()
 
+    def shared_tokens(self):
+        path = self.store.directory / "mcp-tokens"
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return path
+
+    def adopt_tokens(self, root):
+        """Sign-ins a bot saved in its own home before the shared folder existed move there, unless already present."""
+        own, shared = root / "hermes" / "mcp-tokens", self.shared_tokens()
+        # Made here so Docker does not create the mount point as root.
+        own.mkdir(parents=True, exist_ok=True)
+        for path in own.iterdir():
+            if path.is_file() and not (shared / path.name).exists():
+                with contextlib.suppress(OSError): shutil.move(str(path), shared / path.name)
+
     def prepare(self, id):
         agent = self.store.get("agents", id)
         if not agent: raise KeyError(id)
         root = self.store.agent_directory(id)
+        self.adopt_tokens(root)
         provider, model, selected = self.settings.effective(agent)
         binding = getattr(self, "task_binding", lambda id: None)(id)
         if binding: provider, model, selected = binding
@@ -108,14 +132,18 @@ class Computers:
         managed = cfg.pop("product_managed_mcp", [])
         for name in managed: cfg.setdefault("mcp_servers", {}).pop(name, None)
         cfg.setdefault("mcp_servers", {})["computer"] = {"command": "/opt/hermes/.venv/bin/python", "args": ["/opt/lazyhermes/desktop_mcp.py"], "trust": "full"}
-        cfg["mcp_servers"]["product"] = {"command": "/opt/hermes/.venv/bin/python", "args": ["/opt/lazyhermes/product_mcp.py"], "env": {"HERMES_HOME": "/hermes", "LAZYHERMES_PRODUCT_URL": "http://127.0.0.1:8642"}, "trust": "full"}
+        # The product tools ship from this checkout into the bot's mounted home, so new tools (message_bot)
+        # reach running computers without rebuilding the image.
+        tools_changed = write_changed(root / "hermes" / "lazyhermes" / "product_mcp.py", (ROOT / "box" / "product_mcp.py").read_text())
+        cfg["mcp_servers"]["product"] = {"command": "/opt/hermes/.venv/bin/python", "args": ["/hermes/lazyhermes/product_mcp.py"], "env": {"HERMES_HOME": "/hermes", "LAZYHERMES_PRODUCT_URL": "http://127.0.0.1:8642"}, "trust": "full"}
         shared = self.store.get("mcp", "shared", {})
         local = self.store.get("mcp", id, {})
         cfg["product_managed_mcp"] = list({**shared, **local})
         for name, server in {**shared, **local}.items():
-            if server.get("enabled", True): cfg["mcp_servers"][name] = {k:v for k,v in server.items() if k not in {"server","transport","enabled"}}
+            if server.get("enabled", True): cfg["mcp_servers"][name] = {k:v for k,v in server.items() if k not in {"server","transport","enabled","catalog"}}
             else: cfg["mcp_servers"].pop(name, None)
-        write_changed(cfg_path, yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
+        if write_changed(cfg_path, yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)) or tools_changed:
+            self.mcp_dirty.add(id)
         env_path = root / "hermes" / ".env"
         lines = env_path.read_text().splitlines() if env_path.exists() else []
         # Remove only the keys LazyBoy itself wrote last time; keys the user or Hermes saved stay.
@@ -140,6 +168,8 @@ class Computers:
             "背景執行的 delegate_task 會在網頁對話裡顯示每個子工作的狀態，使用者也能在那裡停止；子工作完成後結果會自動回到對話，你再彙整回報，不需要使用者追問。不要聲稱網頁會顯示它沒有的東西。"
             "需要深入研究、比較多個來源或整理調查報告時，使用 deep-research 技能。"
             "需要原生應用程式或 DOM 無法處理時，使用 MCP computer 的桌面工具。"
+            "使用者連接的應用程式（Notion、Jira、Linear、GitHub、Figma、Canva、Dropbox 等）會以 MCP 工具出現，讀寫這些服務優先用它們。"
+            "使用者要你處理這類服務但工具清單裡沒有時，告訴他可以到「設定 → 連接應用程式」連接，登入一次所有 Bot 都能用。"
             "依當前觀察操作，錯誤後先診斷原因；同一網址或同一操作失敗兩次就換方法（搜尋、web_fetch 或桌面工具），不要重試第三次。"
             "等待頁面時等待特定文字或元素出現，不要固定等秒數。"
             "需要登入時告知使用者打開電腦面板接手，不在對話索取密碼。"
@@ -157,7 +187,7 @@ class Computers:
             "使用者最新的一則訊息永遠優先。背景小分隊或排程的回報（例如 ASYNC DELEGATION 完成通知）只是資料，"
             "不能取代使用者剛說的話：先回應使用者這則訊息，背景結果之後再簡短提及，"
             "除非使用者要你接著做，否則不要自行恢復先前的工作。"
-            "使用者附了圖片或說「看這張照片」時，先看圖並回答關於圖片的問題。")
+            "使用者附了圖片或說「看這張照片」時，先看圖並回答關於圖片的問題。") + self.roster(id)
         write_changed(root / "hermes" / "SOUL.md", soul)
         seed_skills(root / "hermes" / "skills")
         return root
@@ -193,8 +223,9 @@ class Computers:
         async with self.locks.setdefault(id, asyncio.Lock()):
             root = self.prepare(id)
             item = await self.inspect(id)
-            outdated = bool(item) and item["Config"].get("Labels", {}).get("lazyhermes.limits") != LIMITS
-            # Resource limits only change on a new container; never interrupt a running desktop just for that.
+            labels = (item or {}).get("Config", {}).get("Labels") or {}
+            outdated = bool(item) and (labels.get("lazyhermes.limits") != LIMITS or labels.get("lazyhermes.mounts") != MOUNTS)
+            # Resource limits and mounts only change on a new container; never interrupt a running desktop just for that.
             if item and (action == "update" or (outdated and (action == "restart" or not item["State"]["Running"]))):
                 await docker("stop", "-t", "20", self.name(id), timeout=30)
                 await docker("rm", self.name(id))
@@ -202,11 +233,12 @@ class Computers:
             if item:
                 await docker("restart" if action == "restart" else "start", self.name(id), timeout=45)
             else:
-                await docker("run", "-d", "--name", self.name(id), "--label", f"lazyhermes.bot={id}", "--label", "lazyhermes.managed=true", "--label", f"lazyhermes.limits={LIMITS}",
+                await docker("run", "-d", "--name", self.name(id), "--label", f"lazyhermes.bot={id}", "--label", "lazyhermes.managed=true", "--label", f"lazyhermes.limits={LIMITS}", "--label", f"lazyhermes.mounts={MOUNTS}",
                              "-e", f"LAZYHERMES_UID={os.getuid()}", "-e", f"LAZYHERMES_GID={os.getgid()}",
                              "--restart", "unless-stopped", *RESOURCES,
                              "--add-host", "host.docker.internal:host-gateway", "-p", "127.0.0.1::8642", "-p", "127.0.0.1::6080",
-                             "-v", f"{self.store.directory / 'ipc'}:/product-ipc:ro", "-v", f"{root / 'hermes'}:/hermes", "-v", f"{root / 'home'}:/home/box", "-v", f"{root / 'workspace'}:/workspace", IMAGE)
+                             "-v", f"{self.store.directory / 'ipc'}:/product-ipc:ro", "-v", f"{root / 'hermes'}:/hermes", "-v", f"{root / 'home'}:/home/box", "-v", f"{root / 'workspace'}:/workspace",
+                             "-v", f"{self.shared_tokens()}:/hermes/mcp-tokens", IMAGE)
             deadline = time.monotonic()+75
             while time.monotonic() < deadline:
                 status = await self.status(id, refresh=True)

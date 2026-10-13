@@ -5,7 +5,7 @@ import { deferDialog } from "../deferred-dialog";
 import type { PreviewFile } from "../markdown";
 import type { SettingsSectionId } from "../settings";
 import { readStorage, writeStorage } from "../storage";
-import { Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, GraduationCap, Import } from "../ui/icons";
+import { Bell, BellOff, CircleDot, Copy, Eye, EyeOff, Pin, Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, GraduationCap, Import } from "../ui/icons";
 import { ConfirmDialog, toast, Toaster, type MenuItem } from "../ui/overlay";
 import { ComputerPane } from "./ComputerPane";
 import { Conversation, type PanelTab } from "./Conversation";
@@ -16,6 +16,13 @@ import { GroupEditor, MoveDialog } from "./TeamDialogs";
 import { TeachStartDialog } from "./Teaching";
 import { useSwipeBack } from "./swipe-back";
 import { useAgents } from "./useAgents";
+import { useRooms } from "./useRooms";
+import { useSeen } from "./useSeen";
+import { useNotifications } from "./useNotifications";
+import { isMuted, setMuted } from "../notify";
+import { RoomView } from "./Room";
+import { PeerDialog, RoomDialog } from "./Team";
+import type { RoomRow } from "../api";
 import { BUSY_STATES, useSession } from "./useSession";
 
 const RoutinesDialog = deferDialog<Parameters<typeof import("../routines").RoutinesDialog>[0]>(() => import("../routines").then(m => ({ default: m.RoutinesDialog })), "RoutinesDialog");
@@ -26,6 +33,7 @@ const SettingsDialog = deferDialog<Parameters<typeof import("../settings").Setti
 const AboutDialog = deferDialog<Parameters<typeof import("../settings").AboutDialog>[0]>(() => import("../settings").then(m => ({ default: m.AboutDialog })), "AboutDialog");
 
 const ACTIVE_KEY = "lazyhermes.active";
+const ROOM_KEY = "lazyhermes.room";
 const PANEL_KEY = "lazyhermes.panel";
 const MOBILE_QUERY = "(max-width: 860px)";
 
@@ -34,13 +42,15 @@ type Dialog =
   | { kind: "settings"; section?: SettingsSectionId }
   | { kind: "about" }
   | { kind: "create" }
-  | { kind: "agent"; id: string; section: "profile" | "skills" }
+  | { kind: "agent"; id: string; section: "profile" | "skills" | "memory" }
   | { kind: "routines"; id: string }
   | { kind: "share"; agent: AgentRow }
   | { kind: "import" }
   | { kind: "teach"; agent: AgentRow }
   | { kind: "group"; group?: AgentGroup }
   | { kind: "move"; agent: AgentRow }
+  | { kind: "room"; room?: RoomRow }
+  | { kind: "peer"; id: string; peer: string }
   | { kind: "confirm"; title: string; body: string; label: string; danger?: boolean; run: () => Promise<void> };
 
 function readPanel(): Panel {
@@ -65,6 +75,9 @@ export function Workspace() {
   const { agents, groups, loaded, error, refresh, upsert, remove, applyTeam } = useAgents();
   const mobile = useMedia(MOBILE_QUERY);
   const [activeId, setActiveId] = useState<string | null>(() => readStorage(ACTIVE_KEY));
+  const { rooms, refresh: refreshRooms, setRooms } = useRooms();
+  // A group chat open in the main pane; selecting a bot closes it.
+  const [roomId, setRoomId] = useState<string | null>(() => readStorage(ROOM_KEY) || null);
   const [view, setView] = useState<"list" | "chat">("list");
   const [panel, setPanelState] = useState<Panel>(readPanel);
   const [preview, setPreview] = useState<PreviewFile | null>(null);
@@ -108,9 +121,33 @@ export function Workspace() {
 
   const select = useCallback((id: string) => {
     setActiveId(id);
+    setRoomId(null);
     setPreview(null);
     if (state.current.mobile && state.current.view === "list") { setView("chat"); window.history.pushState({ lazyhermes: true }, ""); depth.current++; }
   }, []);
+
+  const selectRoom = useCallback((id: string) => {
+    setRoomId(id);
+    if (state.current.mobile && state.current.view === "list") { setView("chat"); window.history.pushState({ lazyhermes: true }, ""); depth.current++; }
+  }, []);
+  useEffect(() => { writeStorage(ROOM_KEY, roomId || ""); }, [roomId]);
+  const room = rooms.find(item => item.id === roomId) || null;
+  const seenItems = useMemo(() => [...agents.map(a => ({ id: a.id, last_at: a.last_at })), ...rooms.map(r => ({ id: r.id, last_at: r.last_at }))], [agents, rooms]);
+  // Ctrl/⌘+K: jump to the sidebar search from anywhere (on a phone the list page has it on top).
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      const focus = () => { const input = document.querySelector<HTMLInputElement>(".sidebar-search input"); input?.focus(); input?.select(); };
+      // Focus at once, so keys typed right after the shortcut land in the search, not in the composer.
+      if (state.current.mobile && state.current.view === "chat") { back(); requestAnimationFrame(focus); } else focus();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [back]);
+  const { isUnread: unread, markUnread } = useSeen(seenItems, mobile && view === "list" ? null : roomId || activeId);
+  useNotifications(agents, mobile && view === "list" ? null : roomId ? null : activeId, id => select(id));
+  useEffect(() => { if (roomId && rooms.length && !room) setRoomId(null); }, [roomId, rooms, room]);
 
   const togglePanel = useCallback((tab: PanelTab, force = false) => {
     const { open, tab: currentTab } = panel;
@@ -139,9 +176,16 @@ export function Workspace() {
     { label: "Bot 設定", icon: <Pencil />, onSelect: () => setDialog({ kind: "agent", id: agent.id, section: "profile" }) },
     { label: "技能", icon: <Brain />, onSelect: () => setDialog({ kind: "agent", id: agent.id, section: "skills" }) },
     ...(!inChat ? [{ label: "定時任務", icon: <CalendarClock />, onSelect: () => setDialog({ kind: "routines", id: agent.id }) }] : []),
+    ...(!inChat ? [
+      { label: agent.pinned ? "取消釘選" : "釘選到最上面", icon: <Pin />, onSelect: () => void api.sidebar(agent.id, { pinned: !agent.pinned }).then(upsert).catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
+      { label: agent.hidden ? "顯示在側欄" : "從側欄隱藏", icon: agent.hidden ? <Eye /> : <EyeOff />, onSelect: () => void api.sidebar(agent.id, { hidden: !agent.hidden, ...(agent.hidden ? {} : { pinned: false }) }).then(upsert).catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
+    ] : []),
+    ...(!inChat ? [{ label: "標為未讀", icon: <CircleDot />, onSelect: () => markUnread(agent.id) }] : []),
+    { label: "複製 Bot", icon: <Copy />, onSelect: () => void api.duplicate(agent.id).then(row => { upsert(row); toast(`已建立「${row.name}」`, "ok", { label: "打開", run: () => select(row.id) }); }).catch(err => toast(String(err instanceof Error ? err.message : err), "error")) },
+    { label: isMuted(agent.id) ? "開啟通知" : "關閉通知", icon: isMuted(agent.id) ? <Bell /> : <BellOff />, onSelect: () => { setMuted(agent.id, !isMuted(agent.id)); toast(isMuted(agent.id) ? `已關閉 ${agent.name} 的通知` : `已開啟 ${agent.name} 的通知`, "ok"); } },
     { label: "分享 Bot", icon: <Share2 />, onSelect: () => setDialog({ kind: "share", agent }) },
     { label: "教它一件事", icon: <GraduationCap />, onSelect: () => setDialog({ kind: "teach", agent }) },
-    ...(groups.length ? [{ label: "移到群組", icon: <Users />, onSelect: () => setDialog({ kind: "move", agent }) }] : []),
+    ...(groups.length ? [{ label: "移到分區", icon: <Users />, onSelect: () => setDialog({ kind: "move", agent }) }] : []),
     "separator",
     { label: "清除對話", icon: <Eraser />, onSelect: () => {
       const current = inChat && agent.id === active?.id;
@@ -169,9 +213,9 @@ export function Workspace() {
   ], [groups.length, active?.id, activeId, session, refresh, remove, back]);
 
   const groupActions = useCallback((group: AgentGroup): MenuItem[] => [
-    { label: "編輯群組", icon: <Pencil />, onSelect: () => setDialog({ kind: "group", group }) },
-    { label: "刪除群組", icon: <Trash2 />, danger: true, onSelect: () => setDialog({
-      kind: "confirm", title: `刪除群組「${group.name}」？`, body: "群組內的 Bot 不會被刪除，會移回未分組。", label: "刪除群組", danger: true,
+    { label: "編輯分區", icon: <Pencil />, onSelect: () => setDialog({ kind: "group", group }) },
+    { label: "刪除分區", icon: <Trash2 />, danger: true, onSelect: () => setDialog({
+      kind: "confirm", title: `刪除分區「${group.name}」？`, body: "分區內的 Bot 不會被刪除，會移回未分區。", label: "刪除分區", danger: true,
       run: async () => applyTeam(await api.manageTeam({ action: "delete_group", group_id: group.id })),
     }) },
   ], [applyTeam]);
@@ -218,14 +262,21 @@ export function Workspace() {
     <AvatarLookProvider value={looks}>
       <div ref={appRef} className={`app${mobile ? " is-mobile" : ""}${panelVisible ? " has-panel" : ""}`} data-view={view}>
         {showSidebar ? (
-          <Sidebar agents={agents} groups={groups} activeId={mobile ? null : activeId} loaded={loaded} onSelect={select}
+          <Sidebar agents={agents} groups={groups} activeId={mobile || roomId ? null : activeId} loaded={loaded} onSelect={select}
+            rooms={rooms} activeRoomId={mobile ? null : roomId} onSelectRoom={selectRoom} onCreateRoom={() => setDialog({ kind: "room" })} unread={unread}
             onCreate={() => setDialog({ kind: "create" })} onImport={() => setDialog({ kind: "import" })}
             onCreateGroup={() => setDialog({ kind: "group" })} onSettings={() => setDialog({ kind: "settings" })}
             agentActions={agent => agentActions(agent)} groupActions={groupActions} />
         ) : null}
 
-        {showChat ? (active ? (
+        {showChat ? (roomId && room ? (
+          <RoomView key={room.id} roomId={room.id} mobile={mobile} onBack={back}
+            onEdit={row => setDialog({ kind: "room", room: row })}
+            onDeleted={() => { setRoomId(null); void refreshRooms(); if (state.current.mobile) back(); }}
+            onOpenBot={select} onOpenFile={openFile} onChanged={() => void refreshRooms()} />
+        ) : active ? (
           <Conversation agent={active} session={session} mobile={mobile} panel={panel} onBack={back}
+            team={agents} rooms={rooms} onOpenRoom={selectRoom} onOpenBot={select} onPeer={peer => setDialog({ kind: "peer", id: active.id, peer })}
             onTogglePanel={togglePanel} onOpenFile={openFile}
             onRoutines={() => setDialog({ kind: "routines", id: active.id })}
             onTeach={() => setDialog({ kind: "teach", agent: active })}
@@ -307,6 +358,11 @@ export function Workspace() {
       ) : null}
       {dialog?.kind === "group" ? <GroupEditor group={dialog.group} agents={agents} onClose={() => setDialog(null)} onSaved={applyTeam} /> : null}
       {dialog?.kind === "move" ? <MoveDialog agent={dialog.agent} groups={groups} onClose={() => setDialog(null)} onSaved={applyTeam} /> : null}
+      {dialog?.kind === "room" ? (
+        <RoomDialog room={dialog.room} agents={agents} onClose={() => setDialog(null)}
+          onSaved={row => { setRooms(current => [row, ...current.filter(item => item.id !== row.id)]); void refreshRooms(); if (!dialog.room) selectRoom(row.id); }} />
+      ) : null}
+      {dialog?.kind === "peer" ? <PeerDialog agentId={dialog.id} peerId={dialog.peer} team={agents} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "confirm" ? (
         <ConfirmDialog title={dialog.title} body={dialog.body} confirmLabel={dialog.label} danger={dialog.danger} onConfirm={dialog.run} onClose={() => setDialog(null)} />
       ) : null}

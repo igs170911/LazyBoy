@@ -3,6 +3,7 @@ import type { Components } from "react-markdown";
 import { useI18n } from "./i18n";
 
 const MarkdownEngine = lazy(() => import("./markdown-engine"));
+const FilePreview = lazy(() => import("./file-preview"));
 
 class MarkdownLoadBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -207,34 +208,12 @@ function supportedUrl(value: string | undefined, protocols: readonly string[]): 
   }
 }
 
-export type FilePreviewKind = "markdown" | "text" | "image" | "pdf" | "unsupported";
-
 export type PreviewFile = {
   title: string;
   url: string;
   path?: string;
   mediaType?: string;
 };
-
-export function previewKindForFile(file: Pick<PreviewFile, "title" | "mediaType">): FilePreviewKind {
-  const name = file.title.toLowerCase();
-  const mediaType = (file.mediaType ?? "").toLowerCase();
-  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
-  if (mediaType.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(extension)) {
-    return "image";
-  }
-  if (mediaType === "application/pdf" || extension === "pdf") return "pdf";
-  if (mediaType === "text/markdown" || ["md", "markdown"].includes(extension)) return "markdown";
-  if (
-    mediaType.startsWith("text/") ||
-    mediaType === "application/json" ||
-    mediaType.endsWith("+json") ||
-    ["txt", "json", "csv", "log", "html", "htm", "css", "js", "mjs"].includes(extension)
-  ) {
-    return "text";
-  }
-  return "unsupported";
-}
 
 function MarkdownTable({ children }: { children?: ReactNode }) {
   const { t } = useI18n();
@@ -503,51 +482,14 @@ export function FileViewer({
   onOpenPath?: (file: PreviewFile) => void;
 }) {
   const { t } = useI18n();
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  const [text, setText] = useState("");
-  const kind = previewKindForFile(file);
-  const resolveUrl = useCallback(
-    (src: string) => (agentId ? toContentUrl(agentId, src, file.path, file.path ? [file.path] : []) : undefined),
-    [agentId, file.path],
-  );
   const openNested = useCallback(
     (path: string) => {
       if (agentId && onOpenPath) onOpenPath(previewFromPath(agentId, path));
     },
     [agentId, onOpenPath],
   );
-
-  useEffect(() => {
-    if (kind !== "markdown" && kind !== "text") {
-      setStatus("ready");
-      return;
-    }
-    let cancelled = false;
-    const controller = new AbortController();
-    setStatus("loading");
-    setText("");
-    fetch(file.url, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const body = await response.text();
-        if (!cancelled) {
-          setText(body);
-          setStatus("ready");
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
-          setStatus("error");
-        }
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [file.url, kind]);
-
   return (
-    <section className="file-viewer" aria-live="polite" aria-busy={status === "loading"}>
+    <section className="file-viewer" aria-label={file.title}>
       <header className="file-viewer-head">
         <strong title={file.path || file.title}>{file.title}</strong>
         <a className="file-download" href={downloadUrl(file.url)} download aria-label={`${t.fileDownload} ${file.title}`}>
@@ -558,27 +500,11 @@ export function FileViewer({
         </button>
       </header>
       <div className="file-viewer-body">
-        {status === "loading" ? <p className="file-viewer-status">{t.fileLoading}</p> : null}
-        {status === "error" ? (
-          <p className="file-viewer-status" role="alert">
-            {t.fileUnavailable}
-          </p>
-        ) : null}
-        {status === "ready" && kind === "image" ? (
-          <MarkdownImage src={file.url} alt={file.title} />
-        ) : null}
-        {status === "ready" && kind === "markdown" ? (
-          <MarkdownBody content={text} agentId={agentId} resolveUrl={resolveUrl} onOpenPath={openNested} />
-        ) : null}
-        {status === "ready" && kind === "text" ? <pre className="file-text">{text}</pre> : null}
-        {status === "ready" && kind === "pdf" ? (
-          <object className="file-object" data={file.url} type="application/pdf" aria-label={file.title}>
-            <p className="file-viewer-status">{t.fileUnsupported}</p>
-          </object>
-        ) : null}
-        {status === "ready" && kind === "unsupported" ? (
-          <p className="file-viewer-status">{t.fileUnsupported}</p>
-        ) : null}
+        <MarkdownLoadBoundary fallback={<p className="file-viewer-status">{t.fileUnavailable}</p>}>
+          <Suspense fallback={<p className="file-viewer-status">{t.fileLoading}</p>}>
+            <FilePreview key={file.url} file={file} agentId={agentId} onOpenPath={openNested} />
+          </Suspense>
+        </MarkdownLoadBoundary>
       </div>
     </section>
   );

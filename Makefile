@@ -15,7 +15,7 @@ help:
 # The bot image builds FROM the desktop image, so the desktop goes first.
 BOT_IMAGE = $${LAZYHERMES_IMAGE:-lazyhermes-bot:local}
 box:
-	@./box/build.sh lazyhermes-desktop:local $(BOX_ARGS)
+	@./box/build.sh lazyhermes-desktop:local --build-arg DEBIAN_MIRROR=$(DEBIAN_MIRROR) $(BOX_ARGS)
 	@docker build --build-arg DESKTOP_IMAGE=lazyhermes-desktop:local $(BOX_ARGS) -t $(BOT_IMAGE) .
 	@printf 'grok %s\n' "$$(docker run --rm --entrypoint grok $(BOT_IMAGE) --version 2>/dev/null || echo '版本未知')"
 	@printf '已重建 %s。正在執行的 Bot 電腦不受影響；到「設定 → 更新電腦」套用新映像。\n' "$(BOT_IMAGE)"

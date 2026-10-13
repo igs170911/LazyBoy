@@ -304,6 +304,78 @@
   .lb-settings-dialog { width: 100%; height: 100%; border-radius: 0; }
 }
 
+/* Connect apps: connected list, searchable gallery and the per-app sheet */
+.connect-apps section { display: grid; gap: 10px; }
+.connect-apps h3 { font-size: 14px; }
+.app-icon { flex: none; display: block; border-radius: 9px; background: var(--elev); object-fit: contain; }
+.app-icon[data-loaded] { background: #fff; }
+.app-icon-letter { display: grid; place-items: center; color: #fff; font-weight: 650; line-height: 1; }
+.connected-apps, .app-grid { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.connected-apps button, .app-grid button {
+  display: flex; align-items: center; gap: 11px; width: 100%; min-width: 0; padding: 10px 12px !important;
+  border: 1px solid var(--line) !important; border-radius: var(--radius) !important; background: var(--surface) !important; color: var(--text);
+  text-align: left; font: inherit; font-weight: 400 !important; white-space: normal !important; justify-content: flex-start !important;
+}
+.connected-apps button:hover, .app-grid button:hover { background: var(--hover) !important; }
+.connected-apps button > span, .app-grid button > span { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.connected-apps strong, .app-grid strong { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.connected-apps small { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.connected-apps small i, .app-badge, .app-sheet-status strong i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+[data-tone="ok"] small i, .app-badge[data-tone="ok"], .app-sheet-status[data-tone="ok"] strong i { background: var(--ok); }
+[data-tone="warn"] small i, .app-badge[data-tone="warn"], .app-sheet-status[data-tone="warn"] strong i { background: var(--warn); }
+[data-tone="error"] small i, .app-badge[data-tone="error"], .app-sheet-status[data-tone="error"] strong i { background: var(--danger); }
+.connected-apps em { padding: 3px 10px; border-radius: 99px; background: var(--accent); color: #fff; font-size: 12.5px; font-style: normal; font-weight: 600; }
+.app-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
+.app-grid small { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 12.5px; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.app-grid button { align-items: flex-start; min-height: 64px; }
+.app-search { position: relative; display: block; }
+.app-search svg { position: absolute; top: 50%; left: 11px; width: 16px; height: 16px; color: var(--faint); transform: translateY(-50%); pointer-events: none; }
+.app-search input { width: 100%; padding-left: 34px !important; }
+.app-chips { display: flex; gap: 6px; margin: 0 -2px; padding: 2px; overflow-x: auto; scrollbar-width: none; }
+.app-chips::-webkit-scrollbar { display: none; }
+.app-chips button { flex: none; min-height: 30px !important; padding: 4px 12px !important; border: 1px solid var(--line) !important; border-radius: 99px !important; background: transparent !important; color: var(--muted); font-size: 13px !important; font-weight: 500 !important; }
+.app-chips button:hover { color: var(--text); }
+.app-chips button[aria-selected="true"] { border-color: transparent !important; background: var(--text) !important; color: var(--panel); }
+.custom-mcp { padding-top: 4px; border-top: 1px solid var(--line); }
+.custom-mcp > summary { padding: 10px 0; color: var(--muted); font-size: 14px; cursor: pointer; }
+.custom-mcp[open] > summary { color: var(--text); }
+.custom-mcp > .mcp-hint { margin-bottom: 10px; }
+.app-sheet { width: min(560px, 100%); }
+.app-sheet.signing { width: min(820px, 100%); }
+.app-sheet-title { display: inline-flex; align-items: center; gap: 10px; }
+.app-sheet-lead { margin-top: -6px; }
+.app-sheet-connect { display: grid; gap: 10px; }
+.app-sheet-connect label { display: grid; gap: 6px; font-size: 13.5px; }
+.app-sheet-connect label a, .signin-steps a { display: inline-flex; align-items: center; gap: 4px; justify-self: start; color: var(--accent-strong); font-size: 13px; }
+.app-sheet-connect label a svg, .signin-steps a svg { width: 13px; height: 13px; }
+.app-sheet-connect > button { justify-self: stretch; min-height: 42px !important; font-size: 15px; }
+.app-sheet-connect small { color: var(--muted); font-size: 12.5px; text-align: center; }
+.app-sheet-status { display: grid; gap: 8px; }
+.app-sheet-status strong { display: inline-flex; align-items: center; gap: 8px; font-size: 14.5px; }
+.app-sheet-status > small { color: var(--faint); font-size: 12px; }
+.app-sheet-status details { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 13px; }
+.app-sheet-status summary { color: var(--muted); cursor: pointer; }
+.app-sheet-status ul { display: grid; gap: 6px; max-height: 240px; margin: 8px 0 2px; padding: 0; overflow-y: auto; list-style: none; }
+.app-sheet-status li { display: grid; gap: 1px; }
+.app-sheet-status li span { color: var(--muted); font-size: 12.5px; }
+.app-sheet-confirm { display: grid; gap: 8px; padding: 10px 12px; border-radius: var(--radius); background: var(--elev); font-size: 13.5px; }
+.signin-panel { display: grid; gap: 10px; }
+.signin-lead { display: flex; align-items: flex-start; gap: 8px; color: var(--text) !important; }
+.signin-lead svg { flex: none; width: 16px; height: 16px; margin-top: 3px; color: var(--accent); }
+.connect-screen { position: relative; overflow: hidden; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: var(--radius); background: #050507; }
+.connect-screen iframe { display: block; width: 100%; height: 100%; border: 0; }
+.connect-screen-wait { display: flex; align-items: center; justify-content: center; gap: 8px; height: 100%; color: var(--faint) !important; }
+.connect-screen-wait svg { width: 16px; height: 16px; }
+.signin-alt { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.signin-alt .link-btn { min-height: 30px !important; padding: 2px 4px !important; border: 0 !important; background: none !important; color: var(--accent-strong) !important; font-size: 13.5px; }
+.signin-steps { display: grid; gap: 6px; margin: 0; padding-left: 20px; color: var(--muted); font-size: 13.5px; }
+.signin-panel input { width: 100%; font-family: var(--mono, monospace); font-size: 13px; }
+.mcp-card .signin-panel { margin-top: 2px; }
+@media (max-width: 860px) {
+  .app-sheet.signing { max-height: calc(var(--app-height, 100dvh) - 8px - env(safe-area-inset-top)); }
+  .app-sheet.signing .connect-screen { margin: 0 -16px; border-right: 0; border-left: 0; border-radius: 0; }
+}
+
 /* Storage usage in bot settings */
 .storage-panel { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .storage-head { display: flex; align-items: baseline; justify-content: space-between; }
@@ -328,3 +400,42 @@
 @media (pointer: coarse) {
   .mood-preview button { min-height: 34px !important; padding: 4px 13px !important; }
 }
+
+/* The "A ⇄ B" exchange between two bots. */
+.peer-title { display: inline-flex; align-items: center; gap: 6px; }
+.peer-title > svg { width: 16px; height: 16px; color: var(--faint); }
+.peer-thread { display: grid; gap: 10px; max-height: min(60vh, 560px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.peer-thread li header { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.peer-thread li header strong { font-size: 13.5px; }
+.peer-thread li header small { color: var(--faint); font-size: 12px; }
+.peer-thread-text { padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 14px; }
+.peer-thread li[data-side="a"] .peer-thread-text { border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.room-dialog .field span small { margin-left: 6px; color: var(--faint); font-size: 12px; }
+.room-dialog .member-picker button span { display: grid; gap: 1px; }
+.room-dialog .member-picker button small { color: var(--faint); font-size: 12px; }
+
+/* A bot's memory: cards you can fix, delete or add to. */
+.memory-panel { display: grid; gap: 16px; }
+.memory-section { display: grid; gap: 8px; }
+.memory-section > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.memory-section > header strong { font-size: 14.5px; }
+.memory-section > header small { color: var(--faint); font-size: 12.5px; }
+.memory-usage { margin-left: auto; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.memory-usage.full { color: var(--warn); }
+.memory-section ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.memory-entry { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.memory-entry p { flex: 1; margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-entry.editing { display: grid; }
+.memory-entry textarea { width: 100%; }
+.memory-tools { display: flex; flex: none; gap: 2px; }
+.memory-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.memory-empty { color: var(--faint); font-size: 13.5px; }
+.memory-add { display: inline-flex; align-items: center; gap: 4px; justify-self: start; }
+.memory-add svg { width: 14px; height: 14px; }
+.memory-tools button { display: grid !important; place-items: center; width: 30px !important; min-height: 30px !important; height: 30px; padding: 0 !important; border: 0 !important; border-radius: 8px !important; background: none !important; color: var(--muted) !important; }
+.memory-tools button:hover:not(:disabled) { background: var(--hover) !important; color: var(--text) !important; }
+.memory-tools button svg { width: 15px; height: 15px; }
+.memory-add { min-height: 0 !important; padding: 2px 0 !important; border: 0 !important; background: none !important; }
+.usage-line { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.usage-line strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.usage-line small { color: var(--faint); font-size: 12px; overflow-wrap: anywhere; }

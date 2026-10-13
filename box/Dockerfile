@@ -47,6 +47,18 @@ RUN mkdir -p /usr/share/fonts/truetype/huninn \
 COPY --from=node:22-bookworm-slim /usr/local/ /usr/local/
 # X RECORD bindings for box-teach-desktop (recording a human's demonstration).
 RUN apt-get update && apt-get install -y --no-install-recommends python3-xlib && rm -rf /var/lib/apt/lists/*
+# Apps that open files on the desktop: a file manager, a text editor, an image viewer, archives and office
+# documents (Word, Excel, PowerPoint). PDFs and web pages open in the browser. Defaults: xfce/mimeapps.list.
+# LibreOffice is large; DEBIAN_MIRROR (e.g. http://free.nchc.org.tw/debian) downloads it from a nearer mirror,
+# and the image keeps deb.debian.org afterwards.
+ARG DEBIAN_MIRROR=
+RUN if [ -n "$DEBIAN_MIRROR" ]; then sed -i "s|^URIs: http://deb.debian.org/debian\$|URIs: $DEBIAN_MIRROR|" /etc/apt/sources.list.d/debian.sources; fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        thunar mousepad ristretto xarchiver tumbler zip unzip p7zip-full \
+        libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-gtk3 libreoffice-l10n-zh-tw \
+    && command -v thunar mousepad ristretto xarchiver soffice \
+    && if [ -n "$DEBIAN_MIRROR" ]; then sed -i "s|^URIs: $DEBIAN_MIRROR\$|URIs: http://deb.debian.org/debian|" /etc/apt/sources.list.d/debian.sources; fi \
+    && rm -rf /var/lib/apt/lists/*
 # Tools that should track upstream go below this line. `make box-latest` passes a new
 # BOX_REFRESH each time, which invalidates Docker's cache from here on so they are
 # downloaded again; `make box` keeps the cache and the pinned versions.
@@ -68,6 +80,8 @@ COPY --chmod=644 xfce/helper-browser.desktop /usr/share/xfce4/helpers/lazyboy-br
 COPY --chmod=644 xfce/helper-terminal.desktop /usr/share/xfce4/helpers/lazyboy-terminal.desktop
 COPY --chmod=644 xfce/browser.desktop /usr/share/applications/lazyboy-browser.desktop
 COPY --chmod=644 xfce/terminal.desktop /usr/share/applications/lazyboy-terminal.desktop
+COPY --chmod=644 xfce/files.desktop /usr/share/applications/lazyboy-files.desktop
+COPY --chmod=644 xfce/mimeapps.list /usr/share/applications/mimeapps.list
 COPY --chmod=644 fonts.conf /etc/fonts/conf.d/99-lazyboy-cjk.conf
 COPY --chmod=644 gtk3-settings.ini /etc/gtk-3.0/settings.ini
 COPY --chmod=644 licenses/huninn-OFL.txt /usr/share/licenses/huninn/OFL.txt

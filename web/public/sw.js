@@ -47,3 +47,14 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/novnc") || event.request.method !== "GET") return;
   event.respondWith(cachedStatic(event.request));
 });
+
+// A notification about a bot opens (or focuses) the app on that bot.
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  const agentId = event.notification.data && event.notification.data.agentId;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(windows => {
+    const open = windows[0];
+    if (open) { open.postMessage({ type: "open-bot", agentId }); return open.focus(); }
+    return self.clients.openWindow("/?bot=" + encodeURIComponent(agentId || ""));
+  }));
+});

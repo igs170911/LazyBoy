@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=檔案
+Name[zh_TW]=檔案
+Comment=Files in /workspace
+Exec=thunar /workspace
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileManager;GTK;
+StartupNotify=true
