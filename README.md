@@ -109,6 +109,24 @@ make start
 - 建置映像前會先測試各 Debian 鏡像站的速度，自動選用最快的一個。要指定鏡像站時，設定 `DEBIAN_MIRROR`，例如 `DEBIAN_MIRROR=http://free.nchc.org.tw/debian make install`。
 - 只想知道缺少什麼、不做任何變更時，執行 `./scripts/install.sh --check`。
 
+### 用 Docker 執行
+
+不想在主機安裝 Node.js、uv 等工具時，可以讓 LazyBoy 整個在 Docker 裡執行。主機只需要 git 和 Docker Engine 26 以上（含 Buildx 與 Compose），支援 linux/amd64 與 linux/arm64。
+
+```bash
+git clone https://github.com/igs170911/LazyBoy.git ~/LazyBoy
+cd ~/LazyBoy
+make build   # 先確認建置平台，再建置 LazyBoy 與 Bot 電腦的映像
+make up      # 啟動，並顯示含登入碼的網址
+```
+
+`make up` 會列出這台電腦和區網裝置用的網址，網址裡已含登入碼，打開一次之後瀏覽器會記住。
+
+- 資料放在 Docker volume `lazyboy-data`，Bot 的電腦從同一個 volume 掛載自己的資料夾，也透過專用的 Docker 網路連線。檔案權限完全由 Docker 管理，不受主機使用者、rootless Docker 或 userns-remap 影響，Bot 電腦也不會對主機開放任何 port。
+- 在 Docker 中執行時，所有連線（包含本機）都需要登入碼；`make docker-token` 可以再顯示一次。
+- 已經用 `make install` 安裝過的話，先 `make stop`，再執行 `make docker-import` 把 `.data/` 複製到 volume（原資料夾不會改動），然後 `make up`。
+- 沒有 `make` 時，改用 `./scripts/build-images.sh --server` 與 `./scripts/docker-up.sh`。
+
 ### 讓 AI Agent 幫你安裝
 
 [INSTALL.md](INSTALL.md) 是寫給 AI coding agent 的逐步安裝指引，每一步都附有驗證方式。把下面這段話交給 Claude Code、Codex 或其他 agent 即可：
@@ -131,6 +149,11 @@ make start
 | `make box` | 只重建 Bot 的電腦映像（自動選最快的 Debian 鏡像站），完成後在「設定 → 更新」套用 |
 | `make providers` | 從 Bot 映像中的 Hermes 重新匯出內建供應商清單 |
 | `make clean` | 清除用不到的 Docker 建置快取與無名映像，不影響 Bot 的資料 |
+| `make build` | Docker 執行方式：確認建置平台（linux/amd64 或 linux/arm64）後，建置 LazyBoy 與 Bot 電腦的映像 |
+| `make up` / `make down` | Docker 執行方式：啟動或停止 LazyBoy；資料保留在 `lazyboy-data` volume |
+| `make logs` | Docker 執行方式：查看日誌 |
+| `make docker-token` | Docker 執行方式：顯示登入碼 |
+| `make docker-import` | 把 `make install` 版本的資料複製到 Docker volume |
 
 關閉網頁不會中斷 Bot 的工作。停止服務會中斷進行中的工作，但不會重放結果未知的操作；Bot 的電腦容器會保留，下次交辦時自動連回。
 
@@ -152,6 +175,8 @@ make install
 make stop && make start
 ```
 
+用 Docker 執行時，改為 `git pull && make build && make up`。
+
 更新後，到「設定 → 更新」或 Bot 電腦選單的「更新電腦環境」，讓既有的 Bot 改用新的映像。
 
 ## 資料與安全
@@ -159,6 +184,7 @@ make stop && make start
 - **資料位置**：所有資料都在 `.data/`，包含產品資料庫、模型設定、登入碼，以及每個 Bot 的 Hermes 設定、記憶、技能、瀏覽器 profile 與工作檔案。停止服務後備份整個目錄，就能保留完整狀態。詳見 [資料與備份](docs/GUIDE.md#資料與備份)。
 - **隔離**：每個 Bot 的電腦都是獨立的容器，有 CPU 與記憶體上限，不掛載主機的工作目錄或 Docker socket。不同 Bot 的登入與檔案彼此分開。
 - **金鑰**：模型供應商的 API key 只保存在 LazyBoy 服務端。Bot 的模型請求經由本機 Unix socket 交給服務代理，電腦裡拿不到金鑰。
+- **Docker 執行方式**：LazyBoy 的容器會掛載 Docker socket 來開關 Bot 的電腦，這等同主機的 root 權限，與 `make install` 版本要求使用者在 docker 群組相同。Bot 的電腦本身仍然拿不到 Docker socket。
 - **存取控制**：localhost 以外的連線都需要登入碼。登入碼存在 `.data/access-token`（權限 600），也可以用 `LAZYHERMES_ACCESS_TOKEN` 指定。
 
 ## 架構
@@ -195,7 +221,10 @@ flowchart LR
 | `LAZYHERMES_DATA_DIR` | `.data` | 資料目錄 |
 | `LAZYHERMES_IMAGE` | `lazyhermes-bot:local` | Bot 電腦使用的 Docker 映像 |
 | `LAZYHERMES_ACCESS_TOKEN` | 自動產生 | 其他裝置的登入碼 |
-| `DEBIAN_MIRROR` | 自動測速選擇 | 建置 Bot 電腦映像時使用的 Debian 鏡像站（`make install`、`make box`） |
+| `DEBIAN_MIRROR` | 自動測速選擇 | 建置 Bot 電腦映像時使用的 Debian 鏡像站（`make install`、`make box`、`make build`） |
+| `PLATFORM` | Docker 的原生平台 | `make build` 的建置平台：`linux/amd64` 或 `linux/arm64` |
+| `LAZYBOY_PORT` | `8790` | Docker 執行方式對外的 port |
+| `LAZYBOY_VOLUME` | `lazyboy-data` | Docker 執行方式的資料 volume |
 
 ## 開發
 

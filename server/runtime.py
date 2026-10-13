@@ -219,7 +219,7 @@ class Runtime:
             if client and client.alive: return client
             status = await self.computers.start(id)
             client = HermesRPC(lambda e: self.event(id,e), lambda f: self.human_request(id,f), lambda error: self.disconnected(id,error))
-            await client.open(status["api_port"], self.computers.key(id))
+            await client.open(status["host"], status["api_port"], self.computers.key(id))
             self.clients[id] = client
             return client
 

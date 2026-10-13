@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install start stop get-access-token providers box box-latest clean
+.PHONY: help install start stop get-access-token providers box box-latest clean build up down logs docker-token docker-import
 
 help:
 	@printf '%s\n' \
@@ -11,7 +11,15 @@ help:
 		'make box               重建 Bot 電腦映像（自動選最快的 Debian 鏡像站，沿用快取），完成後到「設定 → 更新電腦」套用' \
 		'make box-latest        同上，但 grok 等工具與 Python 套件更新到最新版' \
 		'make providers         從 Bot 映像的 Hermes 重新匯出內建供應商清單' \
-		'make clean             清掉用不到的 Docker 建置快取與無名映像（不動 Bot 的資料）'
+		'make clean             清掉用不到的 Docker 建置快取與無名映像（不動 Bot 的資料）' \
+		'' \
+		'在 Docker 中執行（主機只需要 Docker 與 git）：' \
+		'make build             先確認建置平台（linux/amd64 或 linux/arm64），再建置 LazyBoy 與 Bot 電腦的映像' \
+		'make up                在 Docker 中啟動 LazyBoy，並顯示含登入碼的網址' \
+		'make down              停止 Docker 中的 LazyBoy（資料留在 lazyboy-data volume）' \
+		'make logs              查看 Docker 中 LazyBoy 的日誌' \
+		'make docker-token      顯示 Docker 中 LazyBoy 的登入碼' \
+		'make docker-import     把 make install 版本的資料（.data）複製到 Docker volume，改用 Docker 執行'
 
 # Missing system packages first (sudo asks when needed), then dependencies and images; safe to run again.
 install:
@@ -57,3 +65,27 @@ get-access-token:
 		printf '%s\n' '找不到登入碼，請先執行 make start，或確認 LAZYHERMES_DATA_DIR。' >&2; \
 		exit 1; \
 	fi
+
+# LazyBoy in Docker (compose.yaml). PLATFORM=linux/arm64 builds for another platform than this Docker's own.
+build:
+	@./scripts/build-images.sh --server $(BOX_ARGS)
+	@$(MAKE) --no-print-directory clean
+
+up:
+	@./scripts/docker-up.sh
+
+# Bot computers belong to the service: they stop with it and start again when a bot gets work.
+down:
+	@ids=$$(docker ps -q --filter label=lazyhermes.managed=true --filter label=lazyhermes.storage=volume); \
+		if [ -n "$$ids" ]; then docker stop -t 20 $$ids >/dev/null; fi
+	@docker compose down
+	@printf 'LazyBoy 已停止。資料保留在 Docker volume %s。\n' "$${LAZYBOY_VOLUME:-lazyboy-data}"
+
+logs:
+	@docker compose logs -f --tail 100
+
+docker-token:
+	@docker exec $${LAZYBOY_CONTAINER:-lazyboy} cat /data/access-token
+
+docker-import:
+	@./scripts/docker-import.sh

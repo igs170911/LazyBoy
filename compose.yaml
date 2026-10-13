@@ -1,0 +1,27 @@
+# LazyBoy in Docker: the host only needs Docker. `make build` builds the images, `make up` starts this.
+# Data lives in the lazyboy-data volume; bot computers are started next to this container through the Docker
+# socket, mount their folders from the same volume (Docker Engine 26 or later) and join the lazyboy network.
+name: lazyboy
+services:
+  lazyboy:
+    image: ${LAZYBOY_SERVER_IMAGE:-lazyboy:local}
+    container_name: ${LAZYBOY_CONTAINER:-lazyboy}
+    restart: unless-stopped
+    # Every address of this host; other devices sign in with the access token.
+    ports: ["${LAZYBOY_PORT:-8790}:8790"]
+    environment:
+      LAZYHERMES_DATA_VOLUME: ${LAZYBOY_VOLUME:-lazyboy-data}
+      LAZYHERMES_NETWORK: ${LAZYBOY_NETWORK:-lazyboy}
+      LAZYHERMES_IMAGE: ${LAZYHERMES_IMAGE:-lazyhermes-bot:local}
+      LAZYHERMES_ACCESS_TOKEN: ${LAZYHERMES_ACCESS_TOKEN:-}
+    volumes:
+      - data:/data
+      # Rootless Docker keeps its socket elsewhere; `make up` finds it and sets DOCKER_SOCKET.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    networks: [lazyboy]
+volumes:
+  data:
+    name: ${LAZYBOY_VOLUME:-lazyboy-data}
+networks:
+  lazyboy:
+    name: ${LAZYBOY_NETWORK:-lazyboy}

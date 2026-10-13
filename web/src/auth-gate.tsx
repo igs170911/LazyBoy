@@ -7,7 +7,12 @@ export function AuthGate({children}: {children: ReactNode}) {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true;
-    fetch("/api/auth/status").then(r => r.json()).then(data => {if (alive) setStatus(data.authenticated ? "ready" : "login");}).catch(() => {if (alive) {setStatus("login"); setError("服務尚未連線，請確認後端已啟動。");}});
+    // `make up` prints a login link ending in #token=…; the fragment never reaches the server or its logs.
+    const linked = new URLSearchParams(location.hash.slice(1)).get("token");
+    if (linked) history.replaceState(null, "", location.pathname + location.search);
+    (linked ? fetch("/api/auth/login", {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({token: linked})}) : Promise.resolve())
+      .then(() => fetch("/api/auth/status")).then(r => r.json())
+      .then(data => {if (alive) setStatus(data.authenticated ? "ready" : "login");}).catch(() => {if (alive) {setStatus("login"); setError("服務尚未連線，請確認後端已啟動。");}});
     return () => {alive = false;};
   }, []);
   if (status === "ready") return children;

@@ -14,7 +14,7 @@ import yaml
 
 YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
-from .config import IMAGE, PORT, ROOT, SEARCH_PROVIDERS, private_write
+from .config import DATA, DATA_VOLUME, IMAGE, NETWORK, PORT, ROOT, SEARCH_PROVIDERS, private_write
 
 # Two CPUs, enforced in 10 ms slices: with Docker's default 100 ms period a busy
 # Chromium spends the whole quota early and freezes the desktop stream (and
@@ -23,6 +23,9 @@ LIMITS = "cpu-2x10ms"
 # Folders every bot shares; a container made before a change here is recreated the next time it starts or restarts.
 # mcp-tokens: OAuth sign-ins for connected apps, so one sign-in serves every bot (server/connectors.py).
 MOUNTS = "mcp-tokens-1"
+# Where a computer's folders come from: host folders, or the product's Docker volume when LazyBoy runs in Docker.
+# A computer made for the other kind cannot see this product's files, so it is replaced right away.
+STORAGE = "volume" if DATA_VOLUME else "host"
 # Per-bot reply length, chosen in the bot's settings; "" is the default.
 # Grok's approval boundaries: actions with outside effects this bot must clear with the user first.
 ASK_FIRST_ACTIONS = {"send": "寄出或傳送訊息給別人（Email、聊天、留言、私訊）", "publish": "公開發佈或修改公開內容（貼文、網站、商品頁）",
@@ -86,14 +89,29 @@ def remapped_docker():
 
 
 def container_user():
-    """The UID:GID the bot's processes run as inside its computer; 0 keeps the container's root."""
-    return (0, 0) if remapped_docker() else (os.getuid(), os.getgid())
+    """The UID:GID the bot's processes run as inside its computer; 0 keeps the container's root.
+    In a Docker volume, the product and its computers share one user namespace: same UID, whatever the host does."""
+    return (0, 0) if not DATA_VOLUME and remapped_docker() else (os.getuid(), os.getgid())
+
+
+def user_flag():
+    """`docker exec -u` for commands that write the bot's files: the same user its computer runs as."""
+    uid, gid = container_user()
+    return f"{uid}:{gid}"
+
+
+def mount(source, target, readonly=False):
+    """A product folder inside a computer: a host folder, or the same folder inside the product's Docker volume."""
+    if DATA_VOLUME:
+        subpath = Path(source).relative_to(DATA).as_posix()
+        return ["--mount", f"type=volume,src={DATA_VOLUME},dst={target},volume-subpath={subpath}" + (",readonly" if readonly else "")]
+    return ["-v", f"{source}:{target}" + (":ro" if readonly else "")]
 
 
 def reclaim(root):
     """Give a bot's files back to the host user after a remapped container took them (its root is the host user)."""
-    if not remapped_docker(): return False
-    mounts = [arg for name in ("hermes", "home", "workspace") for arg in ("-v", f"{root / name}:/reclaim/{name}")]
+    if DATA_VOLUME or not remapped_docker(): return False
+    mounts = [arg for name in ("hermes", "home", "workspace") for arg in mount(root / name, f"/reclaim/{name}")]
     result = subprocess.run(["docker", "run", "--rm", "--user", "0:0", "--entrypoint", "chown", *mounts, IMAGE, "-R", "0:0", "/reclaim"],
                             capture_output=True, text=True, timeout=120)
     return result.returncode == 0
@@ -266,20 +284,34 @@ class Computers:
         if not refresh and id in self.cache and time.monotonic()-self.cache[id][0] < 2: return self.cache[id][1]
         item = await self.inspect(id)
         base = {"ready": False, "state": "stopped", "viewer_url": f"/novnc/{id}/vnc.html?autoconnect=true&resize=scale&path=novnc/{id}/websockify", "revision": "hermes-"+IMAGE}
-        if item and item["State"]["Running"]:
-            ports = item["NetworkSettings"]["Ports"]
-            if ports.get("8642/tcp") and ports.get("6080/tcp"):
-                api_port = int(ports["8642/tcp"][0]["HostPort"])
-                viewer_port = int(ports["6080/tcp"][0]["HostPort"])
-                base.update(state="starting", api_port=api_port, viewer_port=viewer_port)
-                try:
-                    async with httpx.AsyncClient(timeout=2) as client:
-                        health = await client.get(f"http://127.0.0.1:{api_port}/health")
-                        ready = health.is_success and bool(health.json().get("desktop",False))
-                        base.update(ready=ready, state="ready" if ready else "starting" if health.is_success else "error")
-                except httpx.HTTPError: pass
+        address = self.address(item) if item and item["State"]["Running"] else None
+        if address:
+            host, api_port, viewer_port = address
+            base.update(state="starting", host=host, api_port=api_port, viewer_port=viewer_port)
+            try:
+                async with httpx.AsyncClient(timeout=2) as client:
+                    health = await client.get(f"http://{host}:{api_port}/health")
+                    ready = health.is_success and bool(health.json().get("desktop",False))
+                    base.update(ready=ready, state="ready" if ready else "starting" if health.is_success else "error")
+            except httpx.HTTPError: pass
         self.cache[id] = (time.monotonic(), base)
         return base
+
+    def address(self, item):
+        """Where the product reaches a running computer: its name on the product's Docker network, or the host
+        ports it published on 127.0.0.1."""
+        if NETWORK:
+            if NETWORK not in (item["NetworkSettings"].get("Networks") or {}): return None
+            return item["Name"].lstrip("/"), 8642, 6080
+        ports = item["NetworkSettings"]["Ports"] or {}
+        if not (ports.get("8642/tcp") and ports.get("6080/tcp")): return None
+        return "127.0.0.1", int(ports["8642/tcp"][0]["HostPort"]), int(ports["6080/tcp"][0]["HostPort"])
+
+    async def on_network(self, item):
+        if not NETWORK: return True
+        code, out, _ = await docker("network", "inspect", "--format", "{{.Id}}", NETWORK, check=False, timeout=8)
+        joined = (item["NetworkSettings"].get("Networks") or {}).get(NETWORK) or {}
+        return code == 0 and joined.get("NetworkID") == out.strip()
 
     async def start(self, id, action="start"):
         async with self.locks.setdefault(id, asyncio.Lock()):
@@ -288,8 +320,12 @@ class Computers:
             labels = (item or {}).get("Config", {}).get("Labels") or {}
             uid, gid = container_user()
             outdated = bool(item) and (labels.get("lazyhermes.limits") != LIMITS or labels.get("lazyhermes.mounts") != MOUNTS)
-            # A computer running as the wrong user keeps taking its files away from the product: replace it now.
-            wrong_user = bool(item) and labels.get("lazyhermes.user", f"{os.getuid()}:{os.getgid()}") != f"{uid}:{gid}"
+            # A computer running as the wrong user keeps taking its files away from the product, and one made for the
+            # other kind of storage cannot see them at all: replace it now.
+            wrong_user = bool(item) and (labels.get("lazyhermes.user", f"{os.getuid()}:{os.getgid()}") != f"{uid}:{gid}"
+                                         or labels.get("lazyhermes.storage", "host") != STORAGE)
+            # `make down` removes the product's network; a stopped computer still names the old one and cannot start.
+            if item and not item["State"]["Running"] and not await self.on_network(item): outdated = True
             # Resource limits and mounts only change on a new container; never interrupt a running desktop just for that.
             if item and (action == "update" or wrong_user or (outdated and (action == "restart" or not item["State"]["Running"]))):
                 await docker("stop", "-t", "20", self.name(id), timeout=30)
@@ -300,11 +336,14 @@ class Computers:
                 await docker("restart" if action == "restart" else "start", self.name(id), timeout=45)
             else:
                 await docker("run", "-d", "--name", self.name(id), "--label", f"lazyhermes.bot={id}", "--label", "lazyhermes.managed=true", "--label", f"lazyhermes.limits={LIMITS}", "--label", f"lazyhermes.mounts={MOUNTS}",
-                             "--label", f"lazyhermes.user={uid}:{gid}", "-e", f"LAZYHERMES_UID={uid}", "-e", f"LAZYHERMES_GID={gid}",
-                             "--restart", "unless-stopped", *RESOURCES,
-                             "--add-host", "host.docker.internal:host-gateway", "-p", "127.0.0.1::8642", "-p", "127.0.0.1::6080",
-                             "-v", f"{self.store.directory / 'ipc'}:/product-ipc:ro", "-v", f"{root / 'hermes'}:/hermes", "-v", f"{root / 'home'}:/home/box", "-v", f"{root / 'workspace'}:/workspace",
-                             "-v", f"{self.shared_tokens()}:/hermes/mcp-tokens", IMAGE)
+                             "--label", f"lazyhermes.user={uid}:{gid}", "--label", f"lazyhermes.storage={STORAGE}",
+                             "-e", f"LAZYHERMES_UID={uid}", "-e", f"LAZYHERMES_GID={gid}",
+                             "--restart", "unless-stopped", *RESOURCES, "--add-host", "host.docker.internal:host-gateway",
+                             # On the product's network nothing is published: only LazyBoy can reach the computer.
+                             *(["--network", NETWORK] if NETWORK else ["-p", "127.0.0.1::8642", "-p", "127.0.0.1::6080"]),
+                             *mount(self.store.directory / "ipc", "/product-ipc", readonly=True), *mount(root / "hermes", "/hermes"),
+                             *mount(root / "home", "/home/box"), *mount(root / "workspace", "/workspace"),
+                             *mount(self.shared_tokens(), "/hermes/mcp-tokens"), IMAGE)
             deadline = time.monotonic()+75
             while time.monotonic() < deadline:
                 status = await self.status(id, refresh=True)

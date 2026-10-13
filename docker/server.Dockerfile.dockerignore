@@ -1,0 +1,17 @@
+**
+!pyproject.toml
+!uv.lock
+!HERMES_VERSION
+!vendor/hermes-agent/optional-mcps/
+!box/product_mcp.py
+!server/
+!web/
+!tools/frontend-assets.test.mjs
+!docker/entrypoint.sh
+web/node_modules
+web/dist
+web/e2e
+web/e2e-results
+web/test-results
+web/playwright-report
+**/__pycache__

@@ -275,7 +275,7 @@ async def test_normal_rpc_close_notifies_runtime_and_rejects_pending_calls():
     async def disconnected(value): disconnects.append(value)
     async with serve(server,"127.0.0.1",0) as host:
         rpc=HermesRPC(event,request,disconnected)
-        await rpc.open(host.sockets[0].getsockname()[1],"fixture-key")
+        await rpc.open("127.0.0.1",host.sockets[0].getsockname()[1],"fixture-key")
         pending=asyncio.create_task(rpc.call("never.respond",timeout=5))
         await asyncio.wait_for(entered.wait(),2)
         close.set()

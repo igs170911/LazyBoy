@@ -10,6 +10,10 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("LAZYHERMES_DATA_DIR", str(ROOT / ".data"))).resolve()
 PORT = int(os.environ.get("LAZYHERMES_PORT", "8790"))
 IMAGE = os.environ.get("LAZYHERMES_IMAGE", "lazyhermes-bot:local")
+# Set when LazyBoy itself runs in Docker (compose.yaml): the data directory is this Docker volume, bot computers
+# mount their folders from it, and the product reaches them by name on this Docker network instead of host ports.
+DATA_VOLUME = os.environ.get("LAZYHERMES_DATA_VOLUME", "")
+NETWORK = os.environ.get("LAZYHERMES_NETWORK", "")
 HERMES_COMMIT = (ROOT / "HERMES_VERSION").read_text().strip()
 PROVIDER_PRESETS = json.loads((Path(__file__).with_name("hermes_providers.json")).read_text())
 # Hermes web search backends the product offers -> the env var holding their key. Exa and Tavily

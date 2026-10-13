@@ -10,7 +10,6 @@ folder, so one sign-in serves all bots and a token one bot refreshes is the one 
 import asyncio
 import contextlib
 import functools
-import os
 import re
 import time
 from pathlib import Path
@@ -308,7 +307,7 @@ class Connectors:
 
     async def open_page(self, bot, url):
         with contextlib.suppress(Exception):
-            await computers_module.docker("exec", "-d", "-u", f"{os.getuid()}:{os.getgid()}", "-e", "DISPLAY=:1",
+            await computers_module.docker("exec", "-d", "-u", computers_module.user_flag(), "-e", "DISPLAY=:1",
                                           self.computers.name(bot), "/usr/local/bin/box-chrome", url, timeout=20)
 
     async def poll(self, name, title=None):

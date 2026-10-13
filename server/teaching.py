@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import re
 import shutil
 import time
@@ -181,7 +180,7 @@ class Teaching:
             "steps": steps or [], "base_url": f"/api/agents/{lesson['agent_id']}/files/content?path=" + f"lessons/{lesson['id']}/"}
 
     async def exec(self, id, *args, detach=False, timeout=20):
-        return await computers_module.docker("exec", *(["-d"] if detach else []), "-u", f"{os.getuid()}:{os.getgid()}", "-e", "DISPLAY=:1",
+        return await computers_module.docker("exec", *(["-d"] if detach else []), "-u", computers_module.user_flag(), "-e", "DISPLAY=:1",
                                              self.computers.name(id), *args, timeout=timeout)
 
     async def start(self, id, goal="", trial=True, thread=None):

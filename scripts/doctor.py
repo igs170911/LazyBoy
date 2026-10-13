@@ -38,7 +38,7 @@ def inspect(*, static=False, ready=False):
         ok, detail = command(["docker", "buildx", "version"])
         checks.append({"name":"Docker Buildx","passed":ok,"detail":detail})
         ok, detail = command(["docker", "compose", "version"])
-        checks.append({"name":"Docker Compose","passed":ok,"optional":True,"detail":detail if ok else "選用：只有語意路由（scripts/routing.sh）需要"})
+        checks.append({"name":"Docker Compose","passed":ok,"optional":True,"detail":detail if ok else "選用：在 Docker 中執行（make up）與語意路由（scripts/routing.sh）需要"})
     if ready:
         expected = (ROOT/"HERMES_VERSION").read_text().strip()
         ok, revision = command(["git", "-C", str(ROOT/"vendor/hermes-agent"), "rev-parse", "HEAD"])

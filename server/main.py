@@ -1268,7 +1268,7 @@ async def novnc(id: str, path: str, request: Request):
     if not status.get("viewer_port"): raise ValueError("請先開啟 Bot 電腦")
     if ".." in Path(path).parts: raise ValueError("無效的桌面路徑")
     async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.get(f"http://127.0.0.1:{status['viewer_port']}/{path}", params=request.query_params)
+        response = await client.get(f"http://{status['host']}:{status['viewer_port']}/{path}", params=request.query_params)
         if response.is_success and path in {"vnc.html", "vnc_lite.html"}:
             skin = (ROOT / "web" / "novnc-skin.html").read_text()
             html = response.text.replace("</body>", skin + "</body>")
@@ -1281,8 +1281,8 @@ async def novnc_socket(socket: WebSocket, id: str):
     if not status.get("viewer_port"): await socket.close(code=1013); return
     await socket.accept()
     try:
-        async with connect(f"ws://127.0.0.1:{status['viewer_port']}/websockify", max_size=16*1024*1024, compression=None,
-                           # Loopback hop: a CPU-starved desktop must not be mistaken for a dead link (websockify has its own heartbeat).
+        async with connect(f"ws://{status['host']}:{status['viewer_port']}/websockify", max_size=16*1024*1024, compression=None,
+                           # Local hop: a CPU-starved desktop must not be mistaken for a dead link (websockify has its own heartbeat).
                            ping_interval=None) as upstream:
             async def to_desktop():
                 while True:

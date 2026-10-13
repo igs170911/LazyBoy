@@ -17,8 +17,8 @@ class HermesRPC:
         self.ready = asyncio.Event()
         self.alive = False
 
-    async def open(self, port, key):
-        self.socket = await connect(f"ws://127.0.0.1:{port}/rpc", additional_headers={"Authorization":"Bearer "+key}, max_size=16*1024*1024, ping_interval=15, ping_timeout=30)
+    async def open(self, host, port, key):
+        self.socket = await connect(f"ws://{host}:{port}/rpc", additional_headers={"Authorization":"Bearer "+key}, max_size=16*1024*1024, ping_interval=15, ping_timeout=30)
         self.alive = True
         self.reader = asyncio.create_task(self._read())
         try:

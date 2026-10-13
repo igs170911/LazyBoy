@@ -134,6 +134,33 @@ curl -fsS -X POST -H 'content-type: application/json' -d '{"action":"start"}' "h
 | 其他裝置連不上 | 確認主機防火牆允許 TCP 8790，而且只在信任的網路開放 |
 | 新開的終端機找不到 `node` 或 `uv` | 它們安裝在 `~/.local/bin`。把 `export PATH="$HOME/.local/bin:$PATH"` 加進 shell 設定檔 |
 
+## 另一種方式：在 Docker 中執行
+
+使用者要求「只裝 Docker」，或主機上的工具與權限問題一直無法解決時，改用這個方式。它取代步驟 2 到 5；主機只需要 git 與 Docker Engine 26 以上（含 Buildx 與 Compose）。
+
+```bash
+cd ~/LazyBoy
+docker version --format '{{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}'   # 需要 26 以上，linux/amd64 或 linux/arm64
+make build   # 第一行會印出建置平台；第一次通常超過 10 分鐘，請在背景執行
+make up
+```
+
+**成功的標準：** `make up` 最後印出「LazyBoy 已啟動」與含 `#token=` 的網址。再確認 Bot 的電腦能啟動（容器名稱預設是 `lazyboy`）：
+
+```bash
+token=$(docker exec lazyboy cat /data/access-token)
+curl -fsS -c /tmp/lazyboy-cookie -H 'content-type: application/json' -d "{\"token\":\"$token\"}" http://127.0.0.1:8790/api/auth/login
+id=$(curl -fsS -b /tmp/lazyboy-cookie http://127.0.0.1:8790/api/agents | python3 -c 'import json,sys; print(json.load(sys.stdin)["agents"][0]["id"])')
+curl -fsS -b /tmp/lazyboy-cookie -X POST -H 'content-type: application/json' -d '{"action":"start"}' "http://127.0.0.1:8790/api/agents/$id/computer"
+rm -f /tmp/lazyboy-cookie
+```
+
+回應中有 `"ready": true` 就完成了。把 `make up` 印出的網址交給使用者，並提醒網址含登入碼，不要外流。
+
+- 登入碼只交給使用者，不要寫進檔案或 commit；需要時用 `make docker-token` 重新取得。
+- 主機原本已用 `make install` 安裝過：先 `make stop`，再 `make docker-import`，然後 `make up`。匯入只讀取 `.data/`，不會改動它。
+- `make up` 回報 Docker 版本太舊時，請使用者升級 Docker，不要改用其他方式繞過。
+
 ## 更新既有的安裝
 
 ```bash
@@ -142,6 +169,8 @@ git pull
 make install
 make stop && make start
 ```
+
+在 Docker 中執行時，改為 `git pull && make build && make up`。
 
 已經存在的 Bot 電腦會繼續使用舊映像。請在網頁「設定 → 更新」，或在 Bot 的電腦選單選「更新電腦環境」，套用新的映像。
 

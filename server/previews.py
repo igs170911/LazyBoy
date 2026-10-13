@@ -6,7 +6,6 @@ time, so opening the same file again is instant and an edited file is converted 
 """
 import asyncio
 import hashlib
-import os
 import tarfile
 import zipfile
 from pathlib import Path
@@ -61,7 +60,7 @@ class Previews:
             inside = f"/home/box/{CACHE}/{folder.name}"
             # A profile of its own, so a LibreOffice window open on the desktop does not take over the conversion.
             code, _, err = await computers_module.docker(
-                "exec", "-u", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp/lazyboy-preview", self.computers.name(id),
+                "exec", "-u", computers_module.user_flag(), "-e", "HOME=/tmp/lazyboy-preview", self.computers.name(id),
                 "timeout", str(CONVERT_SECONDS), "soffice", "-env:UserInstallation=file:///tmp/lazyboy-preview/profile",
                 "--headless", "--norestore", "--nologo", "--convert-to", kind, "--outdir", inside, source,
                 check=False, timeout=CONVERT_SECONDS + 15)
