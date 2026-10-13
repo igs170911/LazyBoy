@@ -1,0 +1,28 @@
+#!/bin/sh
+# `apt-mirror on` points apt at the Debian mirror this build picked; `apt-mirror off` restores deb.debian.org,
+# so the finished image keeps the official sources. scripts/build-images.sh passes the mirror as the
+# debian_mirror build secret (line 1: main archive, optional line 2: security archive). Unlike a build
+# argument, a secret is not part of Docker's layer cache key, so a different mirror still reuses every cached layer.
+set -eu
+sources=/etc/apt/sources.list.d/debian.sources
+secret=/run/secrets/debian_mirror
+official=http://deb.debian.org/debian
+if [ ! -f "$sources" ] || [ ! -r "$secret" ]; then exit 0; fi
+main=$(sed -n 1p "$secret")
+security=$(sed -n 2p "$secret")
+usable() {
+  case "$1" in http://*|https://*) ;; *) return 1 ;; esac
+  case "$1" in *[!A-Za-z0-9._:/~-]*) echo "apt-mirror: 略過格式不正確的鏡像網址" >&2; return 1 ;; esac
+  # HTTPS needs CA certificates, which the slim base image only gets from its first install.
+  case "$1" in https://*) [ -e /etc/ssl/certs/ca-certificates.crt ] || return 1 ;; esac
+}
+swap() { sed -i "s|^URIs: $1\$|URIs: $2|" "$sources"; }
+case "${1:-}" in
+  on)
+    if usable "$main"; then swap "$official" "$main"; fi
+    if [ -n "$security" ] && usable "$security"; then swap "$official-security" "$security"; fi ;;
+  off)
+    if usable "$main"; then swap "$main" "$official"; fi
+    if [ -n "$security" ] && usable "$security"; then swap "$security" "$official-security"; fi ;;
+  *) echo "用法：apt-mirror on|off" >&2; exit 2 ;;
+esac

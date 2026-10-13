@@ -33,7 +33,8 @@ body.is-resizing iframe { pointer-events: none; }
 .bot-list { flex: 1; min-height: 0; padding: 4px 8px 12px; overflow-y: auto; overscroll-behavior: contain; }
 .bot-list ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .bot-section + .bot-section { margin-top: 10px; }
-.bot-section-head { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 2px 0 8px; color: var(--faint); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+/* Huninn has one weight: a synthesized bold at this size fills dense characters such as 團 into a solid block. */
+.bot-section-head { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 2px 0 8px; color: var(--faint); font-size: 13px; font-weight: 500; letter-spacing: .04em; }
 .bot-section-head > span { flex: 1; }
 .bot-section-toggle { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; padding: 4px 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; }
 .bot-section-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -394,8 +395,9 @@ body.is-resizing iframe { pointer-events: none; }
 :root[data-theme="light"] .hljs-attr, :root[data-theme="light"] .hljs-variable, :root[data-theme="light"] .hljs-template-variable, :root[data-theme="light"] .hljs-name, :root[data-theme="light"] .hljs-tag { color: #c2410c; }
 .md-table-wrap { max-width: 100%; margin: 0 0 .9em; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-s); }
 .message-body table { min-width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 1.55; }
-.message-body th, .message-body td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-.message-body th { background: var(--elev); color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+/* Chinese can break after any character: without a floor, a narrow screen squeezes columns to one character wide. The wrapper scrolls sideways instead. */
+.message-body th, .message-body td { min-width: 6em; padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.message-body th { background: var(--elev); color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .message-body tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--surface) 60%, transparent); }
 .message-body tbody tr:hover td { background: var(--hover); }
 .message-body tr:last-child td { border-bottom: 0; }
@@ -499,7 +501,7 @@ body.is-resizing iframe { pointer-events: none; }
 .search-box input:not([type=checkbox]) { min-height: 34px; padding-left: 32px; background: var(--panel); }
 .file-groups { flex: 1; min-height: 0; padding: 10px 8px 16px; overflow-y: auto; }
 .file-group + .file-group { margin-top: 14px; }
-.file-group h3 { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px; color: var(--faint); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.file-group h3 { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px; color: var(--faint); font-size: 12px; font-weight: 500; letter-spacing: .04em; }
 .file-group h3 span { font-weight: 500; }
 .file-group ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .file-row { display: flex; align-items: center; border-radius: var(--radius-s); }

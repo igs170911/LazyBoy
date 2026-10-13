@@ -280,6 +280,25 @@ test("assistant replies render chat-friendly markdown", async ({ page, context }
   await reply.screenshot({ path: info.outputPath("markdown-reply.png") });
 });
 
+test("a web address followed by Chinese punctuation keeps the sentence after it", async ({ page }) => {
+  const fixture = setup();
+  const text = "請看 https://zh.wikipedia.org/wiki/咖啡），整理三種咖啡豆的差異。另見 www.example.com/a，謝謝";
+  fixture.state.transcript.push(
+    { id: "u9", role: "user", content: text, at: "2026-10-08T01:02:00Z" },
+    { id: "delta:t9", role: "assistant", content: text, at: "2026-10-08T01:03:00Z" },
+  );
+  await open(page, fixture);
+  for (const message of [page.locator(".msg.user").last(), page.locator(".msg.assistant").last()]) {
+    // Markdown renders after its engine loads; the raw text shown before that must not satisfy the checks.
+    const wiki = message.getByRole("link", { name: "zh.wikipedia.org" });
+    await expect(wiki).toBeVisible();
+    expect(decodeURI(await wiki.getAttribute("href") ?? "")).toBe("https://zh.wikipedia.org/wiki/咖啡");
+    await expect(message.getByRole("link", { name: "www.example.com/a" })).toHaveAttribute("href", "http://www.example.com/a");
+    await expect(message).toContainText("），整理三種咖啡豆的差異。另見");
+    await expect(message).toContainText("，謝謝");
+  }
+});
+
 test("threads split one bot into separate conversations that share its computer", async ({ page }) => {
   const fixture = setup();
   await open(page, fixture);

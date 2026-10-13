@@ -11,7 +11,8 @@ RUN uv sync --frozen --no-dev --python 3.14 --extra mcp --extra computer-use --e
 ARG BOX_REFRESH=pinned
 RUN uv pip install --python /opt/hermes/.venv/bin/python openpyxl pdfplumber python-docx pandas \
     && uv cache clean && mkdir -p /opt/uv-cache && chmod 1777 /opt/uv-cache
-RUN apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=secret,id=debian_mirror apt-mirror on && apt-get update \
+    && apt-get install -y --no-install-recommends sudo && apt-mirror off && rm -rf /var/lib/apt/lists/*
 ENV PATH="/opt/hermes/.venv/bin:${PATH}" HOME=/home/box HERMES_HOME=/hermes BROWSER_CDP_URL=http://127.0.0.1:9222 \
     TERMINAL_CWD=/workspace PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 COPY box/hermes_host.py box/desktop_mcp.py box/product_mcp.py /opt/lazyhermes/

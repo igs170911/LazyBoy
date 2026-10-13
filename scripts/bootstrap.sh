@@ -20,8 +20,7 @@ fi
 uv sync --frozen
 npm ci --prefix web
 npm run build --prefix web
-docker build -t lazyhermes-desktop:local box
-docker build -t "${LAZYHERMES_IMAGE:-lazyhermes-bot:local}" .
+./scripts/build-images.sh
 if test "${1:-}" = --with-routing; then ./scripts/routing.sh start; fi
 python3 scripts/doctor.py --ready
-printf '安裝完成。執行 scripts/start.sh，再打開 http://localhost:8790\n'
+printf '安裝完成。執行 make start，再打開 http://localhost:8790\n'

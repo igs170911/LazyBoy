@@ -34,8 +34,11 @@ def inspect(*, static=False, ready=False):
     if not static:
         ok, detail = command(["docker", "info", "--format", "{{.ServerVersion}}"])
         checks.append({"name":"Docker daemon","passed":ok,"detail":detail})
+        # The images use BuildKit features (RUN --mount, COPY --chmod) that need the buildx plugin.
+        ok, detail = command(["docker", "buildx", "version"])
+        checks.append({"name":"Docker Buildx","passed":ok,"detail":detail})
         ok, detail = command(["docker", "compose", "version"])
-        checks.append({"name":"Docker Compose","passed":ok,"detail":detail})
+        checks.append({"name":"Docker Compose","passed":ok,"optional":True,"detail":detail if ok else "選用：只有語意路由（scripts/routing.sh）需要"})
     if ready:
         expected = (ROOT/"HERMES_VERSION").read_text().strip()
         ok, revision = command(["git", "-C", str(ROOT/"vendor/hermes-agent"), "rev-parse", "HEAD"])
@@ -46,7 +49,7 @@ def inspect(*, static=False, ready=False):
             for image in ("lazyhermes-desktop:local", os.environ.get("LAZYHERMES_IMAGE", "lazyhermes-bot:local")):
                 ok, detail = command(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
                 checks.append({"name":image,"passed":ok,"detail":detail})
-    return {"passed":all(c["passed"] for c in checks),"static_only":static,"checks":checks}
+    return {"passed":all(c["passed"] or c.get("optional") for c in checks),"static_only":static,"checks":checks}
 
 
 def main():
@@ -59,7 +62,7 @@ def main():
     if args.json: print(json.dumps(report,ensure_ascii=False,indent=2))
     else:
         for check in report["checks"]:
-            print(("PASS" if check["passed"] else "FAIL")+" "+check["name"]+": "+check["detail"])
+            print(("PASS" if check["passed"] else "WARN" if check.get("optional") else "FAIL")+" "+check["name"]+": "+check["detail"])
     return 0 if report["passed"] else 1
 
 

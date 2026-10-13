@@ -48,8 +48,40 @@ function remarkAlerts() {
   return (tree: MdNode) => walk(tree);
 }
 
+/** Full-width punctuation never belongs to a web address. */
+const FULLWIDTH_STOP = /[‘’“”…　-〿！-／：-＠［-｀｛-･]/u;
+
+/**
+ * GFM's bare-URL autolink runs on until whitespace, and Chinese puts none after a URL, so `網址），後面的話` became
+ * one link and the sentence after it vanished behind the link's short label. End the link at full-width punctuation.
+ */
+function remarkCjkUrlEnd() {
+  const walk = (node: MdNode) => {
+    const children = node.children;
+    if (!children) return;
+    for (let index = 0; index < children.length; index++) {
+      const link = children[index] as MdNode & { url?: string };
+      const label = link.type === "link" && link.children?.length === 1 && link.children[0].type === "text" ? link.children[0].value || "" : "";
+      const stop = label.search(FULLWIDTH_STOP);
+      if (stop <= 0 || !link.url?.endsWith(label)) {
+        walk(link);
+        continue;
+      }
+      // Like GFM, trailing ASCII punctuation and an unmatched ")" stay outside the link.
+      let head = label.slice(0, stop).replace(/[.,:;!?*_~'"]+$/, "");
+      while (head.endsWith(")") && head.split(")").length > head.split("(").length) head = head.slice(0, -1);
+      if (head.length < 4) continue;
+      link.url = link.url.slice(0, link.url.length - label.length) + head;
+      link.children = [{ type: "text", value: head }];
+      children.splice(index + 1, 0, { type: "text", value: label.slice(head.length) });
+      index++;
+    }
+  };
+  return (tree: MdNode) => walk(tree);
+}
+
 // Hermes replies are chat text: single newlines are intentional, and CJK punctuation next to ** must still emphasize.
-const PLUGINS = [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough, remarkBreaks, remarkAlerts];
+const PLUGINS = [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough, remarkBreaks, remarkAlerts, remarkCjkUrlEnd];
 
 function CodeBlock({ children }: { children?: ReactNode }) {
   const child = (Array.isArray(children) ? children[0] : children) as ReactElement<{ className?: string; children?: ReactNode }> | undefined;

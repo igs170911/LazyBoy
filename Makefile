@@ -1,22 +1,27 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help start stop get-access-token providers box box-latest clean
+.PHONY: help install start stop get-access-token providers box box-latest clean
 
 help:
 	@printf '%s\n' \
+		'make install           安裝缺少的系統套件與所有依賴，並建置 Bot 電腦映像（第一次安裝與更新都用這個）' \
 		'make start             背景啟動 LazyBoy' \
 		'make stop              停止 LazyBoy' \
 		'make get-access-token  顯示其他裝置使用的登入碼' \
-		'make box               重建 Bot 電腦映像（固定版本，沿用快取），完成後到「設定 → 更新電腦」套用' \
+		'make box               重建 Bot 電腦映像（自動選最快的 Debian 鏡像站，沿用快取），完成後到「設定 → 更新電腦」套用' \
 		'make box-latest        同上，但 grok 等工具與 Python 套件更新到最新版' \
 		'make providers         從 Bot 映像的 Hermes 重新匯出內建供應商清單' \
 		'make clean             清掉用不到的 Docker 建置快取與無名映像（不動 Bot 的資料）'
 
-# The bot image builds FROM the desktop image, so the desktop goes first.
+# Missing system packages first (sudo asks when needed), then dependencies and images; safe to run again.
+install:
+	@./scripts/install.sh
+
+# The bot image builds FROM the desktop image; scripts/build-images.sh builds both, desktop first.
+# DEBIAN_MIRROR=<url> skips the mirror speed test.
 BOT_IMAGE = $${LAZYHERMES_IMAGE:-lazyhermes-bot:local}
 box:
-	@./box/build.sh lazyhermes-desktop:local --build-arg DEBIAN_MIRROR=$(DEBIAN_MIRROR) $(BOX_ARGS)
-	@docker build --build-arg DESKTOP_IMAGE=lazyhermes-desktop:local $(BOX_ARGS) -t $(BOT_IMAGE) .
+	@./scripts/build-images.sh $(BOX_ARGS)
 	@printf 'grok %s\n' "$$(docker run --rm --entrypoint grok $(BOT_IMAGE) --version 2>/dev/null || echo '版本未知')"
 	@printf '已重建 %s。正在執行的 Bot 電腦不受影響；到「設定 → 更新電腦」套用新映像。\n' "$(BOT_IMAGE)"
 	@$(MAKE) --no-print-directory clean

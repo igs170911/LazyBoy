@@ -4,9 +4,11 @@
 # One TigerVNC X server replaces Xvfb + x11vnc; no XFCE session manager.
 FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
+# Packages download from the Debian mirror scripts/build-images.sh measured fastest; see apt-mirror.
+COPY --chmod=755 apt-mirror /usr/local/sbin/apt-mirror
 # dpkg never unpacks docs/man/foreign locales; zh_TW catalogs are kept so the
 # XFCE menus are in Traditional Chinese.
-RUN printf '%s\n' \
+RUN --mount=type=secret,id=debian_mirror printf '%s\n' \
       'path-exclude=/usr/share/doc/*' \
       'path-include=/usr/share/doc/*/copyright' \
       'path-exclude=/usr/share/man/*' \
@@ -18,7 +20,7 @@ RUN printf '%s\n' \
       'path-include=/usr/share/locale/zh_TW/*' \
       'path-include=/usr/share/locale/zh/*' \
       > /etc/dpkg/dpkg.cfg.d/zz-lazyboy-slim \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && apt-mirror on && apt-get update && apt-get install -y --no-install-recommends \
         tigervnc-standalone-server tigervnc-tools x11-utils x11-xserver-utils \
         novnc websockify xclip imagemagick xdotool \
         dbus-x11 xfconf xfce4-panel xfwm4 xfdesktop4 xfce4-settings xfce4-terminal \
@@ -29,6 +31,7 @@ RUN printf '%s\n' \
         locales tzdata \
         python3 curl ca-certificates git bash tini procps \
         chromium \
+    && apt-mirror off \
     && echo "zh_TW.UTF-8 UTF-8" >> /etc/locale.gen \
     && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
     && locale-gen \
@@ -46,19 +49,15 @@ RUN mkdir -p /usr/share/fonts/truetype/huninn \
     && fc-cache -f
 COPY --from=node:22-bookworm-slim /usr/local/ /usr/local/
 # X RECORD bindings for box-teach-desktop (recording a human's demonstration).
-RUN apt-get update && apt-get install -y --no-install-recommends python3-xlib && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=secret,id=debian_mirror apt-mirror on && apt-get update \
+    && apt-get install -y --no-install-recommends python3-xlib && apt-mirror off && rm -rf /var/lib/apt/lists/*
 # Apps that open files on the desktop: a file manager, a text editor, an image viewer, archives and office
 # documents (Word, Excel, PowerPoint). PDFs and web pages open in the browser. Defaults: xfce/mimeapps.list.
-# LibreOffice is large; DEBIAN_MIRROR (e.g. http://free.nchc.org.tw/debian) downloads it from a nearer mirror,
-# and the image keeps deb.debian.org afterwards.
-ARG DEBIAN_MIRROR=
-RUN if [ -n "$DEBIAN_MIRROR" ]; then sed -i "s|^URIs: http://deb.debian.org/debian\$|URIs: $DEBIAN_MIRROR|" /etc/apt/sources.list.d/debian.sources; fi \
-    && apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=secret,id=debian_mirror apt-mirror on && apt-get update && apt-get install -y --no-install-recommends \
         thunar mousepad ristretto xarchiver tumbler zip unzip p7zip-full \
         libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-gtk3 libreoffice-l10n-zh-tw \
     && command -v thunar mousepad ristretto xarchiver soffice \
-    && if [ -n "$DEBIAN_MIRROR" ]; then sed -i "s|^URIs: $DEBIAN_MIRROR\$|URIs: http://deb.debian.org/debian|" /etc/apt/sources.list.d/debian.sources; fi \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-mirror off && rm -rf /var/lib/apt/lists/*
 # Tools that should track upstream go below this line. `make box-latest` passes a new
 # BOX_REFRESH each time, which invalidates Docker's cache from here on so they are
 # downloaded again; `make box` keeps the cache and the pinned versions.
