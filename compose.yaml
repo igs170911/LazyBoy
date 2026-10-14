@@ -7,13 +7,18 @@ services:
     image: ${LAZYBOY_SERVER_IMAGE:-lazyboy:local}
     container_name: ${LAZYBOY_CONTAINER:-lazyboy}
     restart: unless-stopped
-    # Every address of this host; other devices sign in with the access token.
-    ports: ["${LAZYBOY_PORT:-8790}:8790"]
+    # Every address of this host; other devices sign in with the access token. 8791 is HTTPS (server/tls.py).
+    ports: ["${LAZYBOY_PORT:-8790}:8790", "${LAZYBOY_HTTPS_PORT:-8791}:8791"]
     environment:
       LAZYHERMES_DATA_VOLUME: ${LAZYBOY_VOLUME:-lazyboy-data}
       LAZYHERMES_NETWORK: ${LAZYBOY_NETWORK:-lazyboy}
       LAZYHERMES_IMAGE: ${LAZYHERMES_IMAGE:-lazyhermes-bot:local}
       LAZYHERMES_ACCESS_TOKEN: ${LAZYHERMES_ACCESS_TOKEN:-}
+      # The container cannot see the host's name and addresses; `make up` passes them for the HTTPS certificate.
+      LAZYHERMES_HOSTNAME: ${LAZYHERMES_HOSTNAME:-}
+      LAZYHERMES_PUBLIC_HOSTS: ${LAZYHERMES_PUBLIC_HOSTS:-}
+      LAZYHERMES_PUBLIC_PORT: ${LAZYBOY_PORT:-8790}
+      LAZYHERMES_PUBLIC_HTTPS_PORT: ${LAZYBOY_HTTPS_PORT:-8791}
     volumes:
       - data:/data
       # Rootless Docker keeps its socket elsewhere; `make up` finds it and sets DOCKER_SOCKET.

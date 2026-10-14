@@ -9,21 +9,25 @@ import hashlib
 import ipaddress
 import json
 import mimetypes
+import os
 from pathlib import Path
 import secrets
 import weakref
 import shutil
+import tempfile
+import zipfile
 from urllib.parse import urlparse, quote
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
 from .routing import routed_payload
 import httpx
 import yaml
 from websockets.asyncio.client import connect
 
-from .config import DATA, PROVIDER_PRESETS, ROOT, Settings, HERMES_COMMIT, private_write
+from .config import DATA, HTTPS_PORT, PORT, PROVIDER_PRESETS, ROOT, Settings, HERMES_COMMIT, private_write
 from .store import Store, uid, now
 from .model_check import CHECK_VERSION, check_model
 from .computers import Computers
@@ -33,11 +37,12 @@ from .teaching import Teaching
 from .scheduling import Scheduler
 from .collab import Collaboration
 from .connectors import Connectors
+from .org import Organization
 from .previews import Previews, archive_entries
 from .logins import Logins
 from . import cleanup, memory, scheduling, usage
 from .search import search as search_all
-from .files import contained, filename
+from .files import PRUNE_DIRS, contained, filename
 from .sharing import portable_connectors, scrub_known
 
 store = Store(DATA)
@@ -48,6 +53,16 @@ skills = Skills(store)
 teaching = Teaching(store, runtime, computers)
 scheduler = Scheduler(store, runtime)
 collab = Collaboration(store, runtime)
+org = Organization(store, runtime, collab)
+# Every bot's SOUL lists its teammates, then its place in the organization and what only the user decides.
+computers.roster = lambda id: collab.roster_text(id) + org.soul_text(id)
+
+
+async def tidy_browser(id):
+    """After a bot finishes its work, close the old tabs it left behind (cleanup.TAB_LIMIT)."""
+    with contextlib.suppress(Exception):
+        if (await computers.status(id)).get("ready") and not runtime.busy(id): await cleanup.tidy_tabs(computers, id)
+runtime.on_idle = tidy_browser
 connectors = Connectors(store, runtime, computers)
 previews = Previews(store, computers)
 logins = Logins(computers)
@@ -283,7 +298,13 @@ async def generate_avatar(request: Request):
 @app.get("/api/agents")
 async def agents():
     threads = store.all("threads")
-    return {"agents": [agent_row(a["id"], threads) for a in store.all("agents")], "groups": sorted(store.all("groups"), key=lambda g: g.get("position", 0))}
+    return {"agents": [agent_row(a["id"], threads) for a in store.all("agents")], "groups": sorted(store.all("groups"), key=lambda g: g.get("position", 0)),
+            "approvals": [{k: a.get(k) for k in ("id", "agent_id", "agent_name", "subject", "created_at")} for a in org.approvals()]}
+
+
+async def refresh_souls():
+    """Rewrite every bot's SOUL after the organization changed: teammate lists and reporting lines name other bots."""
+    for agent in store.all("agents"): await asyncio.to_thread(computers.prepare, agent["id"])
 @app.post("/api/agents")
 async def create_agent(request: Request): return agent_row(make_agent(await request.json())["id"])
 @app.get("/api/agents/{id}")
@@ -363,11 +384,17 @@ async def thread_delete(id: str, thread_id: str):
     return {"ok": True, "id": thread["id"]}
 @app.patch("/api/agents/{id}")
 async def update_agent(id: str, request: Request):
-    runtime.agent(id); body = await request.json()
+    before = runtime.agent(id); body = await request.json()
     if "name" in body and (not str(body["name"]).strip() or len(str(body["name"])) > 100): raise ValueError("請填寫 Bot 名稱")
     keys = {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression", "ask_first"}
-    store.patch("agents", id, **clean_face({k: v for k, v in body.items() if k in keys}))
+    fields = clean_face({k: v for k, v in body.items() if k in keys})
+    # Reporting lines and team management are the user's to set; bots change neither of their own.
+    if "reports_to" in body: fields["reports_to"] = org.check_manager(id, body["reports_to"])
+    if "can_manage" in body: fields["can_manage"] = bool(body["can_manage"])
+    store.patch("agents", id, **fields)
     computers.prepare(id)
+    # Other bots' SOULs name this one, its title and its place in the organization.
+    if any(key in fields and fields[key] != before.get(key, "" if key != "can_manage" else False) for key in ("reports_to", "can_manage", "name", "title")): await refresh_souls()
     # Runtime/session model reconfiguration is applied when idle, through a fresh native
     # connection resuming the same durable history. Active work retains its chosen model.
     if not runtime.busy(id) and id in runtime.clients:
@@ -384,7 +411,8 @@ async def delete_agent(id: str):
     for routine in [r for r in store.all("routines") if r.get("agent_id") == id]: store.remove("routines", routine["id"])
     for thread in store.all("threads"):
         if thread.get("agent_id") == id: store.remove("threads", thread["id"])
-    collab.forget_agent(id)
+    collab.forget_agent(id); org.forget(id)
+    store.remove("skill_library", id)
     store.remove("agents", id); store.purge_agent(id)
     # A bot's folder can hold tens of thousands of files; deleting them must not freeze every live stream.
     await asyncio.to_thread(shutil.rmtree, store.agent_directory(id))
@@ -404,12 +432,18 @@ async def duplicate_agent(id: str):
     # The whole skills folder (Hermes' own, the product's and the user's, as edited) and which of them are switched off.
     source, target = store.agent_directory(id) / "hermes", store.agent_directory(row["id"]) / "hermes"
     if (source / "skills").is_dir(): shutil.copytree(source / "skills", target / "skills", dirs_exist_ok=True)
-    disabled = (skills.config(id).get("skills") or {}).get("disabled")
+    source_cfg = skills.config(id)
+    disabled = (source_cfg.get("skills") or {}).get("disabled")
     if disabled:
         cfg_path = target / "config.yaml"
         cfg = yaml.safe_load(cfg_path.read_text()) or {} if cfg_path.exists() else {}
         cfg.setdefault("skills", {})["disabled"] = disabled
+        # Which of those are only waiting in the skill library, not switched off by the user.
+        cfg["product_skill_library"] = source_cfg.get("product_skill_library") or []
         private_write(cfg_path, yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
+    if places := store.get("skill_library", id, {}).get("places"): store.put("skill_library", row["id"], {"places": places})
+    # The copy takes the same place in the organization; team management is not copied.
+    if agent.get("reports_to"): store.patch("agents", row["id"], reports_to=agent["reports_to"])
     if own := store.get("mcp", id): store.put("mcp", row["id"], own); computers.prepare(row["id"])
     avatar = store.agent_directory(id) / "avatar.png"
     if avatar.exists(): shutil.copyfile(avatar, store.agent_directory(row["id"]) / "avatar.png")
@@ -568,28 +602,92 @@ async def copy_logins(id: str, request: Request):
     return await logins.copy(id, target, body.get("sites") or [])
 @app.get("/api/agents/{id}/files")
 async def file_list(id: str): runtime.agent(id); return {"files": await runtime.refresh_files(id)}
+# For content LazyBoy did not write (a bot's page, a site's SVG icon) opened directly: shown, but with no scripts and
+# none of this site's login or storage.
+SANDBOXED = "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:"
+
+
+def box_place(id, path):
+    """(folder on this machine, path inside it) for a path on the bot's computer: its workspace, or /home/box/…."""
+    if path.startswith("/home/box/"): return store.agent_directory(id) / "home", path.removeprefix("/home/box/"), "/home/box/"
+    return store.agent_directory(id) / "workspace", path.removeprefix("/workspace/"), "/workspace/"
+
+
 def agent_file(id, path):
     """A file the web may show: under the bot's workspace, or its home when addressed as /home/box/…."""
     runtime.agent(id)
-    root = store.agent_directory(id) / "workspace"
-    if path.startswith("/workspace/"): path = path.removeprefix("/workspace/")
-    elif path.startswith("/home/box/"):
-        root = store.agent_directory(id) / "home"
-        path = path.removeprefix("/home/box/")
-    return contained(root, path, exists=True)
+    root, rel, _ = box_place(id, path)
+    return contained(root, rel, exists=True)
+
+
+FOLDER_ENTRIES = 300
+
+
+@app.get("/api/agents/{id}/files/stat")
+async def file_stat(id: str, path: str):
+    """What a path a bot wrote is: a file, a folder (with what is in it), or missing here, in which case it may be a
+    path on a teammate's computer (bots name the files they discuss with each other)."""
+    runtime.agent(id)
+    root, rel, prefix = box_place(id, path)
+    target = contained(root, rel)
+    if target.is_file(): return {"kind": "file", "bytes": target.stat().st_size}
+    if target.is_dir():
+        base = root.resolve()
+        children = sorted((c for c in target.iterdir() if not c.name.startswith(".")), key=lambda c: (not c.is_dir(), c.name.lower()))
+        entries = [{"name": c.name, "path": prefix + c.relative_to(base).as_posix(), "dir": c.is_dir(), "bytes": c.stat().st_size if c.is_file() else None}
+                   for c in children[:FOLDER_ENTRIES] if c.resolve().is_relative_to(base)]
+        return {"kind": "folder", "entries": entries, "truncated": len(children) > FOLDER_ENTRIES}
+    elsewhere = []
+    for agent in store.all("agents"):
+        if agent["id"] == id: continue
+        other, other_rel, _ = box_place(agent["id"], path)
+        with contextlib.suppress(ValueError, KeyError):
+            if contained(other, other_rel, exists=True): elsewhere.append({"agent_id": agent["id"], "name": agent["name"]})
+    return {"kind": "missing", "elsewhere": elsewhere}
 @app.get("/api/agents/{id}/files/office")
 async def file_office(id: str, path: str):
     """An Office document as the PDF (documents, slides) or HTML page (spreadsheets) LibreOffice makes of it."""
     out, kind = await previews.office(id, agent_file(id, path))
+    # The page comes from the bot's computer: opened straight from a link it must not run as LazyBoy itself.
     return FileResponse(out, media_type="application/pdf" if kind == "pdf" else "text/html; charset=utf-8", content_disposition_type="inline",
-                        filename=out.name, headers={"X-Preview-Kind": kind})
+                        filename=out.name, headers={"X-Preview-Kind": kind, **({"Content-Security-Policy": SANDBOXED} if kind == "html" else {})})
 @app.get("/api/agents/{id}/files/archive")
 async def file_archive(id: str, path: str):
     return await asyncio.to_thread(archive_entries, agent_file(id, path))
 @app.get("/api/agents/{id}/files/content")
 async def file_content(id: str, path: str):
+    runtime.agent(id)
+    root, rel, _ = box_place(id, path)
+    folder = contained(root, rel)
+    # A folder a bot named ("都在 /workspace/poc/ 裡") downloads as one zip.
+    if folder.is_dir():
+        archive = await asyncio.to_thread(zip_folder, folder)
+        return FileResponse(archive, filename=folder.name + ".zip", media_type="application/zip", background=BackgroundTask(archive.unlink, missing_ok=True))
     target = agent_file(id, path)
     return FileResponse(target, filename=target.name, content_disposition_type="inline" if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".txt", ".md", ".csv"} else "attachment")
+
+
+ZIP_BYTES, ZIP_FILES = 500 * MB, 5000
+
+
+def zip_folder(folder):
+    """The folder's files (not hidden ones, caches or dependency trees) zipped into a temporary file."""
+    base = folder.resolve()
+    handle = tempfile.NamedTemporaryFile(prefix="lazyboy-", suffix=".zip", delete=False); handle.close()
+    archive, total, count = Path(handle.name), 0, 0
+    try:
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as out:
+            for current, dirs, files in os.walk(base):
+                dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in PRUNE_DIRS)
+                for name in sorted(files):
+                    item = Path(current) / name
+                    if name.startswith(".") or item.is_symlink() or not item.is_file(): continue
+                    total += item.stat().st_size; count += 1
+                    if total > ZIP_BYTES or count > ZIP_FILES: raise ValueError(f"資料夾太大（超過 {ZIP_BYTES // MB} MB 或 {ZIP_FILES} 個檔案），請到電腦上壓縮後再下載")
+                    out.write(item, (Path(base.name) / item.relative_to(base)).as_posix())
+    except BaseException:
+        archive.unlink(missing_ok=True); raise
+    return archive
 @app.post("/api/agents/{id}/uploads")
 async def upload(id: str, request: Request, name: str = "attachment"):
     runtime.agent(id); key = uid(); name = filename(name)
@@ -935,6 +1033,41 @@ async def manage_mcp(request: Request):
     return listing()
 
 
+@app.get("/api/org")
+async def org_chart(): return org.chart()
+
+
+@app.put("/api/org/approval-items")
+async def org_approval_items(request: Request):
+    items = org.set_approval_items((await request.json()).get("items"))
+    await refresh_souls()
+    return {"approval_items": items}
+
+
+@app.post("/api/teams")
+async def team_create(request: Request):
+    """Build a team from the web: a section, a lead and members reporting to it, optionally a group chat and a daily report."""
+    body = await request.json()
+    result = org.create_team(body.get("name"), body.get("lead"), body.get("members") or [], body.get("reports_to") or "", bool(body.get("group_chat")),
+                             lead_primary=bool(body.get("lead_primary")), lead_manage=bool(body.get("lead_manage")))
+    if body.get("daily_report"):
+        await scheduler.manage(result["lead_id"], {"action": "create", "title": "團隊進度日報",
+            "instructions": "用 team_status 看團隊每個人的進度，整理成三段回報給我：今天完成了什麼、進行中與風險、需要我決定的事。沒有新進度就簡短說明。",
+            "schedule": {"frequency": "weekdays", "time": "18:00", "timezone": "Asia/Taipei"}})
+    await refresh_souls()
+    return {**result, "agents": [agent_row(a["id"]) for a in store.all("agents")], "groups": store.all("groups")}
+
+
+@app.get("/api/approvals")
+async def approvals_list(state: str = "pending"): return {"approvals": org.approvals(state if state != "all" else "")}
+
+
+@app.post("/api/approvals/{approval_id}")
+async def approval_decide(approval_id: str, request: Request):
+    body = await request.json()
+    return await org.decide(approval_id, body.get("decision"), body.get("note", ""))
+
+
 @app.get("/api/connectors")
 async def connector_list():
     return connectors.listing()
@@ -944,7 +1077,7 @@ async def connector_list():
 async def connector_icon(id: str):
     path = await connectors.icon(id)
     if path.suffix == ".none": return Response(status_code=404)
-    return FileResponse(path, headers={"Cache-Control": "public, max-age=604800"})
+    return FileResponse(path, headers={"Cache-Control": "public, max-age=604800", "Content-Security-Policy": SANDBOXED})
 
 
 @app.post("/api/connectors/{id}")
@@ -1171,6 +1304,18 @@ async def product_tool(request: Request):
     if action == "group_post": return collab.post_group(agent["id"], body.get("group"), body.get("message"))
     if action == "create_bot": return collab.create_bot(agent["id"], body.get("name"), body.get("title", ""), body.get("persona", ""), body.get("avatar_color", ""), body.get("avatar_shape", ""))
     if action == "profile": return collab.update_profile(agent["id"], body.get("title"), body.get("avatar_color"), body.get("avatar_shape"), body.get("avatar_expression"))
+    if action == "skill_library":
+        if body.get("name"): return skills.library_open(agent["id"], str(body["name"]))
+        return skills.library_search(agent["id"], str(body.get("query") or ""))
+    if action == "team_status": return org.team_status(agent["id"], body.get("bot") or "")
+    if action == "approval": return org.request_approval(agent["id"], body.get("subject"), body.get("details", ""), body.get("category", ""))
+    if action == "create_team":
+        org.require_manager(agent["id"])
+        result = org.create_team(body.get("name"), body.get("lead"), body.get("members") or [], body.get("reports_to") or "", bool(body.get("group_chat", True)), creator_id=agent["id"])
+        await refresh_souls(); return result
+    if action == "update_bot":
+        result = org.update_bot(agent["id"], body.get("bot"), body.get("title"), body.get("persona"), body.get("reports_to"), body.get("team"))
+        await refresh_souls(); return result
     if action == "task":
         task = runtime.task(body["task_id"])
         return {"state": task["state"], "verdict": task.get("verdict"), "result": task.get("result"), "artifacts": task.get("artifacts", [])}
@@ -1300,6 +1445,28 @@ async def novnc_socket(socket: WebSocket, id: str):
     except Exception: pass
     finally:
         if socket.client_state.name == "CONNECTED": await socket.close()
+
+
+@app.get("/api/connect")
+async def connect_info():
+    """How other devices reach this LazyBoy: addresses, ports and the certificate to trust for HTTPS.
+    The access token is included for the sign-in QR code; whoever sees this page already holds it in a cookie."""
+    from . import tls
+    https = HTTPS_PORT and (DATA / "tls" / "ca.crt").exists()
+    return {"hosts": [h for h in tls.public_hosts() if not h.endswith(".local")], "hostname": tls.host_name(),
+            # In Docker the published ports may differ from the container's.
+            "port": int(os.environ.get("LAZYHERMES_PUBLIC_PORT") or PORT),
+            "https_port": int(os.environ.get("LAZYHERMES_PUBLIC_HTTPS_PORT") or HTTPS_PORT) if https else None,
+            "fingerprint": tls.fingerprint(DATA / "tls") if https else None, "token": settings.access_token}
+
+
+@app.get("/lazyboy-ca.crt")
+async def certificate_authority():
+    """Public on purpose: a device downloads it before it can sign in over HTTPS. It holds no secret."""
+    path = DATA / "tls" / "ca.crt"
+    if not path.exists(): return JSONResponse({"error": "HTTPS 沒有啟用"}, status_code=404)
+    return Response(path.read_bytes(), media_type="application/x-x509-ca-cert",
+                    headers={"Content-Disposition": 'attachment; filename="LazyBoy-CA.crt"', "Cache-Control": "no-cache"})
 
 
 @app.get("/{path:path}")

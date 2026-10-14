@@ -7,6 +7,8 @@ import { watchViewport } from "./viewport";
 import { watchForUpdates } from "./update-check";
 import { Workspace } from "./workspace/Workspace";
 import { ErrorBoundary } from "./error-boundary";
+// The install offer comes once, early: listen before anything renders.
+import "./install-app";
 import "@fontsource/huninn";
 import "blobatar/motion.css";
 import "blobatar/gaze.css";

@@ -38,6 +38,8 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
 
   const prompt = (question.prompt || question.question || "").trim();
   const loginLike = /登入|密碼|帳號|驗證碼|login|password|sign in/i.test(prompt);
+  // The bot asks the person to do one step on its computer (sign in, a check, a button it cannot press) and hand it back.
+  const onComputer = loginLike || /電腦|交還給 ?Bot|驗證|接手|按鈕|點一下/i.test(prompt);
 
   if (question.method === "approval") {
     return (
@@ -109,7 +111,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
     const quick = questions.length === 1 && !questions[0].multi_select;
     return (
       <form className="question-card clarify" aria-label="Bot 的問題" onSubmit={event => { event.preventDefault(); void submit(); }}>
-        <header><strong>{questions.length > 1 ? `${questions.length} 個問題需要你回答` : "Bot 想確認一件事"}</strong><Expiry at={question.expires_at} />{loginLike ? <button type="button" className="btn small ghost" onClick={onOpenComputer}><Monitor />打開電腦</button> : null}</header>
+        <header><strong>{questions.length > 1 ? `${questions.length} 個問題需要你回答` : "Bot 想確認一件事"}</strong><Expiry at={question.expires_at} />{onComputer ? <button type="button" className="btn small ghost" onClick={onOpenComputer}><Monitor />打開電腦</button> : null}</header>
         {questions.map(q => (
           <fieldset key={q.qid} disabled={busy}>
             <legend>{q.question}</legend>
@@ -136,7 +138,10 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
         ))}
         {error ? <p className="pane-error" role="alert">{error}</p> : null}
         <div className="question-actions">
-          <button type="submit" className="primary" disabled={busy || !ready}>{busy ? "傳送中…" : "送出回答"}</button>
+          {onComputer && question.task_id ? (
+            <button type="button" className="primary" disabled={busy} onClick={() => void run(() => api.handoverDone(agentId, question.task_id || "", id))}>{busy ? "交還中…" : "我做好了，交還給 Bot"}</button>
+          ) : null}
+          <button type="submit" className={onComputer ? "" : "primary"} disabled={busy || !ready}>{busy ? "傳送中…" : "送出回答"}</button>
         </div>
       </form>
     );

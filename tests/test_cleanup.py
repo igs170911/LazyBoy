@@ -94,3 +94,27 @@ def test_memory_lists_round_trip_within_hermes_limits(tmp_path):
     with pytest.raises(ValueError, match="上限"): memory.write(hermes, "user", ["x" * 1000, "y" * 500])
     (hermes / "config.yaml").write_text("memory:\n  user_char_limit: 5000\n")
     assert memory.write(hermes, "user", ["x" * 1000, "y" * 500])["user"]["used"] == 1503
+
+
+def test_replies_in_simplified_chinese_become_taiwan_traditional():
+    from server.zhtw import to_traditional
+    assert to_traditional("可以，而且我觉得这比现在就带货更稳，后台数据显示佣金不错") == "可以，而且我覺得這比現在就帶貨更穩，後台數據顯示佣金不錯"
+    # One stray Simplified character in Traditional text is fixed on its own.
+    assert to_traditional("我不會凭猜測填結果，數據都附上") == "我不會憑猜測填結果，數據都附上"
+    traditional = "台灣站佣金 23 趴，跑了 5 公里，社群經營很划算。"
+    assert to_traditional(traditional) == traditional
+    # Code is left exactly as written.
+    assert to_traditional("这个参数要改\n```python\nprint('这里')\n```") == "這個參數要改\n```python\nprint('这里')\n```"
+
+
+@pytest.mark.asyncio
+async def test_an_idle_bots_old_browser_tabs_are_closed(bot, monkeypatch):
+    store, agent, root = bot
+    calls = []
+    async def fake_docker(*args, **kwargs):
+        calls.append(args)
+        return 0, '{"open": 31, "closed": 25}\n', ""
+    monkeypatch.setattr(cleanup, "docker", fake_docker)
+    assert await cleanup.tidy_tabs(Stopped(), agent) == 25
+    script = calls[0][-1]
+    assert calls[0][:2] == ("exec", "box-" + agent) and "pages.length > 10" in script and "pages.length - 6" in script

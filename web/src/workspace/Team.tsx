@@ -2,13 +2,14 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api, type AgentRow, type BotMessage, type PeerFields, type RoomMember, type RoomRow } from "../api";
 import { Avatar } from "../avatar";
 import { ChatMessageBody, type PreviewFile } from "../markdown";
-import { ArrowLeftRight, ChevronDown, ChevronRight, Clock, MessagesSquare, Pencil } from "../ui/icons";
+import { ArrowLeftRight, ChevronDown, ChevronRight, Clock, MessagesSquare, Network, Pencil, RotateCw, Stamp } from "../ui/icons";
+import { openApprovals } from "./useNotifications";
 import { Modal, ModalHeader } from "../ui/overlay";
 import { clock, dayLabel } from "./format";
 import { avatarProps } from "./Sidebar";
 
 export const INTENT_LABEL: Record<string, string> = { request: "請求", question: "提問", result: "回覆", fyi: "通知" };
-export const ROOM_MIN = 2, ROOM_MAX = 6;
+export const ROOM_MIN = 2, ROOM_MAX = 10;
 
 type Face = Pick<AgentRow, "id" | "name"> & Partial<Pick<AgentRow, "avatar_color" | "avatar_shape" | "avatar_url" | "avatar_traits" | "avatar_expression">>;
 
@@ -78,6 +79,12 @@ export function TeamEvent({ item, agentId, team, knownPaths, onOpen, onPeer, onO
   }
   else if (item.event === "profile_updated") { icon = <Pencil aria-hidden="true" />; label = item.content; }
   else if (item.event === "question_expired") { icon = <Clock aria-hidden="true" />; label = item.content; }
+  else if (item.event === "auto_continue") { icon = <RotateCw aria-hidden="true" />; label = item.content; }
+  else if (item.event === "approval_request") { icon = <Stamp aria-hidden="true" />; label = <>請你核定：<b>{item.content}</b></>; action = openApprovals; }
+  else if (item.event === "team_created") {
+    icon = <Network aria-hidden="true" />; label = <>建立了團隊 <b>{item.peer_name}</b></>;
+    action = item.room_id ? room : () => item.peer_id && onOpenBot?.(item.peer_id);
+  }
   return (
     <div className={`peer-event${open ? " open" : ""}`} data-event={item.event}>
       <button type="button" className="peer-event-line" aria-expanded={expandable ? open : undefined} disabled={!action && !expandable}

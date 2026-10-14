@@ -20,6 +20,10 @@ function when(at: string | null | undefined, timezone: string) {
   return `${part(sameYear ? { month: "numeric", day: "numeric" } : { year: "numeric", month: "numeric", day: "numeric" })}（${part({ weekday: "short" })}）${part({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`;
 }
 function scheduleText(schedule: RoutineSchedule) {
+  const drift = schedule.jitter_minutes ? `，隨機延後 ${schedule.jitter_minutes} 分鐘內` : "";
+  return baseScheduleText(schedule) + (schedule.frequency === "trigger" ? "" : drift);
+}
+function baseScheduleText(schedule: RoutineSchedule) {
   if (schedule.frequency === "trigger") return "只由網址觸發（其他服務呼叫時執行）";
   if (schedule.frequency === "interval") return `每 ${every(schedule.every_minutes)}（從 ${schedule.time || "00:00"} 起算）` + (schedule.timezone && schedule.timezone !== "Asia/Taipei" ? ` · ${schedule.timezone}` : "");
   const day = schedule.frequency === "weekly" ? (schedule.weekdays || []).map(day => `週${days[day-1]}`).join("、")
@@ -137,6 +141,10 @@ export function RoutinesDialog({agentId,onClose,onOpen,returnFocus}:{agentId:str
         {edit.schedule.frequency === "once" ? <label>日期<input required type="date" value={edit.schedule.date || ""} onChange={event=>changeSchedule({date:event.target.value})} /></label> : null}
         {edit.schedule.frequency === "weekly" ? <fieldset><legend>星期</legend><div className="routine-weekdays">{days.map((day,index)=><label key={day}><input type="checkbox" checked={edit.schedule.weekdays?.includes(index+1)||false} onChange={event=>changeSchedule({weekdays:event.target.checked?[...(edit.schedule.weekdays||[]),index+1].sort():(edit.schedule.weekdays||[]).filter(value=>value!==index+1)})} />{day}</label>)}</div></fieldset> : null}
         {edit.schedule.frequency === "monthly" ? <label>每月幾號<input required type="number" min={1} max={31} value={edit.schedule.day_of_month || 1} onChange={event=>changeSchedule({day_of_month:Number(event.target.value)})} /><small>沒有該日期的月份會跳過。</small></label> : null}
+        {edit.schedule.frequency === "trigger" ? null : <label>時間飄移<select aria-label="時間飄移" value={edit.schedule.jitter_minutes || 0} onChange={event=>changeSchedule({jitter_minutes:Number(event.target.value)})}>
+          <option value={0}>準時執行</option>
+          {[15, 30, 60, 90, 120].filter(value => edit.schedule.frequency !== "interval" || value < (edit.schedule.every_minutes || 60)).map(value => <option key={value} value={value}>設定時間後 {value} 分鐘內隨機</option>)}
+        </select><small>每次執行時間都不一樣，像真人發文。</small></label>}
         {edit.schedule.frequency === "trigger" ? <p className="routine-hint">儲存後會產生一個網址，其他服務（Slack、GitHub、表單…）呼叫它時執行。</p>
           : <label className="routine-check"><input type="checkbox" checked={!!edit.hook} onChange={event=>setEdit({...edit,hook:event.target.checked})} />也可以用網址觸發（給 Slack、GitHub 等服務呼叫）</label>}
         <label>時區<input required value={edit.schedule.timezone} list="routine-timezones" onChange={event=>changeSchedule({timezone:event.target.value})} /><datalist id="routine-timezones"><option value="Asia/Taipei"/><option value="Asia/Tokyo"/><option value="America/New_York"/><option value="Europe/London"/><option value="UTC"/></datalist></label>

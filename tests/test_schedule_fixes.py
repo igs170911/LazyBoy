@@ -128,3 +128,19 @@ async def test_routine_messages_are_labelled_in_the_transcript(tmp_path):
     message = store.transcript(agent)[-1]
     assert message["routine_id"] == routine["id"] and message["routine_title"] == "週報" and message["content"] == "整理數據"
     store.conn.close()
+
+
+def test_jitter_runs_each_time_at_a_random_moment_after_the_set_time():
+    from datetime import datetime, timezone
+    from server.scheduling import normalize_schedule, next_occurrence
+    schedule = normalize_schedule({"frequency": "daily", "time": "20:00", "jitter_minutes": 40})
+    after = datetime(2026, 10, 13, 1, 0, tzinfo=timezone.utc)  # 09:00 in Taipei
+    runs = {next_occurrence(schedule, after) for _ in range(30)}
+    slot = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)  # 20:00 in Taipei
+    assert len(runs) > 1 and all(0 <= (datetime.fromisoformat(r) - slot).total_seconds() <= 40 * 60 for r in runs)
+    assert "jitter_minutes" not in normalize_schedule({"frequency": "daily", "time": "20:00", "jitter_minutes": 0})
+    import pytest
+    with pytest.raises(ValueError, match="隨機延後"): normalize_schedule({"frequency": "daily", "time": "20:00", "jitter_minutes": 999})
+    # Every 30 minutes but up to an hour late would skip slots and really run about once an hour.
+    with pytest.raises(ValueError, match="少於 30 分鐘"): normalize_schedule({"frequency": "interval", "every_minutes": 30, "time": "09:00", "jitter_minutes": 60})
+    assert normalize_schedule({"frequency": "interval", "every_minutes": 30, "time": "09:00", "jitter_minutes": 20})["jitter_minutes"] == 20

@@ -5,7 +5,7 @@ import { deferDialog } from "../deferred-dialog";
 import type { PreviewFile } from "../markdown";
 import type { SettingsSectionId } from "../settings";
 import { readStorage, writeStorage } from "../storage";
-import { Bell, BellOff, CircleDot, Copy, Eye, EyeOff, Pin, Star, KeyRound, Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, GraduationCap, Import, Keyboard, MessageSquarePlus, MessagesSquare, PanelLeft, Plug, Settings, SunMoon, ChartColumn } from "../ui/icons";
+import { Bell, BellOff, CircleDot, Copy, Eye, EyeOff, Pin, Star, KeyRound, Brain, CalendarClock, ChevronLeft, Eraser, FolderOpen, Monitor, PanelRightClose, Pencil, Plus, Share2, Trash2, Users, GraduationCap, Import, Keyboard, MessageSquarePlus, MessagesSquare, PanelLeft, Plug, Settings, SunMoon, ChartColumn, Smartphone, Network, Stamp } from "../ui/icons";
 import { ConfirmDialog, toast, Toaster, type MenuItem } from "../ui/overlay";
 import { ComputerPane } from "./ComputerPane";
 import { Conversation, type PanelTab } from "./Conversation";
@@ -19,7 +19,7 @@ import { useSwipeBack } from "./swipe-back";
 import { useAgents } from "./useAgents";
 import { useRooms } from "./useRooms";
 import { useSeen } from "./useSeen";
-import { useNotifications } from "./useNotifications";
+import { OPEN_APPROVALS, useApprovalAlerts, useNotifications } from "./useNotifications";
 import { isMuted, setMuted } from "../notify";
 import { RoomView } from "./Room";
 import { PeerDialog, RoomDialog } from "./Team";
@@ -70,7 +70,15 @@ type Dialog =
   | { kind: "palette"; query?: string }
   | { kind: "logins"; agent: AgentRow }
   | { kind: "share-in"; text: string }
-  | { kind: "shortcuts" };
+  | { kind: "shortcuts" }
+  | { kind: "org" }
+  | { kind: "team" }
+  | { kind: "approvals" };
+
+// The organization dialogs load on first use, outside the main bundle.
+const OrgDialog = deferDialog<Parameters<typeof import("./Org").OrgDialog>[0]>(() => import("./Org").then(m => ({ default: m.OrgDialog })), "OrgDialog");
+const TeamBuilderDialog = deferDialog<Parameters<typeof import("./Org").TeamBuilderDialog>[0]>(() => import("./Org").then(m => ({ default: m.TeamBuilderDialog })), "TeamBuilderDialog");
+const ApprovalsDialog = deferDialog<Parameters<typeof import("./Org").ApprovalsDialog>[0]>(() => import("./Org").then(m => ({ default: m.ApprovalsDialog })), "ApprovalsDialog");
 
 function readPanel(): Panel {
   try {
@@ -91,7 +99,7 @@ function useMedia(query: string) {
 }
 
 export function Workspace() {
-  const { agents, groups, loaded, error, refresh, upsert, remove, applyTeam } = useAgents();
+  const { agents, groups, approvals, loaded, error, refresh, upsert, remove, applyTeam } = useAgents();
   const mobile = useMedia(MOBILE_QUERY);
   const [activeId, setActiveId] = useState<string | null>(() => readStorage(ACTIVE_KEY));
   const { rooms, refresh: refreshRooms, setRooms, loaded: roomsLoaded } = useRooms();
@@ -220,6 +228,12 @@ export function Workspace() {
   }, [back, toggleCompact]);
   const { isUnread: unread, markUnread } = useSeen(seenItems, mobile && view === "list" ? null : roomId || activeId);
   useNotifications(agents, mobile && view === "list" ? null : roomId ? null : activeId, id => select(id));
+  useApprovalAlerts(approvals, loaded, () => setDialog({ kind: "approvals" }));
+  useEffect(() => {
+    const open = () => setDialog({ kind: "approvals" });
+    window.addEventListener(OPEN_APPROVALS, open);
+    return () => window.removeEventListener(OPEN_APPROVALS, open);
+  }, []);
   // A group chat deleted elsewhere (or on another device) closes here, also when it was the last one.
   useEffect(() => { if (roomId && roomsLoaded && !room) setRoomId(null); }, [roomId, roomsLoaded, room]);
   useEffect(() => { setFinding(false); }, [activeId, roomId, session.threadId]);
@@ -324,10 +338,14 @@ export function Workspace() {
     const dark = resolvedTheme(readTheme()) === "dark";
     const list: PaletteAction[] = [
       { id: "new-bot", label: "新增 Bot", hint: "從範本開始、取名字建立，或開群組對話", icon: <Plus />, keys: keys("Mod+Alt+N"), run: () => setDialog({ kind: "new" }) },
-      { id: "new-room", label: "新增群組對話", hint: "2 到 6 個 Bot 一起完成一件事", icon: <MessagesSquare />, run: () => setDialog({ kind: "room" }) },
+      { id: "new-room", label: "新增群組對話", hint: "2 到 10 個 Bot 一起完成一件事", icon: <MessagesSquare />, run: () => setDialog({ kind: "room" }) },
+      { id: "org", label: "組織架構", hint: "誰向誰報告、每個 Bot 正在做什麼", icon: <Network />, run: () => setDialog({ kind: "org" }) },
+      { id: "team", label: "建立團隊", hint: "工程團隊、公司組織、行銷團隊，或自訂", icon: <Users />, run: () => setDialog({ kind: "team" }) },
+      { id: "approvals", label: "待你核定", hint: approvals.length ? `${approvals.length} 件等你決定` : "目前沒有", icon: <Stamp />, run: () => setDialog({ kind: "approvals" }) },
       { id: "import", label: "匯入 Bot", icon: <Import />, run: () => setDialog({ kind: "import" }) },
       { id: "apps", label: "連接應用程式", hint: "Notion、GitHub、Figma、Canva…", icon: <Plug />, run: () => setDialog({ kind: "settings", section: "mcp" }) },
       { id: "usage", label: "模型用量", icon: <ChartColumn />, run: () => setDialog({ kind: "settings", section: "usage" }) },
+      { id: "devices", label: "在手機使用、安裝 App", hint: "連線網址、登入 QR code 與 HTTPS 憑證", icon: <Smartphone />, run: () => setDialog({ kind: "settings", section: "devices" }) },
       { id: "settings", label: "設定", icon: <Settings />, keys: keys("Mod+,"), run: () => setDialog({ kind: "settings" }) },
       { id: "theme", label: dark ? "切換成淺色外觀" : "切換成深色外觀", icon: <SunMoon />, run: () => persistTheme(dark ? "light" : "dark") },
       { id: "compact", label: compact ? "展開側欄" : "精簡側欄", icon: <PanelLeft />, keys: keys("Mod+B"), run: toggleCompact },
@@ -412,7 +430,8 @@ export function Workspace() {
             onMove={moveBot} onReorderGroups={reorderGroups}
             compact={compact && !mobile} onToggleCompact={mobile ? undefined : toggleCompact}
             onNew={() => setDialog({ kind: "new" })} onTemplates={() => setDialog({ kind: "new", startAt: "templates" })}
-            onSearch={query => setDialog({ kind: "palette", query })} onConnectApps={() => setDialog({ kind: "settings", section: "mcp" })} />
+            onSearch={query => setDialog({ kind: "palette", query })} onConnectApps={() => setDialog({ kind: "settings", section: "mcp" })}
+            onOrg={() => setDialog({ kind: "org" })} approvals={approvals.length} onApprovals={() => setDialog({ kind: "approvals" })} />
         ) : null}
 
         {showChat ? (roomId && room ? (
@@ -523,6 +542,15 @@ export function Workspace() {
           onOpenRoutine={id => { select(id); setDialog({ kind: "routines", id }); }} />
       ) : null}
       {dialog?.kind === "shortcuts" ? <ShortcutsDialog onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === "org" ? <OrgDialog agents={agents} onClose={() => { setDialog(null); void refresh(); }} onOpenBot={select} onCreateTeam={() => setDialog({ kind: "team" })} /> : null}
+      {dialog?.kind === "team" ? (
+        <TeamBuilderDialog agents={agents} onClose={() => setDialog(null)} onCreated={result => {
+          setDialog(null); applyTeam({ agents: result.agents, groups: result.groups }); void refresh(); void refreshRooms();
+          toast(`已建立「${result.team}」`, "ok", { label: "看組織架構", run: () => setDialog({ kind: "org" }) });
+          if (result.room_id) selectRoom(result.room_id); else select(result.lead_id);
+        }} />
+      ) : null}
+      {dialog?.kind === "approvals" ? <ApprovalsDialog agents={agents} onClose={() => setDialog(null)} onChanged={() => void refresh()} /> : null}
       {dialog?.kind === "logins" ? <LoginShareDialog agent={dialog.agent} agents={agents} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "share-in" ? (
         <ShareInDialog text={dialog.text} agents={agents} rooms={rooms} onClose={() => setDialog(null)}
@@ -531,7 +559,7 @@ export function Workspace() {
       ) : null}
       {dialog?.kind === "new" ? (
         <NewChatDialog agents={agents} startAt={dialog.startAt} onClose={() => setDialog(null)} onCreate={preset => setDialog({ kind: "create", preset })}
-          onOpenBot={select} onImport={() => setDialog({ kind: "import" })} onCreateGroup={() => setDialog({ kind: "group" })}
+          onOpenBot={select} onImport={() => setDialog({ kind: "import" })} onCreateGroup={() => setDialog({ kind: "group" })} onCreateTeam={() => setDialog({ kind: "team" })}
           onRoomCreated={row => { setRooms(current => [row, ...current.filter(item => item.id !== row.id)]); void refreshRooms(); selectRoom(row.id); }}
           onCreated={row => { upsert(row); void refresh(); select(row.id); toast(`已用範本建立「${row.name}」`, "ok"); }} />
       ) : null}

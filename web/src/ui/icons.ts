@@ -33,6 +33,7 @@ export {
   RotateCw,
   Search,
   Settings,
+  Smartphone,
   Share2,
   Sparkles,
   Square,
@@ -76,4 +77,8 @@ export {
   AudioLines,
   Volume2,
   Headphones,
+  Network,
+  Stamp,
+  Crown,
+  ShieldCheck,
 } from "lucide-react";

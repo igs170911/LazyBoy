@@ -52,6 +52,17 @@ function randomLook(previousColor?: string, previousShape?: string) {
   return choices[crypto.getRandomValues(new Uint32Array(1))[0] % choices.length];
 }
 
+/** The bots under `id` at any level: choosing one of them as its manager would make a loop. */
+function below(team: AgentRow[], id: string) {
+  const found = new Set<string>();
+  let frontier = [id];
+  while (frontier.length) {
+    frontier = team.filter(row => frontier.includes(row.reports_to || "") && !found.has(row.id)).map(row => row.id);
+    frontier.forEach(item => found.add(item));
+  }
+  return found;
+}
+
 export function AgentSettingsDialog({
   agent,
   mode = "edit",
@@ -119,7 +130,10 @@ export function AgentSettingsDialog({
   const [chatModel, setChatModel] = useState(agent?.model || "");
   const [replyStyle, setReplyStyle] = useState(seed?.reply_style || "");
   const [askFirst, setAskFirst] = useState<string[]>(seed?.ask_first || []);
-  useEffect(()=>{ void api.agents().then(data=>setGroups(data.groups)).catch(()=>{}); },[]);
+  const [reportsTo, setReportsTo] = useState(agent?.reports_to || "");
+  const [canManage, setCanManage] = useState(Boolean(agent?.can_manage));
+  const [team, setTeam] = useState<AgentRow[]>([]);
+  useEffect(()=>{ void api.agents().then(data=>{ setGroups(data.groups); setTeam(data.agents); }).catch(()=>{}); },[]);
   useEffect(() => {
     void api.settings().then((data) => {
       // Only providers that can answer: a saved key, or a local service that needs none.
@@ -159,8 +173,8 @@ export function AgentSettingsDialog({
   const [error, setError] = useState("");
   const dismissing = useRef(false);
   const ateOutside = useRef(false);
-  const live = useRef({ creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, askFirst, eyes, expression });
-  live.current = { creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, askFirst, eyes, expression };
+  const live = useRef({ creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, askFirst, eyes, expression, reportsTo, canManage });
+  live.current = { creating, agent, name, title, groupId, persona, tagText, color, shape, photoUrl, source, crop, stagedPng, clearedPhoto, busy: busy || generating, pickerOpen, chatProvider, chatModel, replyStyle, askFirst, eyes, expression, reportsTo, canManage };
 
   useEffect(() => {
     if (creating || !agent) return;
@@ -178,6 +192,8 @@ export function AgentSettingsDialog({
     setChatModel(agent.model || "");
     setReplyStyle(agent.reply_style || "");
     setAskFirst(agent.ask_first || []);
+    setReportsTo(agent.reports_to || "");
+    setCanManage(Boolean(agent.can_manage));
     setError("");
     // Roster polling returns fresh arrays every few seconds. Initialize a new
     // identity once; subsequent snapshots must not replace unsaved form fields.
@@ -200,6 +216,8 @@ export function AgentSettingsDialog({
       model: state.chatModel,
       reply_style: state.replyStyle,
       ask_first: state.askFirst,
+      // Only an existing bot has a place in the organization to change.
+      ...(state.creating ? {} : { reports_to: state.reportsTo, can_manage: state.canManage }),
       avatar_traits: state.eyes,
       avatar_expression: state.expression,
     };
@@ -534,6 +552,10 @@ export function AgentSettingsDialog({
               <input value={tagText} maxLength={120} onChange={(event) => setTagText(event.target.value)} placeholder={t.tagsPlaceholder} />
             </label>
             <label>分區<select value={groupId} onChange={e=>setGroupId(e.target.value)}><option value="">未分區</option>{groups.map(group=><option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
+            {!creating && agent ? <label>向誰報告<select value={reportsTo} onChange={e=>setReportsTo(e.target.value)}>
+              <option value="">你（董事長）</option>
+              {team.filter(row => row.id !== agent.id && !below(team, agent.id).has(row.id)).map(row => <option key={row.id} value={row.id}>{row.name}{row.title ? `（${row.title}）` : ""}</option>)}
+            </select></label> : null}
             <label>{t.provider}<select value={chatProvider} onChange={(event) => {
               const next = event.target.value;
               setChatProvider(next);
@@ -561,6 +583,10 @@ export function AgentSettingsDialog({
                 <label key={key}><input type="checkbox" checked={askFirst.includes(key)} onChange={e => setAskFirst(list => e.target.checked ? [...list, key] : list.filter(item => item !== key))} />{label}</label>
               ))}
             </fieldset>
+            {!creating && agent ? (
+              <label className="manage-toggle"><input type="checkbox" checked={canManage} onChange={e => setCanManage(e.target.checked)} />
+                <span><b>團隊管理權限</b><small>可以替你建立團隊、新增 Bot，調整其他 Bot 的職稱、人設、報告對象與分區；不能刪除 Bot。</small></span></label>
+            ) : null}
             {!creating && agent ? <StoragePanel agentId={agent.id} /> : null}
             </div>
             {!creating && agent ? <div id="agent-skills-panel" role="tabpanel" aria-labelledby="agent-skills-tab" hidden={section!=="skills"}><SkillsPanel agentId={agent.id} onEditingChange={setSkillEditing}/></div> : <small>建立後即可加入技能與教學流程。</small>}

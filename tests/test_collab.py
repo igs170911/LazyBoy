@@ -82,6 +82,24 @@ async def test_a_request_wakes_the_recipient_and_its_answer_comes_back(team):
 
 
 @pytest.mark.asyncio
+async def test_a_result_too_long_for_a_message_still_comes_back_as_a_file(team):
+    chief, writer = team.bots["Chief"], team.bots["Writer"]
+    running(team, chief)
+    await team.collab.send(chief, "Writer", "把完整的調查報告給我", "request")
+    [task] = queued(team, writer)
+    team.store.patch("tasks", task["id"], state="running"); team.runtime.active[writer] = task["id"]
+    report = "調查結果。" + "細節" * 9000
+    team.runtime.finish(writer, task["id"], "answer", report)
+    await settle()
+    [back] = queued(team, chief)
+    shown = team.store.transcript(chief, chief)[-1]["content"]
+    assert shown.startswith("調查結果。") and "太長放不進訊息" in shown and len(shown) < 4000
+    path = shown.rsplit("/workspace/", 1)[1].rstrip("）")
+    assert path.startswith("from/Writer/result-")
+    assert (team.store.agent_directory(chief) / "workspace" / path).read_text(encoding="utf-8") == report
+
+
+@pytest.mark.asyncio
 async def test_silent_answers_are_hidden_and_not_sent_back(team):
     chief, writer = team.bots["Chief"], team.bots["Writer"]
     running(team, chief)
@@ -139,7 +157,7 @@ def test_mentions_match_members_and_everyone():
 @pytest.mark.asyncio
 async def test_group_chat_wakes_the_named_bot_or_everyone(team):
     chief, writer, scout = team.bots["Chief"], team.bots["Writer"], team.bots["Scout"]
-    with pytest.raises(ValueError, match="2 到 6"): team.collab.create_room([chief])
+    with pytest.raises(ValueError, match="2 到 10"): team.collab.create_room([chief])
     room = team.collab.create_room([chief, writer, scout])
     assert room["name"] == "Chief、Writer、Scout" and room["auto_name"]
     woke = await team.collab.post(room["id"], "@Writer 寫一段開場")
@@ -298,3 +316,85 @@ def test_group_attachments_are_pointed_to_on_each_members_computer():
     text = "看這份 [報價單.pdf](/api/agents/0b1e7f3a-1111-2222-3333-444455556666/files/content?path=uploads/k1/%E5%A0%B1%E5%83%B9%E5%96%AE.pdf)"
     assert attachments_in(text) == "看這份 ［附件：報價單.pdf，在你的電腦：/workspace/uploads/k1/報價單.pdf］"
     assert attachments_in("沒有附件") == "沒有附件"
+
+
+@pytest.mark.asyncio
+async def test_files_named_in_a_message_travel_to_the_recipient(team):
+    chief, writer = team.bots["Chief"], team.bots["Writer"]
+    report = team.store.agent_directory(chief) / "workspace" / "reports" / "plan.md"
+    report.parent.mkdir(parents=True, exist_ok=True); report.write_text("# plan")
+    running(team, chief)
+    await team.collab.send(chief, "Writer", "請看 /workspace/reports/plan.md，還有不存在的 /workspace/nope.txt。", "request")
+    await settle()
+    copy = team.store.agent_directory(writer) / "workspace" / "from" / "Chief" / "reports" / "plan.md"
+    assert copy.read_text() == "# plan"
+    task = queued(team, writer)[0]
+    assert "/workspace/from/Chief/reports/plan.md" in task["goal"] and "/workspace/nope.txt" in task["goal"]
+    # The sender's own chat keeps the path that works on its computer.
+    assert "請看 /workspace/reports/plan.md" in team.store.transcript(chief, chief)[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_file_that_came_from_the_recipient_points_back_at_its_own_copy(team):
+    chief, writer = team.bots["Chief"], team.bots["Writer"]
+    mine = team.store.agent_directory(writer) / "workspace" / "poc" / "run.py"
+    mine.parent.mkdir(parents=True, exist_ok=True); mine.write_text("print(1)")
+    # Chief got Writer's file earlier and keeps it at the same path; it sends it back unchanged, then changed.
+    theirs = team.store.agent_directory(chief) / "workspace" / "poc" / "run.py"
+    theirs.parent.mkdir(parents=True, exist_ok=True); theirs.write_text("print(1)")
+    running(team, chief)
+    await team.collab.send(chief, "Writer", "修一下 /workspace/poc/run.py", "request")
+    await settle()
+    assert "修一下 /workspace/poc/run.py" in queued(team, writer)[0]["goal"]
+    assert not (team.store.agent_directory(writer) / "workspace" / "from").exists()
+    # Writer edited the copy Chief sent at /workspace/from/Writer/…: the new version reaches Chief's from/Writer/.
+    copy = team.store.agent_directory(writer) / "workspace" / "from" / "Chief" / "notes.md"
+    copy.parent.mkdir(parents=True, exist_ok=True); copy.write_text("v2")
+    original = team.store.agent_directory(chief) / "workspace" / "notes.md"; original.write_text("v1")
+    running(team, writer)
+    await team.collab.send(writer, "Chief", "改好了 /workspace/from/Chief/notes.md", "fyi")
+    await settle()
+    delivered = team.store.agent_directory(chief) / "workspace" / "from" / "Writer" / "notes.md"
+    assert delivered.read_text() == "v2" and original.read_text() == "v1"
+
+
+@pytest.mark.asyncio
+async def test_a_file_received_from_one_teammate_can_be_passed_on_to_another(team):
+    chief, writer, scout = team.bots["Chief"], team.bots["Writer"], team.bots["Scout"]
+    fixed = team.store.agent_directory(chief) / "workspace" / "from" / "Writer" / "poc" / "run.py"
+    fixed.parent.mkdir(parents=True, exist_ok=True); fixed.write_text("fixed")
+    running(team, chief)
+    await team.collab.send(chief, "Scout", "請驗證 /workspace/from/Writer/poc/run.py", "request")
+    await settle()
+    goal = queued(team, scout)[0]["goal"]
+    delivered = team.store.agent_directory(scout) / "workspace" / "from" / "Chief" / "from" / "Writer" / "poc" / "run.py"
+    assert delivered.read_text() == "fixed" and "/workspace/from/Chief/from/Writer/poc/run.py" in goal
+
+
+@pytest.mark.asyncio
+async def test_handing_work_on_defers_the_answer_until_the_teammates_results_are_in(team):
+    chief, writer, scout = team.bots["Chief"], team.bots["Writer"], team.bots["Scout"]
+    sent = []
+    async def capture(*args, **kwargs): sent.append((args, kwargs))
+    # Chief asks Writer; Writer hands it to Scout and says "已派工" — that must not go back to Chief yet.
+    running(team, chief)
+    await team.collab.send(chief, "Writer", "修好 POC", "request")
+    await settle()
+    request = queued(team, writer)[0]
+    team.store.patch("tasks", request["id"], state="running"); team.runtime.active[writer] = request["id"]
+    await team.collab.send(writer, "Scout", "請你修", "request")
+    await settle()
+    team.collab.finished(writer, team.store.get("tasks", request["id"]), "answer", "已派工給 Scout")
+    await settle()
+    assert not [t for t in team.store.all("tasks") if t["agent_id"] == chief and t.get("intent") == "result"]
+    assert team.store.get("tasks", request["id"])["deferred_reply"]["to"] == chief
+    # Scout answers; Writer's turn on that result is the answer Chief gets.
+    scout_task = queued(team, scout)[0]
+    team.collab.finished(scout, scout_task, "answer", "修好了")
+    await settle()
+    result_turn = next(t for t in team.store.all("tasks") if t["agent_id"] == writer and t.get("intent") == "result")
+    assert result_turn["answers"] == request["id"] and "自動送回給 Chief" in result_turn["goal"]
+    team.collab.finished(writer, result_turn, "answer", "整合後：POC 修好且驗過")
+    await settle()
+    back = [t for t in team.store.all("tasks") if t["agent_id"] == chief and t.get("intent") == "result"]
+    assert len(back) == 1 and "整合後：POC 修好且驗過" in back[0]["goal"]

@@ -9,7 +9,7 @@ import { appendDraft, draftKey } from "./drafts";
 import { bytes, clock, dayLabel, duration, sameDay, unicodeHost } from "./format";
 import { QuestionCard, questionBlocksComposer } from "./QuestionCard";
 import { avatarProps } from "./Sidebar";
-import { useMood } from "./mood";
+import { eyeMotion, useMood } from "./mood";
 import { activityStatus } from "./status";
 import { savedSteps, stepDetail, stepLabel } from "./steps";
 import { ThreadBar, ThreadRenameDialog } from "./Threads";
@@ -104,6 +104,7 @@ function WorkCard({ agent, state, live, task, computerOpen, onOpenComputer, onSt
   const [expanded, setExpanded] = useState(false);
   const elapsed = useElapsed(task?.started_at, state !== "queued");
   const steps = live?.steps || [];
+  const motion = eyeMotion(state, steps);
   const peer = task?.from_name ? `${task.from_name} 的${INTENT_LABEL[task.intent || "request"] || "訊息"}` : "";
   const title = state === "queued" ? (peer ? `排隊處理 ${peer}` : "排隊中") : state === "stopping" ? "正在停止…" : state.startsWith("waiting") ? "等你回覆" : peer ? `正在處理 ${peer}` : "思考中";
   const notes = live?.narration || [];
@@ -115,7 +116,8 @@ function WorkCard({ agent, state, live, task, computerOpen, onOpenComputer, onSt
     <section className="work-card" aria-live="polite" aria-label="工作進度">
       <header>
         <button type="button" className="think-toggle" aria-expanded={expanded} disabled={!more} onClick={() => setExpanded(v => !v)} title={`${agent.name} ${title}`}>
-          {state === "running" || state === "stopping" ? <LoaderCircle className="spin" aria-hidden="true" /> : <Ellipsis aria-hidden="true" />}
+          {motion ? <Avatar {...avatarProps(agent)} size={20} gaze={false} motion={motion} mood={state.startsWith("waiting") ? "waiting" : "working"} />
+            : state === "running" || state === "stopping" ? <LoaderCircle className="spin" aria-hidden="true" /> : <Ellipsis aria-hidden="true" />}
           <strong className={state === "running" ? "shimmer" : undefined}>{title}</strong>
           {meta ? <small>{meta}</small> : null}
           {more ? <ChevronRight className={expanded ? "open" : undefined} aria-hidden="true" /> : null}
@@ -145,6 +147,8 @@ const VERDICTS: Record<string, { label: string; tone: string }> = {
 };
 
 const SHOWN_FILES = 3;
+/** With a mouse the eyes follow the pointer; on a touch screen they look around by themselves. */
+const FINE_POINTER = typeof matchMedia === "function" && matchMedia("(hover: hover) and (pointer: fine)").matches;
 
 function taskSeconds(task?: TaskDetail) {
   const start = task?.started_at ? Date.parse(task.started_at) : NaN;
@@ -431,7 +435,7 @@ function EmptyChat({ agent, thread, onPick }: { agent: AgentRow; thread: ThreadR
   const side = thread && !thread.main;
   return (
     <div className="chat-empty">
-      <Avatar {...avatarProps(agent)} size={72} alive mood={mood} />
+      <Avatar {...avatarProps(agent)} size={72} alive mood={mood} motion={FINE_POINTER ? null : "wander"} />
       <h2>{side ? thread.title : agent.name}</h2>
       {side ? <p className="muted">{agent.name} 的另一段對話</p> : agent.title ? <p className="muted">{agent.title}</p> : null}
       <p className="chat-empty-lead">{side
@@ -501,6 +505,8 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
   const question = session.elsewhere && !activity.room_id ? null : activity.question || null;
   const activeTaskId = activity.active_task_ids?.[0] || null;
   const computerOpen = panel.open && panel.tab === "computer";
+  const liveHere = live && live.taskId === activeTaskId ? live : null;
+  const motion = eyeMotion(activity.state, liveHere?.steps);
 
   const toBottom = useCallback((smooth = false) => {
     const el = scroller.current;
@@ -554,7 +560,7 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
       <header className="chat-header">
         {mobile ? <button type="button" className="icon-btn" aria-label="返回 Bot 清單" onClick={onBack}><ChevronLeft /></button> : null}
         <button type="button" className="chat-identity" onClick={onOpenSettings} title="Bot 設定">
-          <Avatar {...avatarProps(agent)} size={32} gaze={false} alive thinking={status.tone === "busy"} mood={mood} />
+          <Avatar {...avatarProps(agent)} size={32} gaze={false} alive thinking={status.tone === "busy"} mood={mood} motion={motion} />
           <span>
             <strong className="chat-title">{agent.name}</strong>
             <small className={`chat-status ${status.tone}`}><i aria-hidden="true" />{status.label}{agent.title && status.tone === "idle" ? ` · ${agent.title}` : ""}</small>

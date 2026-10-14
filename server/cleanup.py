@@ -6,6 +6,7 @@ Work products in /workspace are never touched. What is cleaned:
 - The bot's Chromium caches once they pass BROWSER_CACHE_LIMIT. Logins (cookies, local storage, IndexedDB) stay.
 """
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -41,6 +42,30 @@ await session.send('Network.clearBrowserCache');
 await session.detach();
 process.exit(0);
 """
+
+
+# Runs inside the bot's computer: a browser left with dozens of tabs from earlier work is slow and easy to type into
+# the wrong tab. Past TAB_LIMIT tabs, only the newest TAB_KEEP stay open; logins live in cookies, not in tabs.
+TAB_LIMIT, TAB_KEEP = 10, 6
+TIDY_TABS = """
+import { chromium } from '/opt/lazyboy/playwright/node_modules/playwright/index.mjs';
+setTimeout(() => process.exit(1), 15000);
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { timeout: 3000 });
+const pages = browser.contexts().flatMap(context => context.pages());
+const extra = pages.length > LIMIT ? pages.slice(0, pages.length - KEEP) : [];
+for (const page of extra) await page.close().catch(() => {});
+console.log(JSON.stringify({ open: pages.length, closed: extra.length }));
+process.exit(0);
+"""
+
+
+async def tidy_tabs(computers, agent_id: str) -> int:
+    """Close the oldest tabs of an idle bot's browser once it has more than TAB_LIMIT; returns how many were closed."""
+    script = TIDY_TABS.replace("LIMIT", str(TAB_LIMIT)).replace("KEEP", str(TAB_KEEP))
+    code, out, _ = await docker("exec", computers.name(agent_id), "node", "--input-type=module", "-e", script, check=False, timeout=30)
+    if code: return 0
+    try: return int(json.loads(out.strip().splitlines()[-1]).get("closed", 0))
+    except (ValueError, IndexError, AttributeError): return 0
 
 
 def size(path: Path) -> int:

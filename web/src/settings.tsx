@@ -4,6 +4,7 @@ import { SearchPanel } from "./search-settings";
 import { useDialogFocus } from "./dialog-focus";
 import { ConnectApps } from "./connect-apps";
 import { UsagePanel } from "./usage-panel";
+import { DevicesPanel } from "./devices-panel";
 import { notifyOn, notifySupported, setNotify } from "./notify";
 import { useEffect, useRef, useState } from "react";
 import { api, type AppSettings, type ModelCheck, type ModelProtocol, type ProviderPreset, type SettingsModel } from "./api";
@@ -15,13 +16,14 @@ export const APP_NAME = "LazyBoy";
 export const APP_VERSION = (import.meta.env.LAZYBOY_VERSION || "0.1.20").trim() || "0.1.20";
 export const APP_BUILD = (import.meta.env.LAZYBOY_BUILD || "20").trim() || "20";
 
-export type SettingsSectionId = "general" | "model" | "usage" | "mcp" | "updates";
+export type SettingsSectionId = "general" | "model" | "usage" | "mcp" | "devices" | "updates";
 
 const SECTIONS: readonly { id: SettingsSectionId; icon: () => React.ReactElement }[] = [
   { id: "general", icon: GearIcon },
   { id: "model", icon: ModelIcon },
   { id: "usage", icon: ChartIcon },
   { id: "mcp", icon: PlugIcon },
+  { id: "devices", icon: DevicesIcon },
   { id: "updates", icon: DownloadIcon },
 ];
 const CUSTOM_PROVIDER = "__custom__";
@@ -68,6 +70,14 @@ function ModelIcon() {
     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="6" y="6" width="12" height="12" rx="2" />
       <path d="M10 10h4v4h-4zM9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
+    </svg>
+  );
+}
+
+function DevicesIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="14" height="10" rx="1.5" /><path d="M6 18h6" /><rect x="16" y="9" width="6" height="11" rx="1.5" />
     </svg>
   );
 }
@@ -750,7 +760,7 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
     return () => window.removeEventListener("keydown", key);
   }, [onClose]);
   useEffect(() => {
-    if (initialSection === "mcp") document.getElementById("settings-mcp")?.scrollIntoView({ block: "start" });
+    if (initialSection === "mcp" || initialSection === "devices") document.getElementById(`settings-${initialSection}`)?.scrollIntoView({ block: "start" });
   }, [initialSection]);
   return <OverlayShell label={t.settingsLabel} className="mobile-settings-page" onClose={onClose}>
     <header className="mobile-settings-header">
@@ -771,6 +781,9 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
         <h3>連接應用程式</h3>
         <ConnectApps agentId={agentId} />
       </section>
+      <section id="settings-devices" aria-label="其他裝置與 App">
+        <DevicesPanel />
+      </section>
       <UpdatesPanel computer={computer} />
       {onAbout ? <button type="button" className="shell-action settings-about" onClick={onAbout}>{t.about}</button> : null}
     </div>
@@ -778,7 +791,7 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
 }
 
 function sectionName(id: SettingsSectionId, t: ReturnType<typeof useI18n>["t"]) {
-  return id === "general" ? t.general : id === "model" ? t.modelSection : id === "usage" ? "模型用量" : id === "mcp" ? "連接應用程式" : t.updates;
+  return id === "general" ? t.general : id === "model" ? t.modelSection : id === "usage" ? "模型用量" : id === "mcp" ? "連接應用程式" : id === "devices" ? "其他裝置與 App" : t.updates;
 }
 
 export function SettingsDialog({ onClose, computer, mobile = false, onAbout, agentId, initialSection = "general" }: { agentId?: string | null; onClose: () => void; computer?: SettingsComputer; mobile?: boolean; onAbout?: () => void; initialSection?: SettingsSectionId }) {
@@ -823,7 +836,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
           </button>
           <h2 id={headingId}>{sectionLabel}</h2>
           <div className="lb-settings-body">
-            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "usage" ? <UsagePanel /> : section === "mcp" ? <ConnectApps agentId={agentId} /> : <UpdatesPanel computer={computer} />}
+            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "usage" ? <UsagePanel /> : section === "mcp" ? <ConnectApps agentId={agentId} /> : section === "devices" ? <DevicesPanel /> : <UpdatesPanel computer={computer} />}
           </div>
         </section>
       </div>

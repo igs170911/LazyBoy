@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AgentGroup, type AgentRow } from "../api";
+import { api, type AgentGroup, type AgentRow, type PendingApproval } from "../api";
 
 function sameRow(a: AgentRow, b: AgentRow) {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -8,6 +8,7 @@ function sameRow(a: AgentRow, b: AgentRow) {
 export function useAgents() {
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [groups, setGroups] = useState<AgentGroup[]>([]);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const version = useRef(0);
@@ -27,6 +28,7 @@ export function useAgents() {
       if (request !== version.current) return;
       adopt(data.agents);
       setGroups(previous => JSON.stringify(previous) === JSON.stringify(data.groups) ? previous : data.groups);
+      setApprovals(previous => JSON.stringify(previous) === JSON.stringify(data.approvals) ? previous : data.approvals);
       setError("");
     } catch (err) {
       if (request === version.current) setError(err instanceof Error ? err.message : String(err));
@@ -59,5 +61,5 @@ export function useAgents() {
     if (data.agents) adopt(data.agents);
   }, [adopt]);
 
-  return { agents, groups, loaded, error, refresh, upsert, remove, applyTeam };
+  return { agents, groups, approvals, loaded, error, refresh, upsert, remove, applyTeam };
 }

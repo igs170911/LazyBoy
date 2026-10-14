@@ -9,6 +9,8 @@ from .store import Store
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("LAZYHERMES_DATA_DIR", str(ROOT / ".data"))).resolve()
 PORT = int(os.environ.get("LAZYHERMES_PORT", "8790"))
+# HTTPS for other devices (server/tls.py); 0 turns it off.
+HTTPS_PORT = int(os.environ.get("LAZYHERMES_HTTPS_PORT", "8791"))
 IMAGE = os.environ.get("LAZYHERMES_IMAGE", "lazyhermes-bot:local")
 # Set when LazyBoy itself runs in Docker (compose.yaml): the data directory is this Docker volume, bot computers
 # mount their folders from it, and the product reaches them by name on this Docker network instead of host ports.

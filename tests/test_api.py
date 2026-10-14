@@ -111,3 +111,32 @@ async def test_media_follows_the_bot_model_and_reasoning_config(service):
         assert config["agent"]["reasoning_effort"]=="high"
         invalid=await c.put("/api/settings",json={"provider":{"id":"test","models":[{"id":"text","reasoning_effort":"typo"}]}})
         assert invalid.status_code==400
+
+
+async def test_a_path_a_bot_wrote_is_told_apart_as_file_folder_or_teammates_file(service):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=service.app),base_url="http://localhost:8790") as c:
+        qa=(await c.post("/api/agents",json={"name":"QA"})).json(); lead=(await c.post("/api/agents",json={"name":"技術主管"})).json()
+        mine=service.store.agent_directory(qa["id"])/"workspace"
+        (mine/"poc/qa").mkdir(parents=True); (mine/"poc/run.py").write_text("print(1)"); (mine/"poc/.cache").mkdir()
+        (service.store.agent_directory(lead["id"])/"workspace"/"poc").mkdir(parents=True)
+        (service.store.agent_directory(lead["id"])/"workspace"/"poc/server.py").write_text("x")
+        stat=lambda path: c.get(f"/api/agents/{qa['id']}/files/stat",params={"path":path})
+        assert (await stat("/workspace/poc/run.py")).json()=={"kind":"file","bytes":8}
+        folder=(await stat("/workspace/poc/")).json()
+        assert folder["kind"]=="folder" and [e["path"] for e in folder["entries"]]==["/workspace/poc/qa","/workspace/poc/run.py"]
+        assert folder["entries"][0]["dir"] and folder["entries"][1]["bytes"]==8
+        assert (await stat("/workspace/poc/server.py")).json()=={"kind":"missing","elsewhere":[{"agent_id":lead["id"],"name":"技術主管"}]}
+        assert (await stat("/workspace/poc/gone.py")).json()=={"kind":"missing","elsewhere":[]}
+        assert (await stat("/workspace/../../settings.json")).status_code==400
+
+
+async def test_a_folder_a_bot_named_downloads_as_a_zip(service):
+    import io, zipfile
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=service.app),base_url="http://localhost:8790") as c:
+        bot=(await c.post("/api/agents",json={"name":"Builder"})).json()
+        poc=service.store.agent_directory(bot["id"])/"workspace"/"poc"
+        (poc/"qa").mkdir(parents=True); (poc/"node_modules/x").mkdir(parents=True)
+        (poc/"run.py").write_text("print(1)"); (poc/"qa/report.md").write_text("ok"); (poc/".env").write_text("SECRET"); (poc/"node_modules/x/i.js").write_text("x")
+        response=await c.get(f"/api/agents/{bot['id']}/files/content",params={"path":"/workspace/poc/"})
+        assert response.status_code==200 and response.headers["content-type"]=="application/zip" and 'poc.zip' in response.headers["content-disposition"]
+        assert sorted(zipfile.ZipFile(io.BytesIO(response.content)).namelist())==["poc/qa/report.md","poc/run.py"]

@@ -585,6 +585,46 @@ async def test_http_group_chats_and_bot_messages(api_client, product, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_http_org_chart_teams_and_approvals(api_client, product, monkeypatch):
+    from server import main
+    from server.collab import Collaboration
+    from server.org import Organization
+    collab=Collaboration(product.store, product.runtime); collab.create_agent=main.make_agent
+    monkeypatch.setattr(main, "collab", collab); monkeypatch.setattr(main, "org", Organization(product.store, product.runtime, collab))
+    client, ceo=api_client
+    built=(await client.post("/api/teams", json={"name":"工程團隊","lead":{"name":"技術主管","title":"主管"},"members":[{"name":"前端"},{"name":"後端"}],
+                                                 "reports_to":ceo,"group_chat":True,"daily_report":True})).json()
+    lead=built["lead_id"]
+    rows={a["name"]: a for a in built["agents"]}
+    assert rows["技術主管"]["reports_to"]==ceo and rows["前端"]["reports_to"]==lead and built["room_id"]
+    assert (await client.get(f"/api/agents/{lead}/routines")).json()["routines"][0]["title"]=="團隊進度日報"
+    # The lead is told who reports to it.
+    assert "向你報告的有：前端、後端" in main.org.soul_text(lead)
+    # Reporting lines never loop; only the user sets team management.
+    loop=await client.patch(f"/api/agents/{ceo}", json={"reports_to":rows["前端"]["id"]})
+    assert loop.status_code==400 and "不能反過來" in loop.json()["error"]
+    product.computers.key=lambda id: "key-"+id
+    headers={"Authorization":"Bearer key-"+lead}
+    refused=(await client.post("/internal/product", json={"action":"create_team","name":"x","lead":{"name":"a"},"members":[{"name":"b"}]}, headers=headers))
+    assert refused.status_code==400 and "團隊管理權限" in refused.json()["error"]
+    await client.patch(f"/api/agents/{lead}", json={"can_manage":True})
+    made=(await client.post("/internal/product", json={"action":"create_team","name":"QA 小組","lead":{"name":"QA 主管"},"members":[{"name":"QA 一號"}],"reports_to":"技術主管","group_chat":False}, headers=headers)).json()
+    assert made["lead"]=="QA 主管" and made["room_id"] is None
+    status=(await client.post("/internal/product", json={"action":"team_status"}, headers=headers)).json()
+    assert {row["name"] for row in status["team"]} >= {"前端","後端","QA 主管","QA 一號"}
+    # A request for approval waits in the user's inbox and the answer returns as the user's message.
+    sent=(await client.post("/internal/product", json={"action":"approval","subject":"簽約：外包設計 5 萬"}, headers=headers)).json()
+    assert sent["sent"] and (await client.get("/api/agents")).json()["approvals"][0]["subject"]=="簽約：外包設計 5 萬"
+    decided=(await client.post(f"/api/approvals/{sent['approval_id']}", json={"decision":"reject","note":"預算不夠"})).json()
+    assert decided["state"]=="rejected" and (await client.get("/api/agents")).json()["approvals"]==[]
+    assert any("【董事長核定】退回" in m["content"] for m in product.store.transcript(lead, lead))
+    chart=(await client.get("/api/org")).json()
+    assert {b["name"] for b in chart["bots"]} >= {"技術主管","QA 主管"} and chart["approval_items"][0]=="新商品定價"
+    items=(await client.put("/api/org/approval-items", json={"items":["簽約","簽約","  ","付款"]})).json()["approval_items"]
+    assert items==["簽約","付款"]
+
+
+@pytest.mark.asyncio
 async def test_http_duplicate_bot_copies_setup_but_not_history(api_client, product):
     client, agent=api_client
     await client.patch(f"/api/agents/{agent}", json={"title":"研究員","persona":"負責查資料","reply_style":"brief"})

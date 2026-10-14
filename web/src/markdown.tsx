@@ -18,6 +18,21 @@ function trimPath(path: string): string {
   return path.replace(/[)\]}>.,;:!?，。；、）】》」』*]+$/u, "");
 }
 
+// Bots write paths straight into Chinese sentences: "已寫入 /workspace/a.md，內容…", "poc.py（純標準庫）、probe.py".
+// These never belong to a file name; a full-width bracket or more Chinese right after an extension does not either.
+const SENTENCE = /[，。；、：！？「」『』《》【】]/u;
+const ENDS_WITH_EXTENSION = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
+
+/** The path a bot meant, without the sentence that runs on after it (file names may still hold Chinese and （）). */
+function cutPath(raw: string): string {
+  for (let i = 1; i < raw.length; i++) {
+    const char = raw[i];
+    if (SENTENCE.test(char)) return raw.slice(0, i);
+    if (!/[A-Za-z0-9._~\/-]/.test(char) && ENDS_WITH_EXTENSION.test(raw.slice(0, i))) return raw.slice(0, i);
+  }
+  return raw;
+}
+
 function isPathChar(value: string): boolean {
   return /[A-Za-z0-9._~/-]/.test(value);
 }
@@ -101,7 +116,9 @@ function linkifyText(text: string, known: readonly string[]): string {
   const insideLink = (start: number, end: number) => linked.some(([from, to]) => start < to && end > from);
   for (const match of text.matchAll(new RegExp(BOX_PATH.source, BOX_PATH.flags))) {
     if (match.index === undefined) continue;
-    const trimmed = trimPath(match[0]);
+    const trimmed = trimPath(cutPath(match[0]));
+    // "/workspace/from/水哥哥/…/poc.py": the bot left part of the path out, so it names no real file.
+    if (/…|\.\.\./.test(trimmed)) continue;
     const path = normalizeChatPath(trimmed);
     if (!path) continue;
     const before = text.slice(Math.max(0, match.index - 2), match.index);

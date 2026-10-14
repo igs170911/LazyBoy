@@ -19,9 +19,15 @@ from .model_check import friendly
 from .store import now, uid
 from .teaching import key_shots, lesson_prompt
 from .collab import is_silent
+from .zhtw import to_traditional
 
 # A follow-up that points back at a picture: re-attach the thread's recent uploads.
 PHOTO_WORDS = re.compile(r"照片|圖片|相片|截圖|這張|那張|張圖|photo|image|picture|screenshot", re.I)
+# A routine fires while nobody is watching: the instructions the user wrote are the permission, so the bot finishes
+# the job instead of stopping to ask the same question every day. Anything new still goes to 待你核定.
+ROUTINE_FRAME = ("【定時任務「{title}」時間到了，使用者現在不在旁邊】下面是使用者事先寫好的指示。指示裡寫明要做的事就是使用者的授權，"
+                 "照規則直接做完並回報結果，不要停下來問要不要做。只有指示沒涵蓋的新決定（新對象、新商品或連結、花錢、刪除），"
+                 "或你的設定要求先取得同意的動作，才用 request_approval 送到「待你核定」。\n\n")
 
 log = logging.getLogger(__name__)
 TERMINAL = {"terminal"}
@@ -131,6 +137,8 @@ class Runtime:
         self.closed = False
         # Set by Collaboration: routes answers between bots and group chats when a turn ends.
         self.collab = None
+        # Called with a bot's id when it has nothing left to do (main.py tidies its browser then).
+        self.on_idle = None
 
     def agent(self, id):
         value = self.store.get("agents", id)
@@ -148,14 +156,15 @@ class Runtime:
         if not thread_id or thread_id == id:
             return {"id": id, "agent_id": id, "main": True, "title": agent.get("main_thread_title") or "主要對話",
                     "title_source": "user" if agent.get("main_thread_title") else None,
-                    "created_at": agent.get("created_at"), "updated_at": agent.get("created_at"), "hermes_session": agent.get("hermes_session")}
+                    "created_at": agent.get("created_at"), "updated_at": agent.get("created_at"), "hermes_session": agent.get("hermes_session"),
+                    "hermes_binding": agent.get("hermes_binding")}
         value = self.store.get("threads", thread_id)
         if not value or value.get("agent_id") != id: raise KeyError(thread_id)
         return {**value, "main": False}
 
     def patch_thread(self, id, thread_id, **fields):
         if thread_id == id:
-            mapped = {"main_thread_title" if key == "title" else key: value for key, value in fields.items() if key in {"title", "hermes_session", "live_session"}}
+            mapped = {"main_thread_title" if key == "title" else key: value for key, value in fields.items() if key in {"title", "hermes_session", "live_session", "hermes_binding"}}
             if mapped: self.store.patch("agents", id, **mapped)
             return
         self.store.patch("threads", thread_id, **fields)
@@ -273,11 +282,11 @@ class Runtime:
             self._client_cache(client, "product_sessions")[thread_id] = sid
         return sid
 
-    async def submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None, peer=None):
+    async def submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None, peer=None, auto=None):
         async with self.admission_locks.setdefault(id, asyncio.Lock()):
-            return await self._submit(id, text, request_id, force_queue=force_queue, routine=routine, thread=thread, lesson=lesson, peer=peer)
+            return await self._submit(id, text, request_id, force_queue=force_queue, routine=routine, thread=thread, lesson=lesson, peer=peer, auto=auto)
 
-    async def _submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None, peer=None):
+    async def _submit(self, id, text, request_id=None, *, force_queue=False, routine=None, thread=None, lesson=None, peer=None, auto=None):
         thread_id = self.thread(id, thread)["id"]
         if not isinstance(text,str) or not text.strip(): raise ValueError("請輸入要做的工作")
         if len(text)>64000: raise ValueError("訊息最多 64000 字元")
@@ -311,7 +320,9 @@ class Runtime:
         task={"id":task_id,"agent_id":id,"thread_id":thread_id,"goal":text,"state":"queued","verdict":None,"created_at":now(),
               "result":None,"artifacts":[],"milestones":[],"request_id":request_id,"routine_id":routine,**({"lesson_id":lesson} if lesson else {}),
               # A message from another bot or a group chat: who sent it, and where its answer goes.
-              **{k:v for k,v in (peer or {}).items() if k!="peer_text"}}
+              **{k:v for k,v in (peer or {}).items() if k!="peer_text"},
+              # The bot carrying on with its own unfinished plan (auto_continue below): behind anything the user sends.
+              **({"auto_continue":auto["depth"],"continue_root":auto["root"],"auto_unattended":auto["unattended"],"low_priority":True} if auto else {})}
         # Persist admission + task + user message together, before any executor starts.
         origin = {"routine_id": routine, "routine_title": (self.store.get("routines", routine) or {}).get("title", "")} if routine else {}
         if lesson: origin["lesson_id"] = lesson
@@ -321,8 +332,9 @@ class Runtime:
         with self.store.transaction():
             self.store.admit(id,request_id,task_id,text)
             self.store.put("tasks",task_id,task)
-            self.store.message(id,"user",(peer or {}).get("peer_text") or text,thread=thread_id,**origin)
-            self.touch_thread(id,thread_id,text if not peer else "")
+            if auto: self.store.message(id,"event",auto["shown"],thread=thread_id,event="auto_continue")
+            else: self.store.message(id,"user",(peer or {}).get("peer_text") or text,thread=thread_id,**origin)
+            self.touch_thread(id,thread_id,text if not (peer or auto) else "")
             self.emit(id,"user_message",{},task_id)
         self.kick(id)
         return {"queued":task_id}
@@ -386,6 +398,12 @@ class Runtime:
                 binding = (provider, model, selected.get("base_url"), self.settings.protocol(selected, model), bool(self.settings.model_row(selected,model).get("vision")))
                 # Model and effort are per native session, so each thread keeps its own record.
                 configured = self._client_cache(client, "product_bindings")
+                thread = self.thread(id, self.task_thread(task))
+                saved = thread.get("hermes_binding") or {}
+                if sid not in configured and saved.get("session") == thread.get("hermes_session") and tuple(saved.get("value") or ()) == binding:
+                    # Same model as before the product restarted: switching again would only tell the bot, as a
+                    # user message, that its model "changed", and it answers that instead of the real request.
+                    configured[sid] = (binding, None)
                 previous_binding, previous_effort = configured.get(sid, (None, None))
                 binding_changed = previous_binding != binding
                 if binding_changed:
@@ -401,6 +419,7 @@ class Runtime:
                         except Exception as exc:
                             log.warning("Resumed agent not ready yet (attempt %s): %s", attempt + 1, exc)
                     await client.call("config.set", {"session_id": sid, "key": "model", "value": model + " --provider custom:product", "confirm_expensive_model": True})
+                    self.patch_thread(id, thread["id"], hermes_binding={"session": thread.get("hermes_session"), "value": list(binding)})
                 if binding_changed or previous_effort != effort:
                     await client.call("config.set", {"session_id": sid, "key": "reasoning", "value": effort})
                 configured[sid] = (binding, effort)
@@ -540,6 +559,8 @@ class Runtime:
                 text += "\n圖片也直接附在這則訊息裡；先看圖回答這則訊息。"
         elif PHOTO_WORDS.search(text) and (earlier := self._recent_images(id,task)):
             text += "\n\n使用者提到的圖片是這段對話稍早上傳的，已重新附上：\n"+"\n".join(earlier)
+        if task and task.get("routine_id"):
+            text = ROUTINE_FRAME.format(title=(self.store.get("routines",task["routine_id"]) or {}).get("title") or "排程") + text
         return text
 
     def skill_state(self, id):
@@ -550,6 +571,8 @@ class Runtime:
         task=self.task(task_id)
         if task["state"]=="terminal": return
         content=text or self.streams.get(task_id,"") or ("已停止，先前檔案與對話已保留。" if verdict=="cancelled" else "工作已結束。")
+        # A model that slips into Simplified Chinese still answers in Taiwan Traditional.
+        content=to_traditional(content)
         hint=friendly(content) if verdict=="failed" else None
         if hint: content=hint+"\n\n> 原始錯誤："+" ".join(content.split())[:600]
         silent=bool(task.get("from_agent") or task.get("room_id")) and verdict!="failed" and is_silent(content)
@@ -564,6 +587,55 @@ class Runtime:
         event=self.finished.get(task_id)
         if event: event.set()
         if self.collab: self.collab.finished(id,self.task(task_id),verdict,content)
+        self.auto_continue(id,self.task(task_id),verdict,content)
+        if self.on_idle and not self.closed and not [t for t in self.store.agent_tasks(id,live=True) if t["id"]!=task_id]:
+            with contextlib.suppress(RuntimeError): asyncio.get_running_loop().create_task(self.on_idle(id))
+
+    AUTO_CONTINUE = 2
+    # The bot needs the person for these (signing in, a code, money, a decision that is theirs): never pushed on.
+    # That includes the go-ahead for something that leaves the computer (posting, sending, deleting, buying): the bot
+    # chose to ask first, and being told "don't ask, finish it" would publish without anyone having looked.
+    OUTWARD = r"(發|寄|送|貼|回覆|留言|刪|買|下單|付|上架|公開|發佈|發布)"
+    NEEDS_PERSON = re.compile(r"登入|驗證碼|密碼|付款|刷卡|核定|核准|同意|授權|二階段|2FA|captcha|"
+                              rf"確認[^。\n]{{0,12}}(再|才|就){OUTWARD}|要不要{OUTWARD}|可以{OUTWARD}[^。\n]{{0,6}}嗎|{OUTWARD}出去嗎", re.I)
+    # Handing the work back instead of finishing it: asking whether to go on, or asking the person to do a step.
+    HANDS_BACK = re.compile(r"要我(先|再)?(繼續|接著|去)|還是你(要)?(直接|自己|手動|幫)|需要你(幫|做|處理|接手)|你方便的話|(建議|請)你(先)?接手|"
+                            r"手動[^。\n]{0,40}(貼|傳|給)(給)?我|"
+                            r"請你(在|到|先|幫|手動|自己|直接)?(後台|網頁|手機)?[^。\n]{0,12}(點|貼|複製|確認|提供|找|挑|傳)[^。\n]{0,20}(給我|過來|一下)?|"
+                            r"你(手動|自己)(點|貼|複製|找|挑)")
+
+    def auto_continue(self,id,task,verdict,content):
+        """A turn that ends with its own plan unfinished, for no reason the person has to handle, carries on by itself
+        (at most AUTO_CONTINUE more turns per request) instead of asking whether to go on or handing the work back."""
+        if verdict!="answer" or self.closed or task.get("from_agent") or task.get("room_id") or task.get("lesson_id") or task.get("kind")=="background": return
+        depth=int(task.get("auto_continue") or 0)
+        left=[step["content"] for step in task.get("plan") or [] if step.get("status") in {"pending","in_progress"}]
+        text=content or ""
+        handed=self.HANDS_BACK.search(text)
+        handed_back=bool(handed)
+        # Judge the ask itself: the paragraph that hands the work back, else the end of the report. A login the bot
+        # mentions elsewhere (another task's) does not mean this work is waiting on one.
+        if handed:
+            start=text.rfind("\n\n",0,handed.start())+1
+            end=text.find("\n\n",handed.end())
+            ask=text[start:end if end>=0 else len(text)]
+        else: ask=text[-300:]
+        if depth>=self.AUTO_CONTINUE or not (left or handed_back) or self.NEEDS_PERSON.search(ask): return
+        if any(row.get("task_id")==task["id"] and row.get("state")=="pending" for row in self.store.all("approvals")): return
+        # Whatever the person sent meanwhile comes first, and may change the plan.
+        if any(t["state"]=="queued" and not t.get("low_priority") for t in self.store.agent_tasks(id,live=True)): return
+        unfinished=("你的計畫還有這些沒完成：\n"+"\n".join(f"- {item}" for item in left)) if left else \
+            "你剛才停下來，把還沒做完的部分交回給使用者（問要不要繼續，或請使用者自己去點、貼、確認）。"
+        text=("（系統自動繼續）"+unfinished+
+              "\n請自己接著做完：失敗的步驟換做法再試（改讀頁面 HTML、改點別的按鈕或入口、重新整理、用桌面工具截圖後真的用滑鼠點、換關鍵字或來源），"
+              "不要問使用者要不要繼續，也不要請使用者代勞整件事。真的需要人做一小步（驗證、點不動的按鈕）時，用 clarify 請使用者在電腦面板做完後按「交還給 Bot」，再接著做。"
+              "只有需要使用者登入、驗證碼、付款或核定時，才停下來說明需要什麼。做完後給一份完整的最終回報，包含先前已完成的部分。")
+        auto={"depth":depth+1,"root":task.get("continue_root") or task["id"],"unattended":self.unattended(task),
+              "shown":f"自動繼續：計畫還有 {len(left)} 項沒完成" if left else "自動繼續：自己把剩下的做完"}
+        async def go():
+            try: await self.submit(id,text,f"continue-{task['id']}",force_queue=True,thread=self.task_thread(task),auto=auto)
+            except Exception: log.exception("Could not continue task %s",task["id"])
+        asyncio.get_running_loop().create_task(go())
 
     async def event(self,id,event):
         task_id=self.active.get(id)
@@ -659,7 +731,7 @@ class Runtime:
     def side_report(self,id,sid,payload):
         """Hermes reports finished background work in the thread that started it, even while this bot is busy in
         another thread. That turn has no task of ours; its reply is still kept in its own thread."""
-        text=str(payload.get("text") or "").strip()
+        text=to_traditional(str(payload.get("text") or "").strip())
         thread_id=self.session_thread(id,self.clients.get(id),sid)
         if not text or not thread_id: return
         self.store.message(id,"assistant",text,thread=thread_id,background_report=True)
@@ -822,7 +894,7 @@ class Runtime:
     @staticmethod
     def unattended(task):
         """A turn nobody is watching: started by another bot, a routine, a bot's hand-off in a group, or Hermes itself."""
-        return bool(task.get("from_agent") or task.get("routine_id") or task.get("kind")=="background"
+        return bool(task.get("from_agent") or task.get("routine_id") or task.get("kind")=="background" or task.get("auto_unattended")
                     or (task.get("room_id") and task.get("low_priority")))
 
     async def expire_question(self,id,task_id):

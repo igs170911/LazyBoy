@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { dismissBoot } from "./boot";
 
 /** One broken piece of data must not leave a blank page: show what happened and a way back. */
 export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -6,7 +7,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
 
   static getDerivedStateFromError(error: Error) { return { error }; }
 
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error("LazyBoy crashed", error, info.componentStack); }
+  componentDidCatch(error: Error, info: ErrorInfo) { dismissBoot(); console.error("LazyBoy crashed", error, info.componentStack); }
 
   render() {
     if (!this.state.error) return this.props.children;

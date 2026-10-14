@@ -15,6 +15,7 @@ import yaml
 YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 from .config import DATA, DATA_VOLUME, IMAGE, NETWORK, PORT, ROOT, SEARCH_PROVIDERS, private_write
+from .skills import Skills
 
 # Two CPUs, enforced in 10 ms slices: with Docker's default 100 ms period a busy
 # Chromium spends the whole quota early and freezes the desktop stream (and
@@ -35,8 +36,9 @@ ASK_FIRST_ACTIONS = {"send": "寄出或傳送訊息給別人（Email、聊天、
 def ask_first_text(chosen):
     actions = [ASK_FIRST_ACTIONS[key] for key in ("send", "publish", "pay", "delete") if key in (chosen or [])]
     if not actions: return ""
-    return ("以下動作執行前，一定先用 clarify 說明要做什麼（對象、內容、金額或範圍）並等使用者同意；沒有同意就停在草稿或準備好的狀態："
-            + "；".join(actions) + "。")
+    return ("以下動作執行前，一定先取得使用者同意：" + "；".join(actions) + "。"
+            "使用者正在對話時用 clarify 說明要做什麼（對象、內容、金額或範圍）並等回覆；定時任務、隊友交辦或背景工作時，"
+            "改用 request_approval 送到「待你核定」（不會過期），核准結果回來後才執行；沒有同意就停在草稿或準備好的狀態。")
 
 
 REPLY_LENGTH = {
@@ -203,6 +205,12 @@ class Computers:
                     "agent": {"max_iterations": 200, "reasoning_effort": self.settings.reasoning(selected, model), "image_input_mode": "native" if vision else "text"},
                     "display": {"busy_input_mode": "steer", "interim_assistant_messages": True}})
         cfg.setdefault("onboarding", {})["profile_build"] = "off"
+        # A bot people keep talking to for days piles up old web pages and tool output, all resent on every call:
+        # each step gets slow and costly long before Hermes' own trigger (75% of a 200K window). Old bulky tool
+        # results are trimmed without a model call past 48K tokens, and the conversation is summarized at 100K.
+        compression = cfg.setdefault("compression", {})
+        compression.setdefault("proactive_prune_tokens", 48000)
+        compression.setdefault("threshold_tokens", 100000)
         # Product admission owns recovery. Never let Hermes resubmit a crash marker.
         cfg.setdefault("desktop", {}).setdefault("auto_continue", {})["enabled"] = False
         managed = cfg.pop("product_managed_mcp", [])
@@ -218,6 +226,9 @@ class Computers:
         for name, server in {**shared, **local}.items():
             if server.get("enabled", True): cfg["mcp_servers"][name] = {k:v for k,v in server.items() if k not in {"server","transport","enabled","catalog","disabled_tools"}}
             else: cfg["mcp_servers"].pop(name, None)
+        # Hermes sends the name and summary of every listed skill with each request. Built-in skills this bot has not
+        # used lately wait in its skill library instead, found with skill_library when a task needs one.
+        library = Skills(self.store).apply_library(id, cfg)
         if write_changed(cfg_path, yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)) or tools_changed:
             self.mcp_dirty.add(id)
         env_path = root / "hermes" / ".env"
@@ -235,7 +246,7 @@ class Computers:
         write_changed(written_path, "\n".join(sorted(ours)) + "\n")
         persona = agent.get("persona") or agent.get("description") or ""
         soul = f"# {agent['name']}\n\n{agent.get('title','')}\n\n{persona}\n\n" + (
-            "你是常駐在自己電腦裡的 Bot。使用繁體中文。網頁是使用者與你的主要入口。"
+            "你是常駐在自己電腦裡的 Bot。一律使用繁體中文（台灣用語），回覆、檔案與替使用者寫的貼文都一樣；來源是簡體時改寫成繁體。網頁是使用者與你的主要入口。"
             "使用網頁功能名稱引導使用者，不提供 /help 等終端介面操作指引。"
             "工具在你的獨立電腦裡執行，工作檔案保存於 /workspace。"
             "公開資訊先 web_search，讀網頁內容用 web_extract（不要用 curl 抓 HTML）；登入網站使用 browser_exec，連線的是使用者可接手的同一個 Chromium。"
@@ -248,19 +259,44 @@ class Computers:
             "使用者要你處理這類服務但工具清單裡沒有時，告訴他可以到「設定 → 連接應用程式」連接，登入一次所有 Bot 都能用。"
             "使用者訊息裡的「@名字」：是隊友 Bot 就用 message_bot 請它處理或協助；是群組對話就用 post_to_group 在那個群組發言；是已連接的應用程式就用它的工具。"
             "「使用「某某」技能」表示先載入那個技能，照它的步驟做。"
-            "依當前觀察操作，錯誤後先診斷原因；同一網址或同一操作失敗兩次就換方法（搜尋、web_fetch 或桌面工具），不要重試第三次。"
+            "依當前觀察操作，錯誤後先診斷原因。同一個做法失敗兩次，就換另一個做法，不要用同一個做法重試第三次："
+            "例如改讀頁面 HTML 或網路請求、改點別的按鈕或入口、重新整理或開新分頁、用桌面工具截圖後操作、換關鍵字或篩選、用 web_search／web_fetch 從別的來源取得。"
+            "網頁輸入框用程式填字（設定 value、textContent、insertText）後按鈕沒出現或內容沒存，是因為多數社群與表單的編輯器只認真實輸入："
+            "改用真實的滑鼠點擊加逐字鍵盤輸入（browser_exec 裡用 page.mouse／page.keyboard.type，或桌面工具 desktop_act 的點擊與打字），送出前確認文字與送出按鈕都出現。"
+            "送出按鈕常常只是圖示（箭頭、紙飛機、勾勾）而沒有「發佈」「送出」字樣：找不到字就看 aria-label、輸入框旁邊新出現的按鈕，或截圖辨認。"
+            "換過幾種做法都不行，才回報卡在哪一步、試過什麼。"
             "等待頁面時等待特定文字或元素出現，不要固定等秒數。"
-            "需要登入時告知使用者打開電腦面板接手，不在對話索取密碼。"
+            "需要真人做一小步時（登入、驗證碼、防機器人驗證、自動化點不動的按鈕），用 clarify 請使用者打開電腦面板做那一步，做完按「交還給 Bot」，"
+            "你再接著把整件事做完；不要因此結束工作，也不要請使用者自己完成整件事或把結果貼給你。不在對話索取密碼。"
             "有需要澄清的問題使用 clarify。完成後驗證結果，區分已完成、估計和未取得的資料。"
             "根據網路資料回答時，在答案最後附上實際引用的來源網址。"
             "可交付檔案請放在 /workspace，並在回答提供實際路徑。"
             "寫程式、建專案、修 bug 或重構時，使用 grok-build 技能交給 Grok Build CLI，自己負責驗收與摘要。"
+            + (f"技能清單只列常用的；另有 {len(library)} 個內建技能放在技能庫（例如 PDF、Excel、Word、簡報、Email、影片、地圖、論文搜尋）。"
+               "清單裡沒有合適的技能時，先用 skill_library 以英文關鍵字搜尋，找到就載入照做。"
+               "要新增技能前，先看清單裡有沒有做同一件事的技能；有就更新那一個，不要再建一個相似的。" if library else
+               "要新增技能前，先看技能清單裡有沒有做同一件事的技能；有就更新那一個，不要再建一個相似的。") +
             "\n\n## 回覆風格\n"
             "網頁已即時顯示你使用的工具與步驟，回覆不要描述過程（「我先搜尋…」「接著打開…」），工具之間也不要寫旁白。"
+            "用一般人看得懂的話回覆：不寫程式欄位或內部名稱（例如 enabled = false、jitter_minutes、task_id），改說「已暫停」「時間會隨機延後」。"
             + REPLY_LENGTH.get(agent.get("reply_style") or "", REPLY_LENGTH[""]) + ask_first_text(agent.get("ask_first")) +
-            "內容較長的報告、清單或資料寫成 /workspace 裡的 Markdown 檔案，對話只放 3 到 5 行摘要與檔案路徑。"
+            "還在討論的方案、草稿與選項直接寫在對話裡，不要另存檔案；定版的成果、使用者要的檔案，或很長的資料表，才寫成 /workspace 裡的檔案，對話放 3 到 5 行摘要與路徑。"
             "Markdown 適度使用：不用 # 與 ## 大標題，分段需要時用 ### 小標或粗體；清單只用於並列項目；"
             "比較三項以上才用表格；注意事項可用 > [!NOTE]、> [!TIP] 或 > [!WARNING]。"
+            "\n\n## 自己把事情做完\n"
+            "使用者交代方向後，由你規劃並做到完成，不要每一步都問「要我…嗎？」或等使用者點頭。"
+            "開始前如果有會大幅影響結果、又猜不到的關鍵選擇（目標、預算、要用哪個帳號、風格），用 clarify 一次問完並附上你的建議；"
+            "使用者說「你決定」「自由發揮」「同意」時，就照你的建議做到底。"
+            "工具失敗或找不到資料時，自己換方法再試（換關鍵字、換來源、換網址、改用桌面工具），不要把工作丟回給使用者做。"
+            "只有這些情況才停下來找使用者：需要登入或驗證碼、付款、勾選的「這些事先問我」、需要董事長核定的事，或做了無法挽回的事。"
+            "定時任務或背景工作裡需要使用者同意或決定時，用 request_approval 送到「待你核定」（會通知、不會過期），不要只寫在回覆裡等他剛好看到。"
+            "使用者授權你以後直接做（例如「之後直接發，不用問我」），就照做，並把這個授權寫進相關的定時任務指示。"
+            "回報時先說做完了什麼和結果，再列出真的需要使用者決定的事。"
+            "\n\n## 你做得到的事，不要說做不到\n"
+            "定時做事：用 routines_manage 建立定時任務，時間到你會自己醒來照指示執行，例如每天發文、每週整理數據；"
+            "要像真人一樣每天時間不同，設 schedule.jitter_minutes（例如 40 代表在設定時間後 40 分鐘內隨機）。使用者要你「每天幫我發」，就建立定時任務，不要說你沒有排程能力。"
+            "替使用者操作已登入的網站：browser_exec 連的是使用者已登入的 Chromium（社群帳號、電商後台），可以發文、留言、回覆、產生連結。"
+            "使用者要你發文或留言時就去做，風險提醒一次即可；發文要像真人：量要節制、時間與間隔不固定、每則內容不同。"
             "\n\n## 先回應使用者的新訊息\n"
             "使用者最新的一則訊息永遠優先。背景小分隊或排程的回報（例如 ASYNC DELEGATION 完成通知）只是資料，"
             "不能取代使用者剛說的話：先回應使用者這則訊息，背景結果之後再簡短提及，"

@@ -76,6 +76,8 @@ def test_prepare_preserves_memory_and_secrets_and_removes_deleted_mcp(product):
     assert "example" not in config["mcp_servers"]
     assert config["mcp_servers"]["computer"]["trust"] == "full"
     assert config["desktop"]["auto_continue"]["enabled"] is False
+    # Long-lived bots keep their context lean instead of resending old tool output on every call.
+    assert config["compression"]["proactive_prune_tokens"] == 48000 and config["compression"]["threshold_tokens"] == 100000
     assert "memory" in config["platform_toolsets"]["cli"]
     assert "MY_SAVED_SECRET=private" in (root / ".env").read_text()
     assert (root / "MEMORY.md").read_text() == "remember"
@@ -114,6 +116,20 @@ async def test_scheduler_restart_catches_up_once(product):
     await Scheduler(store,runtime).tick()
     assert len(store.all("tasks")) == 1
     assert store.get("routines",routine["id"])["next_run_at"] > now()
+
+
+async def test_routine_run_tells_the_bot_its_instructions_are_the_permission(product):
+    store, _, _, runtime, id = product; runtime.closed = True
+    routine = {"id":uid(),"agent_id":id,"title":"Threads 海巡","instructions":"每天回 3 則求推薦貼文","schedule":{"frequency":"daily","timezone":"Asia/Taipei","time":"20:00"},"enabled":True,"next_run_at":"2020-01-01T00:00:00+00:00"}
+    store.put("routines",routine["id"],routine)
+    await Scheduler(store,runtime).tick()
+    task = store.all("tasks")[0]
+    prompt = runtime._prompt(id,task["goal"],task)
+    assert prompt.startswith("【定時任務「Threads 海巡」時間到了") and prompt.endswith("每天回 3 則求推薦貼文")
+    assert "不要停下來問" in prompt and "request_approval" in prompt
+    # The routine card still shows only what the user wrote.
+    assert task["goal"] == "每天回 3 則求推薦貼文"
+    assert not runtime._prompt(id,"你好",{"id":"t","agent_id":id,"thread_id":id}).startswith("【定時任務")
 
 
 def test_timezone_weekday_and_invalid_time():
@@ -191,6 +207,21 @@ def test_prepare_enables_agent_tools_skips_smart_approval_and_writes_search_key(
     settings.update({"search": {"provider": "exa"}})
     assert settings.search()["api_key"] == "" and settings.search()["xai_api_key"] == "xai-key"
     with pytest.raises(ValueError): settings.update({"search": {"provider": "google"}})
+
+
+def test_prepare_moves_unused_builtin_skills_to_the_library_and_tells_the_bot(product):
+    from server.skills import dir_hash
+    store, _, computers, _, id = product
+    root = store.agent_directory(id) / "hermes" / "skills"
+    (root / "productivity/pdf").mkdir(parents=True)
+    (root / "productivity/pdf/SKILL.md").write_text("---\nname: pdf\ndescription: PDF files\n---\n\nUse pypdf.")
+    (root / ".bundled_manifest").write_text(f"pdf:{dir_hash(root / 'productivity/pdf')}\n")
+    computers.prepare(id)
+    import yaml
+    config = yaml.safe_load((root.parent / "config.yaml").read_text())
+    assert config["skills"]["disabled"] == ["pdf"] and config["product_skill_library"] == ["pdf"]
+    soul = (root.parent / "SOUL.md").read_text()
+    assert "1 個內建技能放在技能庫" in soul and "skill_library" in soul and "不要再建一個相似的" in soul
 
 
 async def test_failed_tool_reaches_the_step_timeline(product):
@@ -311,6 +342,8 @@ def test_failed_provider_errors_get_a_plain_language_first_line(product):
     runtime.finish(id, task, "failed", "custom:product rejected this request as malformed. Run hermes doctor.\n\nProvider said: HTTP 400: Model does not support this protocol.")
     reply = store.transcript(id)[-1]["content"]
     assert reply.startswith("模型的 API 介面設定不對") and "原始錯誤：" in reply and "hermes doctor" in reply
+    from server.model_check import friendly
+    assert friendly("custom:product rate-limited every one of 3 attempts — it looks temporarily unavailable. Wait a minute and send /retry").startswith("模型供應商暫時忙碌")
 
 
 async def test_model_switch_waits_for_a_resumed_agent(product):
@@ -331,6 +364,37 @@ async def test_model_switch_waits_for_a_resumed_agent(product):
     await runtime.submit(id, "hello", "r1")
     await asyncio.wait_for(runtime.runners[id], 5)
     assert calls.index("approval.pending") < calls.index("config.set")
+
+
+async def test_restart_does_not_switch_a_session_to_the_model_it_already_uses(product):
+    store, settings, computers, runtime, id = product
+    settings.update({"provider": {"id": "relay", "base_url": "https://relay.example/v1", "api_key": "k", "models": [{"id": "m", "protocol": "messages"}, {"id": "n", "protocol": "messages"}]}, "active": "relay", "model": "m"})
+    switches = []
+    def connect():
+        async def call(method, params=None, *a, **k):
+            if method == "config.set" and params["key"] == "model": switches.append(params["value"])
+            if method == "prompt.submit": runtime.finish(id, runtime.active[id], "answer", "ok")
+            return {}
+        return SimpleNamespace(alive=True, call=call)
+    client = connect()
+    async def current_client(_): return client
+    async def same_session(*_): return "sid"
+    async def no_files(*_, **__): return []
+    runtime.client, runtime.session, runtime.refresh_files = current_client, same_session, no_files
+    computers.prepare = lambda _: None
+    async def turn(text):
+        await runtime.submit(id, text, uid())
+        await asyncio.wait_for(runtime.runners[id], 5)
+    await turn("hello")
+    assert switches == ["m --provider custom:product"]
+    # The product restarts: a new connection, the same Hermes session, the same model. Switching again would add a
+    # "the active model has changed" note the bot answers as if the user had asked about it.
+    client = connect()
+    await turn("again")
+    assert switches == ["m --provider custom:product"]
+    settings.update({"model": "n"})
+    await turn("on another model")
+    assert switches == ["m --provider custom:product", "n --provider custom:product"]
 
 
 async def test_watchdog_interrupt_reported_as_failure_not_user_stop(product):
@@ -558,6 +622,49 @@ def test_ask_first_boundaries_are_written_into_the_bots_instructions(product):
     store, _, computers, _, id = product
     store.patch("agents", id, ask_first=["pay", "send"])
     soul = (computers.prepare(id) / "hermes" / "SOUL.md").read_text()
-    assert "先用 clarify" in soul and "付款、購買" in soul and "寄出或傳送訊息" in soul and "公開發佈" not in soul
+    assert "一定先取得使用者同意" in soul and "付款、購買" in soul and "寄出或傳送訊息" in soul and "公開發佈" not in soul
+    # Unattended work asks through the approvals inbox, which never expires.
+    assert "request_approval" in soul.split("一定先取得使用者同意")[1].split("。\n")[0] or "改用 request_approval" in soul
     store.patch("agents", id, ask_first=[])
-    assert "先用 clarify 說明要做什麼" not in (computers.prepare(id) / "hermes" / "SOUL.md").read_text()
+    assert "一定先取得使用者同意" not in (computers.prepare(id) / "hermes" / "SOUL.md").read_text()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_stops_with_its_plan_unfinished_carries_on_by_itself(product):
+    store, _, _, runtime, id = product
+    runtime.closed = False
+    queued = []
+    async def submit(agent, text, request_id=None, **kwargs): queued.append((text, request_id, kwargs)); return {"queued": "next"}
+    runtime.submit = submit
+    plan = [{"content": "挑出 3 個商品", "status": "completed"}, {"content": "找 Threads 新貼文", "status": "pending"}]
+    def finished(text, **fields):
+        key = uid()
+        store.put("tasks", key, {"id": key, "agent_id": id, "thread_id": id, "goal": "衝分潤", "state": "running", "created_at": now(), "plan": plan, **fields})
+        runtime.finish(id, key, "answer", text)
+        return key
+    first = finished("商品挑好了，Threads 還沒找到。要我繼續嗎？")
+    await asyncio.sleep(0)
+    text, request_id, kwargs = queued.pop()
+    assert "找 Threads 新貼文" in text and "不要問使用者要不要繼續" in text and request_id == f"continue-{first}"
+    assert kwargs["auto"]["depth"] == 1 and kwargs["auto"]["shown"] == "自動繼續：計畫還有 1 項沒完成" and kwargs["force_queue"]
+    # No plan, but the work was handed back to the person: it carries on too. A question about direction does not.
+    plan = []
+    finished("短鏈讀不到，請你在蝦皮後台手動點一次取得連結，把短鏈貼給我")
+    finished("你想走省錢路線，還是嘴碎路線？")
+    # A login mentioned in passing earlier in the report does not stop it; one asked for at the end does.
+    finished("未完成：廣告要你登入 Meta。\n\n需要你做的一小步：\n請在電腦上點回覆列、貼上草稿，按送出，然後按交還給 Bot。\n\n另外：\n- Meta 廣告活動需要你登入後建立。")
+    await asyncio.sleep(0)
+    assert len(queued) == 2 and all(item[2]["auto"]["shown"] == "自動繼續：自己把剩下的做完" for item in queued)
+    queued.clear()
+    plan = [{"content": "找 Threads 新貼文", "status": "pending"}]
+    # Needing the person, a turn already continued twice, or a new message from the user: it stops and reports.
+    finished("需要你先登入 Threads 才能繼續")
+    # Asking for the go-ahead before posting or sending is the person's call, even worded as a hand-back.
+    finished("三則留言的草稿寫好了，請你確認內容後我再發。")
+    finished("草稿在 /workspace/reports/drafts.md，要不要發出去？")
+    finished("信件已經擬好，請你看一下，可以寄出去嗎？")
+    finished("還差一點", auto_continue=2)
+    store.put("tasks", "user-next", {"id": "user-next", "agent_id": id, "thread_id": id, "goal": "改一下", "state": "queued", "created_at": now()})
+    finished("還差一點")
+    await asyncio.sleep(0)
+    assert queued == []

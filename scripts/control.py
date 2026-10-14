@@ -8,7 +8,7 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from server.config import DATA, PORT
+from server.config import DATA, HTTPS_PORT, PORT
 
 parser = argparse.ArgumentParser(); parser.add_argument("action", choices=["wait", "stop"]); args = parser.parse_args()
 if args.action == "wait":
@@ -16,7 +16,9 @@ if args.action == "wait":
         try:
             response = httpx.get(f"http://127.0.0.1:{PORT}/api/health", timeout=1)
             if response.is_success and response.json().get("engine") == "hermes":
-                print(f"LazyBoy 已啟動：http://localhost:{PORT}"); raise SystemExit(0)
+                print(f"LazyBoy 已啟動：http://localhost:{PORT}")
+                if HTTPS_PORT: print(f"手機與其他裝置用 HTTPS 連線（port {HTTPS_PORT}）：網址與登入 QR code 在「設定 → 其他裝置與 App」")
+                raise SystemExit(0)
         except httpx.HTTPError: pass
         time.sleep(.2)
     raise SystemExit("服務尚未啟動，請查看 .run/server.log")

@@ -4,10 +4,10 @@ import { randomUUID } from "../uuid";
 import { Avatar } from "../avatar";
 import { BOT_TEMPLATES, templatePreset, type BotTemplate } from "../bot-templates";
 import { useDialogFocus } from "../dialog-focus";
-import { Check, FolderPlus, Import, LoaderCircle, MessagesSquare, Plus, Search, Trash2, X } from "../ui/icons";
+import { Check, FolderPlus, Import, LoaderCircle, MessagesSquare, Network, Plus, Search, Trash2, X } from "../ui/icons";
 import { avatarProps } from "./Sidebar";
+import { ROOM_MAX } from "./Team";
 
-const ROOM_MAX = 6;
 
 /** A template's face before the bot exists. */
 export function TemplateCard({ template, onPick }: { template: BotTemplate; onPick: (template: BotTemplate) => void }) {
@@ -38,7 +38,9 @@ export function WelcomeTemplates({ onPick }: { onPick: (preset: Partial<AgentRow
  * Grok's "New chat": one place to create a bot (from a template or just a name), open a bot, or pick two to six
  * bots for a group chat.
  */
-export function NewChatDialog({ agents, onClose, onCreate, onOpenBot, onRoomCreated, onImport, onCreateGroup, onCreated, startAt }: {
+export function NewChatDialog({ agents, onClose, onCreate, onOpenBot, onRoomCreated, onImport, onCreateGroup, onCreated, startAt, onCreateTeam }: {
+  /** A lead and members in one go (Org.tsx). */
+  onCreateTeam?: () => void;
   /** Open on the template gallery (the sidebar's "Bot 範本"). */
   startAt?: "templates";
   /** A bot made from one of your saved templates. */
@@ -119,12 +121,13 @@ export function NewChatDialog({ agents, onClose, onCreate, onOpenBot, onRoomCrea
               </button>
             )}
             <button type="button" className="new-chat-action" onClick={() => done(onImport)}><span className="new-chat-icon"><Import /></span><span>匯入 Bot</span></button>
+            {onCreateTeam ? <button type="button" className="new-chat-action" onClick={() => done(onCreateTeam)}><span className="new-chat-icon"><Network /></span><span>建立團隊</span></button> : null}
             <button type="button" className="new-chat-action" disabled={!agents.length} onClick={() => done(onCreateGroup)}><span className="new-chat-icon"><FolderPlus /></span><span>新增側欄分區</span></button>
           </div>
 
           {bots.length ? (
             <section className="new-chat-section">
-              <h3>{agents.length >= 2 ? "選 2 到 6 個 Bot 開群組對話，或點名字打開" : "你的 Bot"}</h3>
+              <h3>{agents.length >= 2 ? `選 2 到 ${ROOM_MAX} 個 Bot 開群組對話，或點名字打開` : "你的 Bot"}</h3>
               <ul className="new-chat-bots">
                 {bots.slice(0, 30).map(agent => {
                   const on = picked.includes(agent.id);

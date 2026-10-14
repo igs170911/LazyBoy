@@ -8,7 +8,7 @@ import os
 import signal
 import socket
 import uvicorn
-from .config import DATA, PORT
+from .config import DATA, HTTPS_PORT, PORT
 
 
 def setup_logging():
@@ -23,10 +23,16 @@ def setup_logging():
 class Server(uvicorn.Server):
     """Ends the live event streams as soon as a stop is requested; an open tab would otherwise hold every restart
     for the full graceful-shutdown timeout and then be cancelled with a traceback."""
+    partners = ()
+
     def handle_exit(self, sig, frame):
         from . import main as product
         with contextlib.suppress(Exception): product.begin_shutdown(self.loop)
         super().handle_exit(sig, frame)
+        # Only the last server to start receives the signal; the HTTP and HTTPS servers stop together.
+        for partner in self.partners:
+            partner.should_exit = True
+            partner.force_exit = partner.force_exit or self.force_exit
 
     async def serve(self, sockets=None):
         self.loop = asyncio.get_running_loop()
@@ -44,12 +50,27 @@ async def main():
     path = directory / "product.sock"; path.unlink(missing_ok=True)
     local = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); local.bind(str(path)); os.chmod(path, 0o600)
     public = socket.socket(socket.AF_INET, socket.SOCK_STREAM); public.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    public.bind((os.environ.get("LAZYHERMES_BIND", "0.0.0.0"), PORT))
-    for listener in (local, public): listener.setblocking(False); listener.listen(2048)
-    try: await Server(uvicorn.Config("server.main:app", access_log=False, log_level="info", timeout_graceful_shutdown=5,
-                                     # The desktop stream is already Tight/JPEG-compressed; deflating it again in the event loop costs ~15x relay time.
-                                     ws_per_message_deflate=False)).serve(sockets=[public, local])
-    finally: public.close(); local.close(); path.unlink(missing_ok=True); lock.close()
+    bind = os.environ.get("LAZYHERMES_BIND", "0.0.0.0")
+    public.bind((bind, PORT))
+    listeners = [local, public]
+    # The desktop stream is already Tight/JPEG-compressed; deflating it again in the event loop costs ~15x relay time.
+    options = dict(access_log=False, log_level="info", timeout_graceful_shutdown=5, ws_per_message_deflate=False)
+    server = Server(uvicorn.Config("server.main:app", **options))
+    servers = [server.serve(sockets=[public, local])]
+    if HTTPS_PORT:
+        from . import tls
+        certificate, key = tls.ensure(DATA / "tls")
+        secure = socket.socket(socket.AF_INET, socket.SOCK_STREAM); secure.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        secure.bind((bind, HTTPS_PORT)); listeners.append(secure)
+        # Same app, already started by the HTTP server: no second lifespan.
+        https = Server(uvicorn.Config("server.main:app", **options, lifespan="off", ssl_certfile=str(certificate), ssl_keyfile=str(key)))
+        server.partners, https.partners = (https,), (server,)
+        servers.append(https.serve(sockets=[secure]))
+    for listener in listeners: listener.setblocking(False); listener.listen(2048)
+    try: await asyncio.gather(*servers)
+    finally:
+        for listener in listeners: listener.close()
+        path.unlink(missing_ok=True); lock.close()
 
 
 if __name__ == "__main__":

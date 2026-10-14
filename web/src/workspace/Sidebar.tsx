@@ -3,11 +3,11 @@ import type { AgentGroup, AgentRow, RoomRow } from "../api";
 import { Avatar } from "../avatar";
 import type { AvatarShape } from "../types";
 import { readStorage, writeStorage } from "../storage";
-import { ChevronDown, FolderPlus, Import, LayoutGrid, MessagesSquare, PanelLeft, Plug, Plus, Search, Settings, Star, X } from "../ui/icons";
+import { ChevronDown, FolderPlus, Import, LayoutGrid, MessagesSquare, Network, PanelLeft, Plug, Plus, Search, Settings, Stamp, Star, X } from "../ui/icons";
 import { RoomAvatar } from "./Team";
 import { MenuButton, useContextMenu, type MenuItem } from "../ui/overlay";
 import { listTime } from "./format";
-import { useMood } from "./mood";
+import { eyeMotion, useMood } from "./mood";
 import { activityStatus } from "./status";
 import { moveGroup } from "./order";
 
@@ -48,7 +48,7 @@ const BotRow = memo(function BotRow({ agent, active, onSelect, actions, unread =
       onDragStart={draggable ? event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", agent.name); onDrag!({ kind: "bot", id: agent.id }); } : undefined}
       onDragEnd={draggable ? () => onDrag!(null) : undefined}>
       <button type="button" className="bot-row-main" aria-current={active ? "page" : undefined} aria-haspopup="menu" title={agent.name} onClick={() => onSelect(agent.id)}>
-        <Avatar {...avatarProps(agent)} size={36} gaze={false} thinking={busy} mood={mood} />
+        <Avatar {...avatarProps(agent)} size={36} gaze={false} thinking={busy} mood={mood} motion={eyeMotion(agent.activity?.state)} />
         <span className="bot-row-text">
           <span className="bot-row-top">
             <strong>{agent.name}{agent.primary ? <Star className="primary-star" aria-label="主要 Bot" /> : null}</strong>
@@ -83,7 +83,12 @@ const RoomRowItem = memo(function RoomRowItem({ room, active, onSelect, unread =
   );
 });
 
-export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, onImport, onCreateGroup, onSettings, agentActions, groupActions, rooms = [], activeRoomId = null, onSelectRoom, onCreateRoom, unread, onMove, onReorderGroups, compact = false, onToggleCompact, onSearch, onConnectApps, onNew, onTemplates }: {
+export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, onImport, onCreateGroup, onSettings, agentActions, groupActions, rooms = [], activeRoomId = null, onSelectRoom, onCreateRoom, unread, onMove, onReorderGroups, compact = false, onToggleCompact, onSearch, onConnectApps, onNew, onTemplates, onOrg, approvals = 0, onApprovals }: {
+  /** Who reports to whom (Org.tsx). */
+  onOrg?: () => void;
+  /** Decisions waiting for the user; the inbox opens from a row at the top of the list. */
+  approvals?: number;
+  onApprovals?: () => void;
   /** Avatars only (Grok's compact sidebar, Ctrl/⌘+B). */
   compact?: boolean;
   onToggleCompact?: () => void;
@@ -217,6 +222,11 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
         {query ? <button type="button" className="icon-btn small" aria-label="清除搜尋" onClick={() => setQuery("")}><X /></button> : null}
       </div>
       <nav className="bot-list">
+        {approvals && onApprovals ? (
+          <button type="button" className="approvals-row" onClick={onApprovals} title="待你核定">
+            <Stamp aria-hidden="true" /><span>待你核定</span><b>{approvals}</b>
+          </button>
+        ) : null}
         {!loaded ? <div className="bot-skeleton" aria-hidden="true"><i /><i /><i /></div> : null}
         {loaded && sections.empty && !(query && visibleRooms.length) ? (
           <div className="sidebar-empty">
@@ -265,6 +275,7 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
       <footer className="sidebar-foot">
         {onTemplates ? <button type="button" className="btn ghost" onClick={onTemplates} title="Bot 範本"><LayoutGrid /><span>Bot 範本</span></button> : null}
         {onConnectApps ? <button type="button" className="btn ghost" onClick={onConnectApps} title="連接應用程式"><Plug /><span>連接應用程式</span></button> : null}
+        {onOrg ? <button type="button" className="btn ghost" onClick={onOrg} title="組織架構"><Network /><span>組織架構</span></button> : null}
         <div className="sidebar-foot-row">
           <button type="button" className="btn ghost" onClick={onSettings} title="設定"><Settings /><span>設定</span></button>
           {onToggleCompact ? <button type="button" className="icon-btn" aria-label={compact ? "展開側欄" : "精簡側欄"} title={`${compact ? "展開側欄" : "精簡側欄"}（Ctrl B）`} onClick={onToggleCompact}><PanelLeft /></button> : null}

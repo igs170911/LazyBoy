@@ -4,6 +4,7 @@ import contextlib
 from datetime import datetime, timedelta, timezone
 import hmac
 import logging
+import random
 import secrets
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .store import now, uid
@@ -24,6 +25,9 @@ RETRY_MINUTES = (1, 5, 15, 60)
 MAX_ROUTINES = 50
 MIN_INTERVAL = 5
 MAX_INTERVAL = 7 * 24 * 60
+# A routine may run up to this many minutes after its set time, at random, so posts and messages do not land at the
+# same minute every day the way a machine's would.
+MAX_JITTER = 240
 HISTORY = 20
 # An event source that fires in bursts (every new message) would otherwise start a turn each time.
 HOOK_SPACING = 60
@@ -73,10 +77,27 @@ def normalize_schedule(schedule, base=None):
         except (TypeError, ValueError): raise ValueError("間隔要是分鐘數") from None
         if not MIN_INTERVAL <= every <= MAX_INTERVAL: raise ValueError(f"間隔要介於 {MIN_INTERVAL} 分鐘和 7 天之間")
         result["every_minutes"] = every
+    try: jitter = int(result.get("jitter_minutes") or 0)
+    except (TypeError, ValueError): raise ValueError("隨機延後要是分鐘數") from None
+    if not 0 <= jitter <= MAX_JITTER: raise ValueError(f"隨機延後要介於 0 到 {MAX_JITTER} 分鐘")
+    # The next run is the first slot after the last one actually ran: a delay as long as the interval skips slots, so
+    # "every 30 minutes, up to an hour late" would really run only about once an hour.
+    if jitter and result["frequency"] == "interval" and jitter >= result["every_minutes"]:
+        raise ValueError(f"每 {result['every_minutes']} 分鐘執行時，隨機延後要少於 {result['every_minutes']} 分鐘")
+    if jitter: result["jitter_minutes"] = jitter
+    else: result.pop("jitter_minutes", None)
     return result
 
 
 def next_occurrence(schedule, after=None):
+    """The next run: the next slot of the schedule, plus a random delay of up to jitter_minutes when one is set."""
+    slot = scheduled_slot(schedule, after)
+    jitter = int((schedule or {}).get("jitter_minutes") or 0) if slot else 0
+    if not jitter: return slot
+    return (datetime.fromisoformat(slot) + timedelta(seconds=random.randint(0, jitter * 60))).isoformat()
+
+
+def scheduled_slot(schedule, after=None):
     if not isinstance(schedule, dict): raise ValueError("無效的排程設定")
     zone = schedule_zone(schedule)
     after = after or datetime.now(timezone.utc)

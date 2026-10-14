@@ -23,8 +23,49 @@
     <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/splash/828x1792.png" />
     <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/splash/750x1334.png" />
     <link rel="apple-touch-startup-image" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/splash/640x1136.png" />
+    <script>
+      // The saved theme before first paint, so the opening screen is not dark for a moment on a light setup.
+      try {
+        var pref = localStorage.getItem("lazyhermes.theme") || "dark";
+        var mode = pref === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : pref === "light" ? "light" : "dark";
+        document.documentElement.dataset.theme = mode;
+        document.documentElement.style.colorScheme = mode;
+      } catch (e) {}
+    </script>
+    <style>
+      /* Opening screen: LazyBoy wakes up and looks around while the app loads; boot.ts fades it out. */
+      #boot { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-content: center; justify-items: center; gap: 14px; background: #0e0e11; color: #8d8d99; font: 14px/1.4 system-ui, sans-serif; transition: opacity .28s ease; }
+      [data-theme="light"] #boot { background: #eceef1; color: #6b6b76; }
+      #boot.gone { opacity: 0; pointer-events: none; }
+      #boot svg { width: 120px; height: 120px; overflow: visible; }
+      #boot .body { transform-box: view-box; transform-origin: 50% 80%; animation: boot-breathe 2.8s ease-in-out infinite alternate; }
+      #boot .eyes { animation: boot-look 6.4s linear .9s infinite; }
+      #boot .eye { transform-box: fill-box; transform-origin: center; animation: boot-wake .9s ease-out both, boot-blink 3.7s linear 1.6s infinite; }
+      #boot p { margin: 0; opacity: 0; animation: boot-fade .4s ease 1.6s forwards; }
+      @keyframes boot-breathe { to { transform: scale(1.025, .98); } }
+      /* Half-closed like the icon, a blink, then wide awake. */
+      @keyframes boot-wake { 0%, 35% { transform: scaleY(.42); } 55% { transform: scaleY(.08); } 100% { transform: scaleY(1); } }
+      @keyframes boot-blink { 0%, 94% { scale: 1 1; } 97% { scale: 1 .1; } 100% { scale: 1 1; } }
+      /* Glances, then a roll up and around, then back to you. */
+      @keyframes boot-look {
+        0%, 12% { translate: 0 0; } 15%, 27% { translate: -5px 1px; } 30%, 42% { translate: 5px -1px; }
+        48% { translate: 4px -5px; } 54% { translate: -1px -6px; } 60% { translate: -5px -3px; } 66% { translate: -3px 2px; } 72% { translate: 2px 2px; }
+        78%, 100% { translate: 0 0; }
+      }
+      @keyframes boot-fade { to { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { #boot * { animation: none !important; opacity: 1 !important; } }
+    </style>
   </head>
   <body>
+    <div id="boot" aria-hidden="true">
+      <svg viewBox="18 21 65 60">
+        <g class="body">
+          <path fill="#8B7CF6" d="M83.01 51C83.01 68.48 69.52 80.89 50.52 80.89C31.53 80.89 18.03 68.48 18.03 51C18.03 33.52 31.53 21.11 50.52 21.11C69.52 21.11 83.01 33.52 83.01 51Z"/>
+          <g class="eyes" fill="#15131f"><rect class="eye" x="35.3" y="47.4" width="6" height="10" rx="3"/><rect class="eye" x="57.3" y="46.9" width="6" height="10" rx="3"/></g>
+        </g>
+      </svg>
+      <p>正在連線…</p>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -138,7 +138,18 @@ export type TaskDetail = {
 };
 
 export type AgentGroup = { id: string; name: string; position?: number };
-export type AgentSkill = { id: string; name: string; description: string; instructions: string; enabled: boolean; updated_at: string; source?: string };
+export type PendingApproval = { id: string; agent_id: string; agent_name: string; subject: string; created_at: string };
+export type Approval = PendingApproval & { details: string; category: string; state: "pending" | "approved" | "rejected" | "cancelled"; note: string; decided_at: string | null; from_name?: string | null };
+export type TeamPerson = { name: string; title?: string; persona?: string };
+export type TeamTemplate = { key: string; name: string; about: string; lead: TeamPerson; members: TeamPerson[] };
+/** One bot as its manager sees it (server/org.py status). */
+export type OrgBot = {
+  id: string; name: string; title: string; reports_to: string; reports_to_id: string; team: string; can_manage: boolean; primary: boolean;
+  state: "working" | "waiting" | "queued" | "idle"; current: { task: string; from: string; since?: string } | null; waiting_for: string | null; queued: number;
+  approvals: { subject: string; since: string }[]; recent: { task: string; from: string; verdict: string | null; at: string; result: string }[];
+};
+export type OrgChart = { bots: OrgBot[]; approval_items: string[]; templates: TeamTemplate[] };
+export type AgentSkill = { id: string; name: string; description: string; instructions: string; enabled: boolean; updated_at: string; source?: string; place?: "list" | "library" | "off" };
 
 export type AgentRow = {
   /** Grok's Primary Bot: the one the others hand coordination to; marked with a star. */
@@ -149,6 +160,10 @@ export type AgentRow = {
   hidden?: boolean;
   /** Set when another bot created this one (a helper bot). */
   created_by?: string;
+  /** The bot this one reports to; empty when it reports to the user. */
+  reports_to?: string;
+  /** May build teams and change other bots for the user (create_team, update_bot). */
+  can_manage?: boolean;
   group_id?: string;
   avatar_traits?: Record<string, number>;
   avatar_expression?: string;
@@ -176,6 +191,8 @@ export type AgentRow = {
 };
 
 export type AgentProfile = {
+  reports_to?: string;
+  can_manage?: boolean;
   ask_first?: string[];
   group_id?: string;
   avatar_traits?: Record<string, number>;
@@ -193,7 +210,7 @@ export type AgentProfile = {
 };
 
 /** Who a message came from when it was not the user: another bot ("message_in"), or this bot's hand-off ("message_out"). */
-export type PeerFields = { room_id?: string; event?: "message_in" | "message_out" | "group_created" | "group_post" | "bot_created" | "profile_updated" | "question_expired"; from_agent?: string; from_name?: string; peer_id?: string; peer_name?: string; intent?: "request" | "question" | "result" | "fyi"; message_id?: string; silent?: boolean };
+export type PeerFields = { room_id?: string; event?: "message_in" | "message_out" | "group_created" | "group_post" | "bot_created" | "profile_updated" | "question_expired" | "approval_request" | "team_created" | "auto_continue"; from_agent?: string; from_name?: string; peer_id?: string; peer_name?: string; intent?: "request" | "question" | "result" | "fyi"; message_id?: string; silent?: boolean };
 export type TranscriptItem = PeerFields & { id?: string; role: "user" | "assistant" | "event"; content: string; at?: string; streaming?: boolean; reactions?: string[];
   /** The last journal event a stored, still-streaming reply already contains. */
   stream_event?: number; narration?: string[]; routine_id?: string; routine_title?: string; lesson_id?: string; file?: { id?: string; task_id?: string; title: string; path?: string; url: string; media_type?: string; bytes: number; available: boolean; status?: string }; action?: { question_id: string; task_id?: string; kind?: string; state: string } };
@@ -336,14 +353,19 @@ async function request<T>(path: string, init?: RequestInit, timeout?: number): P
 export type Upload = { id: string; name: string; media_type: string; bytes: number; url: string };
 export type RoutineSchedule = { frequency: "once" | "daily" | "weekdays" | "weekly" | "monthly" | "interval" | "trigger"; timezone: string; time: string; date?: string | null; weekdays?: number[]; day_of_month?: number | null;
   /** interval: repeats every this many minutes, counted from `time`. */
-  every_minutes?: number | null };
+  every_minutes?: number | null;
+  /** Each run starts at a random moment up to this many minutes after the set time, so it does not look automated. */
+  jitter_minutes?: number | null };
 export type Routine = { id: string; agent_id: string; title: string; instructions: string; schedule: RoutineSchedule; enabled: boolean;
   /** The routine's own web address (path), when it can be triggered by other services. */
   hook_path?: string | null; next_run_at: string | null; last_run_at: string | null; last_task_id: string | null; last_error: string | null; retry_at?: string | null; last_run?: { state: string; verdict?: string | null; at: string } | null };
 export type RoutineRun = { started_at: string; task_id: string; state: string; verdict?: string; result?: {summary?: string} | null };
 export type MediaCapabilities = { images: boolean; pdf: boolean; text: boolean };
 export type UploadLimits = { files: number; file_bytes: number; image_bytes: number; total_bytes: number };
+/** How other devices reach this LazyBoy (GET /api/connect). `https_port` is null when HTTPS is off. */
+export type ConnectInfo = { hosts: string[]; hostname: string; port: number; https_port: number | null; fingerprint: string | null; token: string };
 export const api = {
+  connect: () => request<ConnectInfo>("/api/connect"),
   answerQuestion: (id: string, body: Record<string, unknown>) => request(`/api/agents/${encodeURIComponent(id)}/questions`, {method:"POST",body:JSON.stringify(body)}),
   routingHealth: () => request<{ready: boolean; supported?: boolean; engines?: {semantic?: string; laya?: string}; backend?: string}>("/api/settings/routing/health"),
   routines: (id: string) => request<{routines: Routine[]}>(`/api/agents/${encodeURIComponent(id)}/routines`),
@@ -384,10 +406,17 @@ export const api = {
   checkModelsInUse: () =>
     request<{ checked: number; settings: AppSettings }>("/api/providers/check-in-use", { method: "POST", body: "{}" }, 90000),
   agents: async () => {
-    const data = await request<AgentRow[] | { agents?: AgentRow[]; groups?: AgentGroup[] }>("/api/agents");
+    const data = await request<AgentRow[] | { agents?: AgentRow[]; groups?: AgentGroup[]; approvals?: PendingApproval[] }>("/api/agents");
     const agents = Array.isArray(data) ? data : data.agents || [];
-    return { agents, groups: Array.isArray(data) ? [] : data.groups || [] };
+    return { agents, groups: Array.isArray(data) ? [] : data.groups || [], approvals: Array.isArray(data) ? [] : data.approvals || [] };
   },
+  org: () => request<OrgChart>("/api/org"),
+  setApprovalItems: (items: string[]) => request<{ approval_items: string[] }>("/api/org/approval-items", { method: "PUT", body: JSON.stringify({ items }) }),
+  createTeam: (body: { name: string; lead: TeamPerson | string; members: (TeamPerson | string)[]; reports_to?: string; group_chat?: boolean; daily_report?: boolean; lead_primary?: boolean; lead_manage?: boolean }) =>
+    request<{ team: string; group_id: string; lead_id: string; room_id: string | null; note: string; agents: AgentRow[]; groups: AgentGroup[] }>("/api/teams", { method: "POST", body: JSON.stringify(body) }, 60000),
+  approvals: (state = "pending") => request<{ approvals: Approval[] }>(`/api/approvals?state=${encodeURIComponent(state)}`),
+  decideApproval: (id: string, decision: "approve" | "reject", note = "") =>
+    request<Approval>(`/api/approvals/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ decision, note }) }),
   exportTemplate: (id: string) => request<AgentTemplate>(`/api/agents/${encodeURIComponent(id)}/template`),
   logins: (id: string) => request<{ sites: { site: string; cookies: number }[] }>(`/api/agents/${encodeURIComponent(id)}/logins`, undefined, 120000),
   copyLogins: (id: string, to: string, sites: string[]) => request<{ copied: number; sites: string[] }>(`/api/agents/${encodeURIComponent(id)}/logins/copy`, { method: "POST", body: JSON.stringify({ to, sites }) }, 180000),
@@ -413,7 +442,7 @@ export const api = {
   usage: (id: string, days = 7) => request<{ days: number; turns: number; prompt: number; completion: number; total: number; models: { model: string; total: number }[] }>(`/api/agents/${encodeURIComponent(id)}/usage?days=${days}`),
   setPrimary: (id: string, primary: boolean) => request<{ agents: AgentRow[] }>(`/api/agents/${encodeURIComponent(id)}/primary`, { method: "POST", body: JSON.stringify({ primary }) }),
   sidebar: (id: string, change: { pinned?: boolean; hidden?: boolean }) => request<AgentRow>(`/api/agents/${encodeURIComponent(id)}/sidebar`, { method: "POST", body: JSON.stringify(change) }),
-  updateAgent: (id: string, profile: AgentProfile) =>
+  updateAgent: (id: string, profile: Partial<AgentProfile>) =>
     request<AgentRow>(`/api/agents/${id}`, { method: "PATCH", body: JSON.stringify(profile) }),
   renameAgent: (id: string, name: string) =>
     request<AgentRow>(`/api/agents/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { dismissBoot } from "./boot";
 
 export function AuthGate({children}: {children: ReactNode}) {
   const [status, setStatus] = useState<"loading" | "login" | "ready">("loading");
@@ -15,6 +16,7 @@ export function AuthGate({children}: {children: ReactNode}) {
       .then(data => {if (alive) setStatus(data.authenticated ? "ready" : "login");}).catch(() => {if (alive) {setStatus("login"); setError("服務尚未連線，請確認後端已啟動。");}});
     return () => {alive = false;};
   }, []);
+  useEffect(() => { if (status !== "loading") dismissBoot(); }, [status]);
   if (status === "ready") return children;
   if (status === "loading") return <main className="auth-gate">正在連線…</main>;
   return <main className="auth-gate"><form onSubmit={async e => {

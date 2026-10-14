@@ -229,7 +229,8 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
         debounce("activity", () => void refreshActivity(id), 250);
         break;
       case "model_routed":
-        if (taskId) setLive(id, live => ({ ...ensure(live), model: [p.provider, p.model].filter(Boolean).join(" · ") }));
+        // The model's name is enough; the provider's id ("opencode-go") means nothing to most people.
+        if (taskId) setLive(id, live => ({ ...ensure(live), model: String(p.model || "") }));
         break;
       case "model_fallback":
         if (taskId) setLive(id, live => ({ ...ensure(live), notice: `模型連線不穩，改用備援：${String(p.model || "")}` }));

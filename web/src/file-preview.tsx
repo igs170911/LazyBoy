@@ -28,7 +28,7 @@ import swift from "highlight.js/lib/languages/swift";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { MarkdownBody, toContentUrl, type PreviewFile } from "./markdown";
+import { contentUrl, MarkdownBody, toContentUrl, type PreviewFile } from "./markdown";
 import { bytes } from "./workspace/format";
 
 for (const [name, language] of Object.entries({ bash, c, cpp, csharp, css, diff, dockerfile, go, ini, java, javascript, json, kotlin, lua, makefile, markdown, php, powershell, python, r, ruby, rust, scss, sql, swift, typescript, xml, yaml })) {
@@ -251,7 +251,7 @@ const dataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
  * A page the bot made, shown in a sandbox with no access to LazyBoy. The sandboxed page cannot use this site's login,
  * so its own stylesheets, scripts and images from the bot's files are fetched here and written into the page.
  */
-async function selfContained(html: string, resolve: (src: string) => string | undefined): Promise<string> {
+async function selfContained(html: string, resolve: (src: string) => string | undefined, css?: string): Promise<string> {
   const doc = new DOMParser().parseFromString(html, "text/html");
   let budget = 30 * 1024 * 1024;
   const get = async (src: string) => {
@@ -284,20 +284,26 @@ async function selfContained(html: string, resolve: (src: string) => string | un
   await Promise.all(jobs);
   // Links leave the sandbox in a new tab instead of replacing the preview.
   const base = doc.createElement("base"); base.target = "_blank"; doc.head.prepend(base);
+  if (css) { const style = doc.createElement("style"); style.textContent = css; doc.head.append(style); }
   return "<!doctype html>\n" + doc.documentElement.outerHTML;
 }
 
 /** A converted spreadsheet carries everything inline. One constant, so a re-render does not rebuild the page. */
 const NO_RESOURCES = () => undefined;
 
-function HtmlPage({ html, resolve, scripts = true, title }: { html: string; resolve: (src: string) => string | undefined; scripts?: boolean; title: string }) {
+/** Spreadsheets exported by LibreOffice: keep columns readable and let the sheet scroll sideways on a phone. */
+const SHEET_CSS = `body{margin:8px;font-family:system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;font-size:13px;color:#1f2328;background:#fff}
+table{border-collapse:collapse;width:auto!important;margin-bottom:16px}td,th{min-width:5.5em;max-width:22em;padding:4px 6px;border:1px solid #d8dbe0;vertical-align:top;font-family:inherit!important}
+body *{font-family:inherit!important}h1,h2,h3{font-size:14px;margin:12px 0 6px}`;
+
+function HtmlPage({ html, resolve, scripts = true, title, css }: { html: string; resolve: (src: string) => string | undefined; scripts?: boolean; title: string; css?: string }) {
   const [page, setPage] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     setPage(null);
-    selfContained(html, resolve).then(value => { if (alive) setPage(value); }).catch(() => { if (alive) setPage(html); });
+    selfContained(html, resolve, css).then(value => { if (alive) setPage(value); }).catch(() => { if (alive) setPage(html); });
     return () => { alive = false; };
-  }, [html, resolve]);
+  }, [html, resolve, css]);
   if (page === null) return <Status>正在準備頁面…</Status>;
   return <iframe className="file-frame" title={title} srcDoc={page} sandbox={scripts ? "allow-scripts allow-popups allow-popups-to-escape-sandbox" : "allow-popups allow-popups-to-escape-sandbox"} />;
 }
@@ -330,7 +336,7 @@ function Office({ agentId, file }: { agentId?: string; file: PreviewFile }) {
   }, [agentId, file.path]);
   if (state.status === "loading") return <Status>正在用 Bot 的電腦開啟這份文件，第一次可能要十幾秒…</Status>;
   if (state.status === "error") return <Fallback file={file} reason={state.error} />;
-  if (state.status === "html") return <HtmlPage html={state.html} resolve={NO_RESOURCES} scripts={false} title={file.title} />;
+  if (state.status === "html") return <HtmlPage html={state.html} resolve={NO_RESOURCES} scripts={false} title={file.title} css={SHEET_CSS} />;
   return <Pdf url={state.url} title={file.title} />;
 }
 
@@ -397,7 +403,68 @@ function Fallback({ file, reason }: { file: PreviewFile; reason?: string }) {
 }
 
 /** The best view this browser can give a file, falling back to plain text, then to its details and a download. */
+type FolderEntry = { name: string; path: string; dir: boolean; bytes: number | null };
+type Stat = { kind: "file" } | { kind: "folder"; entries: FolderEntry[]; truncated: boolean } | { kind: "missing"; elsewhere: { agent_id: string; name: string }[] };
+
+/** What a path a bot wrote is before trying to show it: a file, a folder, or a file that is not on this computer. */
+function useStat(agentId: string | undefined, path: string | undefined): Stat | null {
+  const [stat, setStat] = useState<Stat | null>(null);
+  useEffect(() => {
+    if (!agentId || !path) { setStat({ kind: "file" }); return; }
+    setStat(null);
+    const controller = new AbortController();
+    fetch(`/api/agents/${encodeURIComponent(agentId)}/files/stat?path=${encodeURIComponent(path)}`, { signal: controller.signal })
+      .then(async response => { if (!response.ok) throw new Error(`HTTP ${response.status}`); setStat(await response.json() as Stat); })
+      // Could not ask (an older server, a path it refuses): try to show it as before.
+      .catch(() => { if (!controller.signal.aborted) setStat({ kind: "file" }); });
+    return () => controller.abort();
+  }, [agentId, path]);
+  return stat;
+}
+
+function parentOf(path: string): string | null {
+  const parent = path.replace(/\/+$/, "").slice(0, path.replace(/\/+$/, "").lastIndexOf("/"));
+  return /^\/(workspace|home\/box)\/./.test(parent) ? parent : null;
+}
+
+function Folder({ path, entries, truncated, onOpenPath }: { path: string; entries: FolderEntry[]; truncated: boolean; onOpenPath?: (path: string) => void }) {
+  const parent = parentOf(path);
+  return (
+    <div className="file-folder">
+      <p className="file-cut">這是資料夾，裡面有 {entries.length}{truncated ? "+" : ""} 個項目{onOpenPath ? "，點一下打開" : ""}。</p>
+      {parent && onOpenPath ? <button type="button" className="file-folder-up" onClick={() => onOpenPath(parent)}>↑ 上一層</button> : null}
+      {entries.length ? <ul>{entries.map(entry => <li key={entry.path} data-dir={entry.dir || undefined}>
+        {onOpenPath ? <button type="button" onClick={() => onOpenPath(entry.path)}>{entry.dir ? `${entry.name}/` : entry.name}</button> : <span>{entry.name}</span>}
+        {entry.bytes !== null ? <small>{bytes(entry.bytes)}</small> : null}
+      </li>)}</ul> : <Status>資料夾是空的。</Status>}
+    </div>
+  );
+}
+
 export default function FilePreview({ file, agentId, onOpenPath }: { file: PreviewFile; agentId?: string; onOpenPath?: (path: string) => void }) {
+  const stat = useStat(agentId, file.path);
+  // A path the bot named from a teammate's computer, opened there instead.
+  const [elsewhere, setElsewhere] = useState<{ agent_id: string; name: string } | null>(null);
+  useEffect(() => setElsewhere(null), [file.url]);
+  if (elsewhere && file.path) return (
+    <div className="file-elsewhere">
+      <p className="file-cut">這是 {elsewhere.name} 電腦上的檔案。</p>
+      <FileBody file={{ ...file, url: contentUrl(elsewhere.agent_id, file.path) }} agentId={elsewhere.agent_id} />
+    </div>
+  );
+  if (!stat) return <Status>讀取中…</Status>;
+  if (stat.kind === "folder" && file.path) return <Folder path={file.path} entries={stat.entries} truncated={stat.truncated} onOpenPath={onOpenPath} />;
+  if (stat.kind === "missing") return (
+    <div className="file-fallback">
+      <strong>{stat.elsewhere.length ? "這個檔案不在這台電腦上" : "找不到這個檔案"}</strong>
+      <small>{stat.elsewhere.length ? `它在 ${stat.elsewhere.map(other => other.name).join("、")} 的電腦上；Bot 提到的是隊友那邊的路徑。` : "可能已經被移動、改名或刪除；也可能 Bot 寫錯了路徑。可以在檔案列表裡找找看，或請 Bot 重新給一次路徑。"}</small>
+      {stat.elsewhere.map(other => <button type="button" key={other.agent_id} onClick={() => setElsewhere(other)}>打開 {other.name} 那份</button>)}
+    </div>
+  );
+  return <FileBody file={file} agentId={agentId} onOpenPath={onOpenPath} />;
+}
+
+function FileBody({ file, agentId, onOpenPath }: { file: PreviewFile; agentId?: string; onOpenPath?: (path: string) => void }) {
   const { kind, language } = useMemo(() => classify(file), [file]);
   const [source, setSource] = useState(false);
   useEffect(() => setSource(false), [file.url]);

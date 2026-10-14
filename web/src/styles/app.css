@@ -67,6 +67,14 @@ body.is-resizing iframe { pointer-events: none; }
 .bot-skeleton i { height: 46px; border-radius: var(--radius); background: linear-gradient(90deg, var(--elev), var(--hover), var(--elev)); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; }
 .sidebar-empty { display: grid; justify-items: center; gap: 12px; padding: 40px 16px; color: var(--muted); text-align: center; }
 .sidebar-foot { padding: 8px; border-top: 1px solid var(--line); }
+.approvals-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; margin: 2px 0 8px; padding: 9px 12px; border: 1px solid var(--warn-soft);
+  border-radius: var(--radius); background: var(--warn-soft); color: var(--text); font-size: 13.5px; font-weight: 600; text-align: left;
+}
+.approvals-row svg { flex: none; width: 16px; height: 16px; color: var(--warn); }
+.approvals-row span { flex: 1; }
+.approvals-row b { min-width: 22px; padding: 1px 7px; border-radius: 99px; background: var(--warn); color: #1a1407; font-size: 12px; text-align: center; }
+.sidebar.compact .approvals-row span { display: none; }
 .sidebar-foot .btn { justify-content: flex-start; width: 100%; color: var(--muted); }
 
 /* ---------- Conversation ---------- */
@@ -169,7 +177,9 @@ body.is-resizing iframe { pointer-events: none; }
 .work-card header { display: flex; align-items: center; gap: 8px; }
 .think-toggle { display: inline-flex; flex: 1; align-items: center; gap: 7px; min-width: 0; padding: 4px 0; border: 0; background: none; color: var(--muted); font-size: 13.5px; text-align: left; cursor: pointer; }
 .think-toggle:disabled { cursor: default; }
-.think-toggle svg { flex: none; width: 15px; height: 15px; }
+.think-toggle > svg { flex: none; width: 15px; height: 15px; }
+/* The bot's own face where the spinner was, its eyes doing what it is doing; it takes the spinner's 15px of the row. */
+.think-toggle > .avatar { margin: -3px -2px -3px -3px; }
 .think-toggle strong { flex: none; color: var(--text); font-weight: 600; }
 .think-toggle strong.shimmer { color: transparent; background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; animation: shimmer 2.4s linear infinite; }
 .think-toggle small { overflow: hidden; color: var(--faint); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -264,13 +274,14 @@ body.is-resizing iframe { pointer-events: none; }
 .fold-toggle svg.up { transform: rotate(180deg); }
 
 /* Question card */
-.question-card { margin-bottom: 10px; padding: 14px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); border-radius: var(--radius-l); background: var(--panel); box-shadow: var(--shadow-s); animation: pop-in .25s var(--ease); }
+.question-card { max-height: min(62vh, calc(var(--app-height, 100dvh) * .62)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; margin-bottom: 10px; padding: 14px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); border-radius: var(--radius-l); background: var(--panel); box-shadow: var(--shadow-s); animation: pop-in .25s var(--ease); }
 .question-card > header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--warn); font-size: 12.5px; font-weight: 650; }
 .question-card > header svg { width: 16px; height: 16px; }
-.question-prompt { max-height: 40vh; overflow-y: auto; font-size: 14.5px; }
+.question-prompt { font-size: 14.5px; overflow-wrap: anywhere; }
 .question-prompt .message-body > :first-child { margin-top: 0; }
 .question-fields { display: grid; gap: 10px; margin-top: 12px; }
-.question-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+/* The answer buttons stay in reach however long the question is. */
+.question-actions { position: sticky; bottom: -14px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 12px -14px -14px; padding: 10px 14px 14px; background: var(--panel); }
 .choice-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .question-card .choice { justify-content: flex-start; max-width: 100%; white-space: normal; text-align: left; }
 .question-card .choice.picked { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
@@ -556,6 +567,15 @@ body.is-resizing iframe { pointer-events: none; }
 .file-archive li span { min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12.5px; }
 .file-archive li[data-dir] span { color: var(--muted); }
 .file-archive li small { flex: none; color: var(--faint); }
+.file-folder { display: grid; gap: 8px; padding: 12px 16px; }
+.file-folder ul { display: grid; margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
+.file-folder li { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+.file-folder li button { min-width: 0; padding: 8px 2px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.file-folder li[data-dir] button { color: var(--link); }
+.file-folder li button:hover { text-decoration: underline; }
+.file-folder li small { flex: none; color: var(--faint); }
+.file-folder-up { justify-self: start; min-height: 30px !important; padding: 4px 11px !important; font-size: 13px !important; }
+.file-fallback small { color: var(--muted); line-height: 1.6; }
 .file-font p { margin: 0 0 14px; color: var(--text); line-height: 1.3; overflow-wrap: anywhere; }
 .file-fallback { display: grid; justify-items: center; gap: 8px; max-width: 360px; margin: 48px auto; text-align: center; }
 .file-fallback-badge { display: grid; place-items: center; width: 64px; height: 76px; margin-bottom: 6px; border: 1px solid var(--line-strong); border-radius: 8px 20px 8px 8px; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
@@ -579,7 +599,7 @@ body.is-resizing iframe { pointer-events: none; }
 .toast { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); font-size: 14px; pointer-events: auto; animation: pop-in .2s var(--ease); }
 .toast.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--line-strong)); }
 .toast.error { border-color: color-mix(in srgb, var(--danger) 50%, var(--line-strong)); color: var(--danger); }
-.toast > button:not(.icon-btn) { padding: 3px 10px; border: 0; border-radius: var(--radius-s); background: var(--accent-soft); color: var(--accent-strong); font-size: 13px; font-weight: 600; }
+.toast > button:not(.icon-btn) { flex: none; padding: 3px 10px; border: 0; border-radius: var(--radius-s); background: var(--accent-soft); color: var(--accent-strong); font-size: 13px; font-weight: 600; white-space: nowrap; }
 
 /* ---------- Auth ---------- */
 .auth-gate { display: grid; place-items: center; height: 100%; padding: 24px; color: var(--muted); }

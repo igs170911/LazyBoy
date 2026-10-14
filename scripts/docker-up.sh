@@ -22,6 +22,12 @@ endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/n
 endpoint=${DOCKER_HOST:-$endpoint}
 case "$endpoint" in unix://*) export DOCKER_SOCKET=${DOCKER_SOCKET:-${endpoint#unix://}} ;; esac
 
+# This host's IPv4 addresses, without Docker's and VMs' internal bridges; the HTTPS certificate covers them.
+addresses=$(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth|virbr|cni|flannel)/ { sub(/\/.*/, "", $4); print $4 }' || true)
+export LAZYHERMES_HOSTNAME=${LAZYHERMES_HOSTNAME:-$(hostname 2>/dev/null || true)}
+export LAZYHERMES_PUBLIC_HOSTS=${LAZYHERMES_PUBLIC_HOSTS:-$(printf '%s\n' $addresses | paste -sd, -)}
+https_port=${LAZYBOY_HTTPS_PORT:-8791}
+
 docker compose up -d --remove-orphans
 printf '等待 LazyBoy 啟動'
 for _ in $(seq 1 60); do
@@ -35,9 +41,8 @@ printf '\n'
 token=$(docker exec "$container" cat /data/access-token)
 printf 'LazyBoy 已啟動。\n\n'
 printf '  這台電腦：http://localhost:%s/#token=%s\n' "$port" "$token"
-# This host's IPv4 addresses, without Docker's and VMs' internal bridges.
-addresses=$(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth|virbr|cni|flannel)/ { sub(/\/.*/, "", $4); print $4 }' || true)
 for address in $addresses; do
-  printf '  其他裝置：http://%s:%s/#token=%s\n' "$address" "$port" "$token"
+  printf '  其他裝置：https://%s:%s/#token=%s\n' "$address" "$https_port" "$token"
 done
 printf '\n網址裡已含登入碼，打開一次之後瀏覽器會記住。登入碼請勿外流；make docker-token 可以再顯示一次。\n'
+printf '其他裝置第一次用 HTTPS 前，要先安裝並信任 LazyBoy 的憑證：在「設定 → 其他裝置與 App」掃描 QR code 就能完成。\n'

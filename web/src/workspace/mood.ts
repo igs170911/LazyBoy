@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Mood } from "../avatar";
+import type { EyeMotion } from "../eye-motion";
+import { stepKind } from "./steps";
 
 const WORKING = new Set(["running", "stopping"]);
 const WAITING = new Set(["waiting_input", "waiting_approval"]);
@@ -53,4 +55,22 @@ export function useMood(state: string | undefined, { verdict, lastAt, playful = 
   }, [playful, base]);
 
   return beat || base;
+}
+
+const READING = new Set(["browser", "search", "web", "read", "image", "skill"]);
+const TYPING = new Set(["terminal", "write", "memory", "plan"]);
+
+/**
+ * Where the bot's eyes go while it works, from what it is doing right now: reading along lines while it browses or
+ * searches, down at the keys while it runs commands or writes, around the screen on the desktop, rolling while it
+ * just thinks. `steps` are the live task's tool calls, when known; the last one still running is what it does now.
+ */
+export function eyeMotion(state: string | undefined, steps: readonly { name: string; state: string }[] = []): EyeMotion | null {
+  if (state && WAITING.has(state)) return "wait";
+  if (!state || !WORKING.has(state)) return null;
+  let step = "";
+  for (let i = steps.length - 1; i >= 0 && !step; i--) if (steps[i].state === "running") step = steps[i].name;
+  if (!step) return "think";
+  const kind = stepKind(step);
+  return READING.has(kind) ? "read" : TYPING.has(kind) ? "type" : kind === "desktop" ? "scan" : kind === "ask" ? "wait" : "think";
 }

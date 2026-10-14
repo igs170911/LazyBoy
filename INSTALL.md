@@ -116,7 +116,7 @@ curl -fsS -X POST -H 'content-type: application/json' -d '{"action":"start"}' "h
 
 1. **網址**：在這台主機上打開 <http://localhost:8790>。
 2. **設定模型**（只能由使用者操作）：打開「設定 → 模型」，選擇供應商、貼上 API key、選擇模型。出現「✓ 可以使用」就完成了。支援 OpenRouter、Anthropic、OpenAI、Gemini、DeepSeek 等 40 多個供應商，也可以使用任何 OpenAI 相容的服務。
-3. **其他裝置**（手機、筆電）：連到 `http://<這台主機的 IP>:8790`，第一次需要輸入登入碼。登入碼請使用者自己在專案資料夾執行 `make get-access-token` 取得，不要貼在對話裡。跨網路使用請放在 HTTPS 反向代理後面。
+3. **其他裝置**（手機、筆電）：在網頁打開「設定 → 其他裝置與 App」，用手機掃第一個 QR code 信任憑證、掃第二個 QR code 用 HTTPS 開啟並登入，之後就能安裝成 App。不要把登入碼貼在對話裡。在外面要連線時，建議用 Tailscale 這類 VPN，不要把 port 開到網際網路。
 4. **日常操作**：`make start` 啟動、`make stop` 停止。停止服務會中斷進行中的工作，但檔案、對話與登入都會保留。
 
 ## 疑難排解
@@ -131,7 +131,8 @@ curl -fsS -X POST -H 'content-type: application/json' -d '{"action":"start"}' "h
 | `服務尚未啟動，請查看 .run/server.log` | 查看 `tail -n 50 .run/server.log`。常見原因是 port 被占用（`Address already in use`） |
 | `這個資料目錄已有 LazyBoy 服務在執行` | 服務已在執行。要重新啟動請執行 `make stop`，再 `make start` |
 | Bot 電腦一直無法就緒 | 查看 `docker logs --tail 50 lazyhermes-bot-<Bot id>`，以及主機的可用記憶體 |
-| 其他裝置連不上 | 確認主機防火牆允許 TCP 8790，而且只在信任的網路開放 |
+| 其他裝置連不上 | 確認主機防火牆允許 TCP 8790 與 8791，而且只在信任的網路開放 |
+| 手機顯示「連線不是私人連線」或憑證錯誤 | 還沒信任 LazyBoy 的憑證。請使用者在「設定 → 其他裝置與 App」掃第一個 QR code，依頁面上該平台的步驟安裝並信任 |
 | 新開的終端機找不到 `node` 或 `uv` | 它們安裝在 `~/.local/bin`。把 `export PATH="$HOME/.local/bin:$PATH"` 加進 shell 設定檔 |
 
 ## 另一種方式：在 Docker 中執行

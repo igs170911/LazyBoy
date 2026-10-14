@@ -1,10 +1,35 @@
 import { useEffect, useRef } from "react";
-import type { AgentRow } from "../api";
+import type { AgentRow, PendingApproval } from "../api";
 import { isMuted, notifyOn, showSystem } from "../notify";
 import { toast } from "../ui/overlay";
 
 const WORKING = new Set(["running", "stopping", "queued"]);
 const WAITING = new Set(["waiting_input", "waiting_approval"]);
+
+/** Ask for the approvals inbox from anywhere (a chat line, a notification); Workspace opens it. */
+export const OPEN_APPROVALS = "lazyhermes:approvals";
+export const openApprovals = () => window.dispatchEvent(new Event(OPEN_APPROVALS));
+
+/** A bot asking the user to decide something: a toast, or a system notification when the page is hidden. */
+export function useApprovalAlerts(approvals: PendingApproval[], loaded: boolean, onOpen: () => void) {
+  const seen = useRef<Set<string> | null>(null);
+  const open = useRef(onOpen);
+  open.current = onOpen;
+  useEffect(() => {
+    if (!loaded) return;
+    const ids = new Set(approvals.map(row => row.id));
+    // The first list is what was already waiting when the page opened; only later ones are news.
+    if (seen.current) {
+      for (const row of approvals) {
+        if (seen.current.has(row.id) || isMuted(row.agent_id)) continue;
+        const title = `${row.agent_name} 請你核定`;
+        if (document.hidden) { if (notifyOn()) void showSystem(title, row.subject.slice(0, 140), row.agent_id); }
+        else toast(`${title}：${row.subject}`, "info", { label: "核定", run: () => open.current() }, 10000);
+      }
+    }
+    seen.current = ids;
+  }, [approvals, loaded]);
+}
 
 /**
  * "Get notified when this Bot finishes or is waiting for you" (Grok Bot). Watches every bot's state from the roster

@@ -70,7 +70,8 @@ def friendly(text):
     raw = str(text or "")
     if not re.search(r"HTTP \d{3}|Provider said|rate-limited|rejected this request", raw, re.I): return None
     status = re.search(r"HTTP (\d{3})", raw)
-    kind = classify(int(status.group(1)) if status else None, raw)
+    # Hermes' own "rate-limited every one of 3 attempts" carries no status code.
+    kind = "busy" if not status and re.search(r"rate-limited", raw, re.I) else classify(int(status.group(1)) if status else None, raw)
     hints = {
         "protocol": "模型的 API 介面設定不對。到「設定 → 模型」選這個模型，會自動檢查並修正。",
         "unavailable": "這個模型目前無法使用，請到 Bot 設定或「設定 → 模型」換一個模型。",

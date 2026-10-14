@@ -18,7 +18,8 @@ import {
   wink,
   type Expression,
 } from "blobatar/expression";
-import { createContext, memo, useContext, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import type { EyeMotion } from "./eye-motion";
 import type { AvatarShape, RoomMember } from "./types";
 
 export const BLOBATAR_SHAPES = [
@@ -294,6 +295,7 @@ export const Avatar = memo(function Avatar({
   mood = "idle",
   alive = false,
   eyes,
+  motion = null,
 }: {
   name: string;
   color?: string;
@@ -310,6 +312,8 @@ export const Avatar = memo(function Avatar({
   mood?: Mood;
   alive?: boolean;
   eyes?: AvatarTraits | null;
+  /** Eyes that move on their own (rolling while thinking, reading, typing…); they take over from following the pointer. */
+  motion?: EyeMotion | null;
 }) {
   const stored = useContext(AvatarLookContext)[lookId || ""] || DEFAULT_LOOK;
   const resolved = color || fallbackColor(name);
@@ -320,9 +324,6 @@ export const Avatar = memo(function Avatar({
   const travel = Math.max(1.8, Math.min(4, size * 0.045));
   const eyeKey = JSON.stringify(eyes || {});
   const traits = useMemo(() => ({ "eye.scale": DEFAULT_EYES, ...cleanTraits(JSON.parse(eyeKey)), shape: SHAPE_TRAIT[silhouette] }), [silhouette, eyeKey]);
-  const animate = alive || thinking || mood !== "idle" ? "always" as const : gaze ? "hover" as const : undefined;
-  const palette = useMemo(() => ({ head: resolved, eye: contrastEye(resolved) }), [resolved]);
-  const { ref } = useGaze({ travel, lookAt: gaze ? "pointer" : null });
   const photo = src?.trim() || "";
   // A stale or broken photo URL should fall back to the generated avatar, not a broken image.
   const [photoFailed, setPhotoFailed] = useState(false);
@@ -330,8 +331,24 @@ export const Avatar = memo(function Avatar({
     setPhotoFailed(false);
   }, [photo]);
   const showPhoto = photo && !photoFailed;
+  const moving = showPhoto ? null : motion;
+  const animate = alive || thinking || moving || mood !== "idle" ? "always" as const : gaze ? "hover" as const : undefined;
+  const palette = useMemo(() => ({ head: resolved, eye: contrastEye(resolved) }), [resolved]);
+  const { ref } = useGaze({ travel, lookAt: gaze && !moving ? "pointer" : null });
+  const host = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const svg = host.current?.querySelector("svg");
+    if (!moving || !svg) return;
+    // Loaded the first time a face moves; most pages show none until a bot starts working.
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    void import("./eye-motion").then(({ moveEyes }) => { if (!cancelled) stop = moveEyes(svg, moving); });
+    return () => { cancelled = true; stop?.(); };
+  }, [moving]);
   return (
     <span
+      ref={host}
+      data-motion={moving || undefined}
       className={`avatar blobatar ${showPhoto ? "photo" : ""} ${active ? "online" : ""} ${thinking ? "thinking" : ""}`}
       style={{ "--bot-color": resolved, "--avatar-size": `${size}px` } as CSSProperties}
     >
@@ -339,7 +356,7 @@ export const Avatar = memo(function Avatar({
         <img alt="" draggable={false} src={photo} onError={() => setPhotoFailed(true)} />
       ) : (
         <Blobatar
-          {...(animate ? { ref, animate } : { animate: undefined })}
+          {...(animate ? { ref: moving ? undefined : ref, animate } : { animate: undefined })}
           name={name}
           expression={pose}
           background={plate}

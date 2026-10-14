@@ -59,6 +59,12 @@ function setup() {
     if (path === `/api/agents/${AGENT}/activity`) return json(state.activity);
     if (path === `/api/agents/${AGENT}/files`) return json({ files: state.files });
     if (path === `/api/agents/${AGENT}/files/content`) return route.fulfill({ status: 200, contentType: "text/markdown", body: "# 報告\n\n驗收內容 FIXTURE_REPORT" });
+    if (path === `/api/agents/${AGENT}/files/stat`) {
+      const asked = url.searchParams.get("path") || "";
+      if (/\/poc\/?$/.test(asked)) return json({ kind: "folder", truncated: false, entries: [{ name: "qa", path: "/workspace/poc/qa", dir: true, bytes: null }, { name: "log.md", path: "/workspace/poc/log.md", dir: false, bytes: 1200 }] });
+      if (asked.endsWith("server.py")) return json({ kind: "missing", elsewhere: [{ agent_id: "lead-bot", name: "技術主管" }] });
+      return json({ kind: "file", bytes: 40 });
+    }
     if (path.startsWith("/api/tasks/")) return json(state.tasks[path.split("/").pop()!] || {}, state.tasks[path.split("/").pop()!] ? 200 : 404);
     if (path === "/api/media") return json({ model: "m", capabilities: { images: true, pdf: true } });
     if (path === `/api/agents/${AGENT}/messages`) return json({ steered: state.activity.running ? "t1" : undefined, queued: state.activity.running ? undefined : "t2" });
@@ -129,6 +135,13 @@ test("live work streams steps and text, accepts steering, stops, and shows resul
   await expect(card).toContainText("正在打開來源網站");
   await expect(card.locator(".step-list li[data-state=running]")).toContainText("操作瀏覽器");
   await expect(page.locator(".chat-status")).toContainText("工作中");
+  // The bot's face replaces the spinner, and its eyes do what it is doing: reading along while it browses.
+  await expect(card.locator(".think-toggle .avatar")).toHaveAttribute("data-motion", "read");
+  await expect(page.locator(".chat-identity .avatar")).toHaveAttribute("data-motion", "read");
+  const eyeX = () => card.locator(".think-toggle .mo-eyes").evaluate(el => (el as SVGElement).style.getPropertyValue("--mo-gz-dx1"));
+  await page.waitForTimeout(300);
+  expect(await eyeX()).toBe(""); // this page asks for reduced motion: the eyes stay put
+  await page.emulateMedia({ reducedMotion: "no-preference" });
 
   await emit(page, [
     { kind: "runtime", task_id: "t1", payload: { type: "tool_finished", id: "s1", name: "browser_navigate", success: true } },
@@ -136,6 +149,11 @@ test("live work streams steps and text, accepts steering, stops, and shows resul
     { kind: "runtime", task_id: "t1", payload: { type: "message_delta", id: "t1", delta: "相關新聞。" } },
   ]);
   await expect(card.locator(".step-list li[data-state=done]")).toContainText("操作瀏覽器");
+  await expect(card.locator(".think-toggle .avatar")).toHaveAttribute("data-motion", "think");
+  await expect.poll(eyeX).not.toBe("");
+  const rolling = await eyeX();
+  await expect.poll(eyeX).not.toBe(rolling);
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(page.locator(".msg.assistant.streaming")).toContainText("找到兩則相關新聞。");
 
   const composer = page.getByRole("textbox", { name: "訊息" });
@@ -161,6 +179,25 @@ test("live work streams steps and text, accepts steering, stops, and shows resul
   await chip.click();
   await expect(page.getByRole("complementary", { name: "檔案" })).toContainText("FIXTURE_REPORT");
   expect(errors).toEqual([]);
+});
+
+test("a long question with many choices scrolls on its own and keeps its send button in reach", async ({ page }) => {
+  const fixture = setup();
+  await open(page, fixture);
+  const long = "請先看完這段背景說明。".repeat(40);
+  const questions = Array.from({ length: 5 }, (_, i) => ({ qid: `q${i}`, question: `第 ${i + 1} 題：${long.slice(0, 80)}`, choices: ["選項甲：比較便宜但出貨慢", "選項乙：比較貴但隔天到貨", "選項丙：先不要買"], multi_select: false }));
+  fixture.state.activity = { state: "waiting_input", running: true, queued: false, observed_at_ms: 2, active_task_ids: ["t1"],
+    question: { method: "clarify", kind: "hermes", question_id: "long", prompt: long, hermes_questions: questions } };
+  await emit(page, [{ kind: "runtime", task_id: "t1", payload: { type: "question" } }]);
+  const card = page.getByRole("form", { name: "Bot 的問題" });
+  await expect(card).toBeVisible();
+  const box = await card.boundingBox(); const viewport = page.viewportSize()!;
+  expect(box!.height).toBeLessThan(viewport.height * .65);
+  expect(await card.evaluate(el => el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === "auto")).toBe(true);
+  const last = card.getByRole("radio", { name: "選項丙：先不要買" }).last();
+  await last.scrollIntoViewIfNeeded(); await last.click();
+  await expect(last).toBeChecked();
+  for (const button of await card.locator(".question-actions button").all()) await expect(button).toBeInViewport();
 });
 
 test("clarify, approval and secret questions are answered from the docked card", async ({ page }) => {
@@ -278,6 +315,38 @@ test("assistant replies render chat-friendly markdown", async ({ page, context }
   await expect(reply.getByRole("link", { name: "example.com" })).toHaveAttribute("href", "https://example.com/report");
   await reply.scrollIntoViewIfNeeded();
   await reply.screenshot({ path: info.outputPath("markdown-reply.png") });
+});
+
+test("file paths written into Chinese sentences open the right file, folder, or teammate's copy", async ({ page }) => {
+  const fixture = setup();
+  fixture.state.transcript.push({ id: "delta:t10", role: "assistant", at: "2026-10-08T01:03:00Z",
+    content: "已寫入 /workspace/reports/log.md，等你確認。腳本 /workspace/poc/run.py（純標準庫）、程式都在 /workspace/poc/ 裡；伺服器是 /workspace/poc/server.py。" });
+  await open(page, fixture);
+  const reply = page.locator(".msg.assistant").last();
+  await expect(reply).toContainText("，等你確認。");
+  await expect(reply).toContainText("（純標準庫）、程式都在");
+  // Each name is the file itself, without the sentence that followed it.
+  for (const name of ["log.md", "run.py", "poc", "server.py"]) await expect(reply.getByRole("button", { name: `開啟 ${name}`, exact: true })).toBeVisible();
+  await reply.getByRole("button", { name: "開啟 log.md", exact: true }).click();
+  const viewer = page.locator(".file-viewer");
+  await expect(viewer.locator(".file-viewer-head strong")).toHaveText("log.md");
+  await expect(viewer).toContainText("FIXTURE_REPORT");
+  // On a phone the files panel stays open over the chat; go back to the conversation.
+  const close = async () => {
+    await viewer.getByRole("button", { name: /關閉|Close|×/ }).click();
+    const back = page.getByRole("button", { name: "返回對話" });
+    if (await back.isVisible()) await back.click();
+  };
+  await close();
+  // A folder lists what is in it; a teammate's file says whose computer it is on.
+  await reply.getByRole("button", { name: "開啟 poc", exact: true }).click();
+  await expect(viewer).toContainText("這是資料夾");
+  await viewer.getByRole("button", { name: "log.md" }).click();
+  await expect(viewer.locator(".file-viewer-head strong")).toHaveText("log.md");
+  await close();
+  await reply.getByRole("button", { name: "開啟 server.py", exact: true }).click();
+  await expect(viewer).toContainText("它在 技術主管 的電腦上");
+  await expect(viewer.getByRole("button", { name: "打開 技術主管 那份" })).toBeVisible();
 });
 
 test("a web address followed by Chinese punctuation keeps the sentence after it", async ({ page }) => {

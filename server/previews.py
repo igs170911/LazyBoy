@@ -50,11 +50,13 @@ class Previews:
         kind = office_kind(target)
         if not kind: raise ValueError("這種檔案沒有 Office 預覽")
         folder, out = self.cached(id, target, kind)
-        if out.exists(): return out, kind
+        if self.ready(id, folder, out): return out, kind
         async with self.locks.setdefault(id, asyncio.Lock()):
-            if out.exists(): return out, kind
+            if self.ready(id, folder, out): return out, kind
             status = await self.computers.status(id, refresh=True)
             if not status.get("ready"): await self.computers.start(id)
+            if not folder.resolve().is_relative_to((self.store.agent_directory(id) / "home").resolve()):
+                raise ValueError("預覽暫存資料夾不在這個 Bot 的電腦裡")
             folder.mkdir(parents=True, exist_ok=True)
             source = container_path(self.store.agent_directory(id), target)
             inside = f"/home/box/{CACHE}/{folder.name}"
@@ -66,9 +68,16 @@ class Previews:
                 check=False, timeout=CONVERT_SECONDS + 15)
             if code in (126, 127) or "executable file not found" in err:
                 raise ValueError("這台電腦還沒有 Office 檢視工具，請在電腦區按「更新電腦環境」")
-            if not out.exists():
+            if not self.ready(id, folder, out):
                 raise ValueError("無法轉換這個檔案，請下載後在電腦上開啟" + (f"（{err.strip()[-200:]}）" if err.strip() else ""))
         return out, kind
+
+    def ready(self, id, folder: Path, out: Path):
+        """A finished conversion: a plain file in the bot's preview cache. The cache is in the bot's own home, so a link
+        the bot placed there (to some other file on this machine) is never served; the document is converted again."""
+        if out.is_symlink(): out.unlink(); return False
+        home = (self.store.agent_directory(id) / "home").resolve()
+        return out.is_file() and out.resolve().parent == folder.resolve() and folder.resolve().is_relative_to(home)
 
 
 def archive_entries(target: Path):
