@@ -44,25 +44,28 @@ process.exit(0);
 """
 
 
-# Runs inside the bot's computer: a browser left with dozens of tabs from earlier work is slow and easy to type into
-# the wrong tab. Past TAB_LIMIT tabs, only the newest TAB_KEEP stay open; logins live in cookies, not in tabs.
-TAB_LIMIT, TAB_KEEP = 10, 6
+# Runs inside the bot's computer once a bot has finished its work: every tab it opened is a renderer holding hundreds of
+# megabytes, and a browser full of old tabs is slow and easy to type into the wrong tab. Only the tab used last stays
+# (Chromium lists tabs most recently used first; blank ones only when nothing else is open), which also keeps the
+# browser itself running. Logins live in cookies, not in tabs.
 TIDY_TABS = """
-import { chromium } from '/opt/lazyboy/playwright/node_modules/playwright/index.mjs';
-setTimeout(() => process.exit(1), 15000);
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { timeout: 3000 });
-const pages = browser.contexts().flatMap(context => context.pages());
-const extra = pages.length > LIMIT ? pages.slice(0, pages.length - KEEP) : [];
-for (const page of extra) await page.close().catch(() => {});
-console.log(JSON.stringify({ open: pages.length, closed: extra.length }));
-process.exit(0);
+import json, urllib.request
+base = "http://127.0.0.1:9222/json"
+pages = [t for t in json.load(urllib.request.urlopen(base + "/list", timeout=5)) if t.get("type") == "page"]
+blank = lambda url: not url or url == "about:blank" or url.startswith(("chrome://newtab", "chrome://new-tab-page"))
+keep = next((t for t in pages if not blank(t.get("url"))), pages[0] if pages else None)
+closed = 0
+for t in pages:
+    if t is keep: continue
+    try: urllib.request.urlopen(base + "/close/" + t["id"], timeout=5).close(); closed += 1
+    except OSError: pass
+print(json.dumps({"open": len(pages), "closed": closed}))
 """
 
 
 async def tidy_tabs(computers, agent_id: str) -> int:
-    """Close the oldest tabs of an idle bot's browser once it has more than TAB_LIMIT; returns how many were closed."""
-    script = TIDY_TABS.replace("LIMIT", str(TAB_LIMIT)).replace("KEEP", str(TAB_KEEP))
-    code, out, _ = await docker("exec", computers.name(agent_id), "node", "--input-type=module", "-e", script, check=False, timeout=30)
+    """Close the tabs an idle bot's browser no longer needs (see TIDY_TABS); returns how many were closed."""
+    code, out, _ = await docker("exec", computers.name(agent_id), "python3", "-c", TIDY_TABS, check=False, timeout=30)
     if code: return 0
     try: return int(json.loads(out.strip().splitlines()[-1]).get("closed", 0))
     except (ValueError, IndexError, AttributeError): return 0

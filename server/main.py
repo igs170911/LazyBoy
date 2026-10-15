@@ -59,7 +59,7 @@ computers.roster = lambda id: collab.roster_text(id) + org.soul_text(id)
 
 
 async def tidy_browser(id):
-    """After a bot finishes its work, close the old tabs it left behind (cleanup.TAB_LIMIT)."""
+    """After a bot finishes its work, close the tabs it left behind (cleanup.TIDY_TABS)."""
     with contextlib.suppress(Exception):
         if (await computers.status(id)).get("ready") and not runtime.busy(id): await cleanup.tidy_tabs(computers, id)
 runtime.on_idle = tidy_browser

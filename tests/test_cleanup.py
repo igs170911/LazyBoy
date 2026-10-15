@@ -117,4 +117,4 @@ async def test_an_idle_bots_old_browser_tabs_are_closed(bot, monkeypatch):
     monkeypatch.setattr(cleanup, "docker", fake_docker)
     assert await cleanup.tidy_tabs(Stopped(), agent) == 25
     script = calls[0][-1]
-    assert calls[0][:2] == ("exec", "box-" + agent) and "pages.length > 10" in script and "pages.length - 6" in script
+    assert calls[0][:2] == ("exec", "box-" + agent) and calls[0][2:4] == ("python3", "-c") and "/close/" in script
