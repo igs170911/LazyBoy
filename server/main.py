@@ -278,21 +278,65 @@ async def media(agent_id: str | None = None):
     _, model, provider = TurnRoute(settings, agent, config, "work", "work", enabled).primary()
     row = next((r for r in provider.get("models", []) if isinstance(r, dict) and r.get("id") == model), {})
     return {"model": model, "capabilities": {"images": bool(row.get("vision", False)), "pdf": True, "text": True}, "limits": UPLOAD_LIMITS}
+XAI_IMAGE_MODEL = "grok-imagine-image-2.0"
+
+
+def image_providers():
+    """Every keyed provider that can draw: models ticked for image generation, plus xAI's own image models
+    whenever an xAI key is saved (as a provider or as the X search key) — those never show up as chat models."""
+    config = settings.read()
+    rows = [(pid, p["base_url"], p["api_key"], [r["id"] for r in p.get("models", []) if isinstance(r, dict) and r.get("image_generation")])
+            for pid, p in config.get("providers", {}).items() if p.get("base_url") and p.get("api_key")]
+    xai_key = config.get("providers", {}).get("xai", {}).get("api_key") or settings.search()["xai_api_key"]
+    if xai_key and not any(urlparse(url).hostname == "api.x.ai" for _, url, _, _ in rows):
+        rows.append(("xai", "https://api.x.ai/v1", xai_key, []))
+    return rows
+
+
+async def xai_image_models(client, base_url, key):
+    try:
+        response = await client.get(base_url.rstrip("/") + "/models", headers={"Authorization": "Bearer " + key})
+        ids = [m["id"] for m in response.json().get("data", []) if "imag" in m.get("id", "")] if response.is_success else []
+    except (httpx.HTTPError, ValueError): ids = []
+    return sorted(ids, reverse=True) or [XAI_IMAGE_MODEL]
+
+
 @app.get("/api/avatar/models")
 async def avatar_models():
-    provider, _, p = settings.effective()
-    return {"provider": provider, "models": [r["id"] for r in p.get("models", []) if isinstance(r, dict) and r.get("image_generation")]}
+    async with httpx.AsyncClient(timeout=15) as client:
+        rows = image_providers()
+        extra = await asyncio.gather(*(xai_image_models(client, url, key) if urlparse(url).hostname == "api.x.ai" else asyncio.sleep(0, [])
+                                       for _, url, key, _ in rows))
+    labels = {pid: p.get("label") or pid for pid, p in settings.read().get("providers", {}).items()}
+    labels.setdefault("xai", "xAI")
+    return {"models": [{"provider": pid, "model": m, "label": f"{labels.get(pid, pid)} · {m}"}
+                       for (pid, _, _, ticked), found in zip(rows, extra) for m in dict.fromkeys(found + ticked)]}
+
+
 @app.post("/api/avatar/generate")
 async def generate_avatar(request: Request):
-    body = await request.json(); _, _, p = settings.effective()
+    body = await request.json()
+    row = next((r for r in image_providers() if r[0] == body.get("provider")), None)
+    if not row: raise ValueError("找不到這個生圖供應商，請先在設定填入金鑰")
+    _, base_url, key, _ = row
+    payload = {"model": body["model"], "prompt": body["prompt"], "n": 1, "response_format": "b64_json"}
+    # xAI takes an aspect ratio, not OpenAI's size.
+    payload.update({"aspect_ratio": "1:1"} if urlparse(base_url).hostname == "api.x.ai" else {"size": "1024x1024"})
     async with httpx.AsyncClient(timeout=150) as client:
-        response = await client.post(p.get("base_url", "").rstrip("/") + "/images/generations", headers={"Authorization": "Bearer " + p.get("api_key", "")}, json={"model": body["model"], "prompt": body["prompt"], "n": 1, "size": "1024x1024", "response_format": "b64_json"})
-        if not response.is_success: raise ValueError("供應商無法生成頭像；可改用上傳圖片")
+        response = await client.post(base_url.rstrip("/") + "/images/generations", headers={"Authorization": "Bearer " + key}, json=payload)
+        if not response.is_success:
+            try: detail = response.json().get("error")
+            except (ValueError, AttributeError): detail = None
+            detail = (detail.get("message") if isinstance(detail, dict) else detail) or response.text[:300]
+            raise ValueError(f"供應商無法生成頭像（{response.status_code}）：{detail}")
         data = response.json()["data"][0]
-        if data.get("b64_json"): return {"data_url": "data:image/png;base64," + data["b64_json"]}
-        image_response = await client.get(data["url"])
-        image_response.raise_for_status()
-        return {"data_url": "data:image/png;base64," + base64.b64encode(image_response.content).decode()}
+        if data.get("b64_json"): raw = base64.b64decode(data["b64_json"])
+        else:
+            image_response = await client.get(data["url"])
+            image_response.raise_for_status()
+            raw = image_response.content
+    kind = "jpeg" if raw[:3] == b"\xff\xd8\xff" else "webp" if raw[8:12] == b"WEBP" else "png"
+    return {"data_url": f"data:image/{kind};base64," + base64.b64encode(raw).decode()}
 
 
 @app.get("/api/agents")

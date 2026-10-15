@@ -217,6 +217,7 @@ export type TranscriptItem = PeerFields & { id?: string; role: "user" | "assista
 
 export type ModelProtocol = "chat_completions" | "responses" | "messages";
 export type ModelCheck = { status: "ok" | "protocol" | "unavailable" | "auth" | "busy" | "unknown"; message: string; detail?: string; at?: number; v?: number; protocol?: ModelProtocol | null };
+export type ImageModel = { provider: string; model: string; label: string };
 export type SettingsModel = { id: string; label?: string; protocol?: ModelProtocol; reasoning_effort?: string | null; reasoning_levels?: string[] | null; vision?: boolean; image_generation?: boolean; check?: ModelCheck };
 export type SettingsProvider = {
   id: string;
@@ -375,8 +376,8 @@ export const api = {
     request<ConnectorApp>(`/api/connectors/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(body) }, 150000),
   mcp: (body: Record<string, unknown>, timeout = 30000) => request<{servers: McpServer[];scope?:string;skipped?:boolean}>("/api/mcp", {method:"POST",body:JSON.stringify(body)}, timeout),
   media: (id?: string) => request<{model: string; capabilities: MediaCapabilities; limits?: UploadLimits}>("/api/media" + (id ? `?agent_id=${encodeURIComponent(id)}` : "")),
-  avatarModels: () => request<{provider: string; models: string[]}>("/api/avatar/models", undefined, 25000),
-  generateAvatar: (model: string, prompt: string, signal?: AbortSignal) => request<{data_url: string}>("/api/avatar/generate", {method:"POST", body:JSON.stringify({model,prompt}), signal}, 160000),
+  avatarModels: () => request<{models: ImageModel[]}>("/api/avatar/models", undefined, 25000),
+  generateAvatar: (choice: ImageModel, prompt: string, signal?: AbortSignal) => request<{data_url: string}>("/api/avatar/generate", {method:"POST", body:JSON.stringify({provider:choice.provider,model:choice.model,prompt}), signal}, 160000),
   upload: async (id: string, file: File): Promise<Upload> => {
     return withRequestTimeout(undefined, 30000, async (signal) => {
       const response = await fetch(`/api/agents/${encodeURIComponent(id)}/uploads?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file, signal });

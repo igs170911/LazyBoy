@@ -3,7 +3,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { SkillsPanel } from "./skills-panel";
 import { StoragePanel } from "./storage-panel";
 import { MemoryPanel } from "./memory-panel";
-import { api, type AgentGroup, type AgentProfile, type AgentRow, type SettingsProvider } from "./api";
+import { api, type AgentGroup, type AgentProfile, type AgentRow, type ImageModel, type SettingsProvider } from "./api";
 import { X } from "./ui/icons";
 import {
   Avatar,
@@ -32,6 +32,8 @@ import {
   type AvatarImage,
 } from "./avatar-upload";
 import { useI18n } from "./i18n";
+
+const imageKey = (item: ImageModel) => item.provider + "\u0000" + item.model;
 
 function parseTags(text: string): string[] {
   return text.split(/[、,，]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 6);
@@ -91,7 +93,7 @@ export function AgentSettingsDialog({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [tab, setTab] = useState<"bot" | "upload" | "generate">("bot");
   const [initialLook] = useState(() => randomLook());
-  const [imageModels, setImageModels] = useState<string[]>([]);
+  const [imageModels, setImageModels] = useState<ImageModel[]>([]);
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -103,17 +105,18 @@ export function AgentSettingsDialog({
   useEffect(() => () => { generation.current?.abort(); if (stagedUrl.current) URL.revokeObjectURL(stagedUrl.current); }, []);
   async function loadModels() {
     setModelsLoading(true); setModelsError("");
-    try { const result = await api.avatarModels(); setImageModels(result.models); setModel(current => result.models.includes(current) ? current : result.models[0] || ""); }
+    try { const result = await api.avatarModels(); const keys = result.models.map(imageKey); setImageModels(result.models); setModel(current => keys.includes(current) ? current : keys[0] || ""); }
     catch (err) { setModelsError(err instanceof Error ? err.message : "無法載入生圖模型"); }
     finally { setModelsLoading(false); }
   }
   useEffect(() => { if (pickerOpen) void loadModels(); }, [pickerOpen]);
   async function generate() {
-    if (generating || !model || !prompt.trim()) return;
+    const choice = imageModels.find(item => imageKey(item) === model);
+    if (generating || !choice || !prompt.trim()) return;
     const controller = new AbortController(); generation.current = controller;
     setGenerating(true); setError("");
     try {
-      const result = await api.generateAvatar(model, prompt, controller.signal);
+      const result = await api.generateAvatar(choice, prompt, controller.signal);
       if (controller.signal.aborted) return;
       const image = await normalizeDataUrl(result.data_url);
       if (controller.signal.aborted) return;
@@ -450,12 +453,12 @@ export function AgentSettingsDialog({
               </div>
               <button type="button" className="avatar-reset" disabled={busy || generating} onClick={() => void resetAvatar()}>重新隨機</button>
             </div>
-            {modelsLoading ? <small role="status">檢查生圖支援…</small> : modelsError ? <small className="pane-error">{modelsError} <button type="button" onClick={() => void loadModels()}>重試</button></small> : !imageModels.length ? <small>目前供應商未提供可用的生圖模型</small> : null}
+            {modelsLoading ? <small role="status">檢查生圖支援…</small> : modelsError ? <small className="pane-error">{modelsError} <button type="button" onClick={() => void loadModels()}>重試</button></small> : !imageModels.length ? <small>尚無可用的生圖模型：在設定填入 xAI 金鑰，或替模型勾選「產生圖片」</small> : null}
             {tab === "generate" ? (
               <div className="avatar-generate">
-                <label>生圖模型<select value={model} disabled={generating} onChange={event => setModel(event.target.value)}>{imageModels.map(id => <option key={id}>{id}</option>)}</select></label>
+                <label>生圖模型<select value={model} disabled={generating} onChange={event => setModel(event.target.value)}>{imageModels.map(item => <option key={imageKey(item)} value={imageKey(item)}>{item.label}</option>)}</select></label>
                 <label>描述你想要的大頭貼<textarea value={prompt} maxLength={2000} rows={3} disabled={generating} onChange={event => setPrompt(event.target.value)} placeholder="例如：戴圓眼鏡的橘貓，簡單插畫，淡綠背景" /></label>
-                <small>使用目前供應商的 API 額度，產生後可裁切再套用。</small>
+                <small>使用所選供應商的 API 額度，產生後可裁切再套用。</small>
                 <div className="pane-actions"><button type="button" className="primary" disabled={generating || !model || !prompt.trim()} onClick={() => void generate()}>{generating ? "產生中…" : "產生大頭貼"}</button>{generating ? <button type="button" onClick={() => { generation.current?.abort(); setGenerating(false); }}>取消等待</button> : null}</div>
                 {error ? <div role="alert" className="pane-error">{error}</div> : null}
               </div>

@@ -140,3 +140,28 @@ async def test_a_folder_a_bot_named_downloads_as_a_zip(service):
         response=await c.get(f"/api/agents/{bot['id']}/files/content",params={"path":"/workspace/poc/"})
         assert response.status_code==200 and response.headers["content-type"]=="application/zip" and 'poc.zip' in response.headers["content-disposition"]
         assert sorted(zipfile.ZipFile(io.BytesIO(response.content)).namelist())==["poc/qa/report.md","poc/run.py"]
+
+
+async def test_avatar_generation_uses_saved_xai_key_even_when_another_provider_is_active(service, monkeypatch):
+    import base64
+    cfg = service.settings.read()
+    cfg["active"] = "custom"; cfg["providers"]["custom"].update(base_url="https://chat.example/v1", api_key="chat-key", models=[{"id": "chat", "image_generation": True}])
+    cfg["search"] = {"provider": "exa", "api_key": "", "xai_api_key": "xai-key"}
+    service.settings.save(cfg)
+    jpeg = b"\xff\xd8\xff" + b"x" * 20
+    sent = []
+    def handle(request):
+        sent.append(request)
+        if request.url.path == "/v1/models": return httpx.Response(200, json={"data": [{"id": "grok-4.7"}, {"id": "grok-imagine-image-2.0"}]})
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(jpeg).decode()}]})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(service.httpx, "AsyncClient", lambda *a, **k: real(*a, **{"transport": httpx.MockTransport(handle), **k}))
+    async with real(transport=httpx.ASGITransport(app=service.app), base_url="http://localhost:8790") as c:
+        models = (await c.get("/api/avatar/models")).json()["models"]
+        assert [(m["provider"], m["model"]) for m in models] == [("custom", "chat"), ("xai", "grok-imagine-image-2.0")]
+        result = (await c.post("/api/avatar/generate", json={"provider": "xai", "model": "grok-imagine-image-2.0", "prompt": "cat"})).json()
+    post = sent[-1]
+    assert str(post.url) == "https://api.x.ai/v1/images/generations" and post.headers["authorization"] == "Bearer xai-key"
+    body = json.loads(post.content)
+    assert "size" not in body and body["aspect_ratio"] == "1:1"
+    assert result["data_url"].startswith("data:image/jpeg;base64,")

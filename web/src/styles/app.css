@@ -806,6 +806,9 @@ body.is-resizing iframe { pointer-events: none; }
 .sidebar-foot { display: grid; gap: 2px; }
 .sidebar-foot-row { display: flex; align-items: center; gap: 4px; }
 .sidebar-foot-row .btn { flex: 1; }
+.sidebar-foot-mobile, .is-mobile .sidebar-foot-desktop { display: none; }
+.is-mobile .sidebar-foot-mobile { display: flex; }
+.sidebar-foot-mobile .btn[aria-haspopup] { flex: 0 0 auto; width: auto; }
 .sidebar-search-icon { margin: 0 auto 6px; }
 .sidebar.compact { flex-basis: 76px; width: 76px; }
 .sidebar.compact .brand span, .sidebar.compact .sidebar-search, .sidebar.compact .bot-section-head, .sidebar.compact .bot-row-text,

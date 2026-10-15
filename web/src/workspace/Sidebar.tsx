@@ -3,7 +3,7 @@ import type { AgentGroup, AgentRow, RoomRow } from "../api";
 import { Avatar } from "../avatar";
 import type { AvatarShape } from "../types";
 import { readStorage, writeStorage } from "../storage";
-import { ChevronDown, FolderPlus, Import, LayoutGrid, MessagesSquare, Network, PanelLeft, Plug, Plus, Search, Settings, Stamp, Star, X } from "../ui/icons";
+import { ChevronDown, Ellipsis, FolderPlus, Import, LayoutGrid, MessagesSquare, Network, PanelLeft, Plug, Plus, Search, Settings, Stamp, Star, X } from "../ui/icons";
 import { RoomAvatar } from "./Team";
 import { MenuButton, useContextMenu, type MenuItem } from "../ui/overlay";
 import { listTime } from "./format";
@@ -155,6 +155,12 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
     { label: "新增分區", icon: <FolderPlus />, onSelect: onCreateGroup, disabled: agents.length === 0 },
   ];
 
+  const moreItems: MenuItem[] = [
+    ...(onTemplates ? [{ label: "Bot 範本", icon: <LayoutGrid />, onSelect: onTemplates }] : []),
+    ...(onConnectApps ? [{ label: "連接應用程式", icon: <Plug />, onSelect: onConnectApps }] : []),
+    ...(onOrg ? [{ label: "組織架構", icon: <Network />, onSelect: onOrg }] : []),
+  ];
+
   const dragBot = drag?.kind === "bot" ? agents.find(agent => agent.id === drag.id) : undefined;
   // Chrome drops a drag whose source moves while it starts, so the drop zones appear on the next frame.
   const startDrag = onMove && !query ? (next: Drag) => {
@@ -273,10 +279,17 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
         ) : null}
       </nav>
       <footer className="sidebar-foot">
-        {onTemplates ? <button type="button" className="btn ghost" onClick={onTemplates} title="Bot 範本"><LayoutGrid /><span>Bot 範本</span></button> : null}
-        {onConnectApps ? <button type="button" className="btn ghost" onClick={onConnectApps} title="連接應用程式"><Plug /><span>連接應用程式</span></button> : null}
-        {onOrg ? <button type="button" className="btn ghost" onClick={onOrg} title="組織架構"><Network /><span>組織架構</span></button> : null}
-        <div className="sidebar-foot-row">
+        {/* On a phone the extras fold into one menu, so the bot list keeps the screen however many get added. */}
+        {moreItems.length ? (
+          <div className="sidebar-foot-row sidebar-foot-mobile">
+            <button type="button" className="btn ghost" onClick={onSettings} title="設定"><Settings /><span>設定</span></button>
+            <MenuButton label="更多" icon={<Ellipsis />} items={moreItems} placement="top-end" className="btn ghost"><span>更多</span></MenuButton>
+          </div>
+        ) : null}
+        {onTemplates ? <button type="button" className="btn ghost sidebar-foot-desktop" onClick={onTemplates} title="Bot 範本"><LayoutGrid /><span>Bot 範本</span></button> : null}
+        {onConnectApps ? <button type="button" className="btn ghost sidebar-foot-desktop" onClick={onConnectApps} title="連接應用程式"><Plug /><span>連接應用程式</span></button> : null}
+        {onOrg ? <button type="button" className="btn ghost sidebar-foot-desktop" onClick={onOrg} title="組織架構"><Network /><span>組織架構</span></button> : null}
+        <div className={`sidebar-foot-row${moreItems.length ? " sidebar-foot-desktop" : ""}`}>
           <button type="button" className="btn ghost" onClick={onSettings} title="設定"><Settings /><span>設定</span></button>
           {onToggleCompact ? <button type="button" className="icon-btn" aria-label={compact ? "展開側欄" : "精簡側欄"} title={`${compact ? "展開側欄" : "精簡側欄"}（Ctrl B）`} onClick={onToggleCompact}><PanelLeft /></button> : null}
         </div>
