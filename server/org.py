@@ -13,6 +13,7 @@ the user, and the decisions only the user makes.
 import re
 from datetime import datetime, timedelta, timezone
 
+from .collab import plain
 from .store import now, uid
 
 DEFAULT_APPROVALS = ["新商品定價", "新增支出", "簽約", "上架", "重要對客承諾"]
@@ -55,11 +56,6 @@ TEMPLATES = {
         ],
     },
 }
-
-
-def plain(text, limit):
-    text = " ".join(str(text or "").split())
-    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def task_text(task):
@@ -190,7 +186,8 @@ class Organization:
         key = uid()
         row = {"id": key, "agent_id": agent_id, "agent_name": agent["name"], "subject": subject, "details": str(details or "").strip()[:4000],
                "category": plain(category, 40), "state": "pending", "created_at": now(), "decided_at": None, "note": "",
-               "thread_id": self.runtime.task_thread(origin) if origin else agent_id, "task_id": origin.get("id"),
+               # A group-chat turn runs in a hidden seat thread; the decision goes to the bot's own chat instead.
+               "thread_id": self.runtime.task_thread(origin) if origin and not origin.get("room_id") else agent_id, "task_id": origin.get("id"),
                "from_agent": origin.get("from_agent"), "from_name": origin.get("from_name")}
         self.store.put("approvals", key, row)
         self.collab.note(agent_id, "approval_request", subject, approval_id=key)
@@ -253,19 +250,33 @@ class Organization:
         manager = ""
         if reports_to:
             manager = reports_to if reports_to in agents else self.collab.resolve(reports_to, None)["id"]
+        # Everything is checked before anything is written, so a bad member leaves no half-built team behind.
+        lead_id = self.collab.resolve(lead, None)["id"] if isinstance(lead, str) else None
+        member_ids = [self.collab.resolve(p, None)["id"] if isinstance(p, str) else None for p in members]
+        existing = [i for i in [lead_id, *member_ids] if i]
+        if len(set(existing)) != len(existing): raise ValueError("同一個 Bot 不能在團隊裡出現兩次，主管也不能同時是成員")
+        if lead_id: self.check_manager(lead_id, manager)
+        # The chart after the change: the lead under `manager`, every existing member under the lead. The old chart had
+        # no loop and only those lines change, so a loop would pass through the lead.
+        boss = {a["id"]: a.get("reports_to") or "" for a in agents.values()}
+        head_key = lead_id or ""
+        boss[head_key] = manager
+        for i in member_ids:
+            if i: boss[i] = head_key
+        seen, at = set(), manager
+        while at and at not in seen:
+            if at == head_key or at in member_ids: raise ValueError("這樣安排會讓報告關係繞成一圈，請換一位團隊的上級")
+            seen.add(at); at = boss.get(at, "")
         groups = self.store.all("groups")
         group = next((g for g in groups if g["name"] == name), None)
         if not group:
             group = {"id": uid(), "name": name, "position": len(groups)}
             self.store.put("groups", group["id"], group)
 
-        def place(person, boss):
-            if isinstance(person, str):
-                found = self.collab.resolve(person, None)
-                fields = {"group_id": group["id"]}
-                if boss is not None: fields["reports_to"] = self.check_manager(found["id"], boss)
-                self.store.patch("agents", found["id"], **fields)
-                return self.agents()[found["id"]]
+        def place(person, found, boss):
+            if found:
+                self.store.patch("agents", found, group_id=group["id"], reports_to=boss)
+                return self.agents()[found]
             row = self.collab.create_agent({"name": plain(person.get("name"), 40), "title": plain(person.get("title"), 60),
                                             "persona": str(person.get("persona") or "").strip()[:4000], "description": plain(person.get("persona"), 1000),
                                             "group_id": group["id"], **{k: person[k] for k in ("avatar_color", "avatar_shape") if person.get(k)}})
@@ -273,12 +284,12 @@ class Organization:
             self.store.patch("agents", row["id"], **fields)
             return self.agents()[row["id"]]
 
-        head = place(lead, manager)
-        if lead_manage or lead_primary: self.store.patch("agents", head["id"], **({"can_manage": True} if lead_manage else {}))
+        head = place(lead, lead_id, manager)
+        if lead_manage: self.store.patch("agents", head["id"], can_manage=True)
         if lead_primary:
             for agent in self.store.all("agents"):
                 if bool(agent.get("primary")) != (agent["id"] == head["id"]): self.store.patch("agents", agent["id"], primary=agent["id"] == head["id"])
-        crew = [place(person, head["id"]) for person in members]
+        crew = [place(person, found, head["id"]) for person, found in zip(members, member_ids)]
         room = None
         if group_chat:
             room = self.create_room([head["id"], *[m["id"] for m in crew]], name)

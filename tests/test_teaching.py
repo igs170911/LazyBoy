@@ -174,3 +174,18 @@ async def test_a_failed_start_releases_the_computer(box):
     box.state.code = 1  # the computer has no recorder
     with pytest.raises(ValueError): await box.teach.start(box.id)
     assert box.id not in box.runtime.teaching and box.kicks[-1] == box.id
+
+
+async def test_pausing_a_cancelled_demonstration_is_a_plain_error(box):
+    lesson = await box.teach.start(box.id)
+    await box.teach.cancel(box.id, lesson["id"])
+    with pytest.raises(ValueError, match="已經結束"): box.teach.pause(box.id, lesson["id"], True)
+
+
+async def test_recorders_that_fail_to_stop_still_end_the_demonstration(box):
+    lesson = await box.teach.start(box.id)
+    async def broken(id, folder): raise OSError("folder gone")
+    box.teach.stop_recorders = broken
+    with pytest.raises(OSError): await box.teach.cancel(box.id, lesson["id"])
+    assert box.id not in box.runtime.teaching and lesson["id"] not in box.teach.ending and box.kicks[-1] == box.id
+    assert box.store.get("lessons", lesson["id"])["state"] == "cancelled"

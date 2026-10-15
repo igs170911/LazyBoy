@@ -127,7 +127,8 @@ class Settings:
             id = p.get("id", "").strip()
             if not id or len(id) > 100: raise ValueError("供應商名稱不可空白")
             old = cfg["providers"].get(id, {})
-            url = p.get("base_url", old.get("base_url", "")).strip().rstrip("/")
+            # An explicit null keeps the saved address, as an absent field does; "" still clears it.
+            url = str(old.get("base_url") if p.get("base_url") is None else p["base_url"] or "").strip().rstrip("/")
             if url and urlparse(url).scheme not in {"http", "https"}: raise ValueError("請填寫 HTTP 或 HTTPS 服務網址")
             for row in p.get("models", []):
                 if isinstance(row, dict) and row.get("reasoning_effort") and row["reasoning_effort"] not in REASONING_LEVELS:

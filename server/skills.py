@@ -102,6 +102,8 @@ class Skills:
         if action == "delete":
             if not previous: raise KeyError(key)
             shutil.rmtree(folder)
+            # A deleted skill must not stay in the config's disabled/library lists or the saved places.
+            self.forget_place(id, previous["name"])
         elif action == "toggle":
             # Switching a skill on or off is a setting; rewriting its file would drop Hermes' extra frontmatter
             # (platforms, required keys…) and make a built-in skill look edited, so it would stop receiving updates.

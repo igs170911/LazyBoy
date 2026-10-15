@@ -668,3 +668,113 @@ async def test_a_turn_that_stops_with_its_plan_unfinished_carries_on_by_itself(p
     finished("還差一點")
     await asyncio.sleep(0)
     assert queued == []
+
+
+async def test_stop_leaves_an_ended_turn_alone_and_survives_a_failed_interrupt(product):
+    store, _, _, runtime, id = product
+    runtime.closed = True
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "thread_id": id, "state": "terminal", "verdict": "answer", "session_id": "s", "created_at": now()})
+    client = runtime.clients[id] = FakeClient()
+    assert await runtime.stop(id) == {"status": "idle"}
+    assert store.get("tasks", task)["state"] == "terminal" and store.get("tasks", task)["verdict"] == "answer" and not client.calls
+    store.patch("tasks", task, state="running", verdict=None)
+    async def broken(method, params=None, **_): raise RuntimeError("Hermes RPC error")
+    client.call = broken
+    assert await runtime.stop(id) == {"status": "stopping"}
+    assert store.get("tasks", task)["state"] == "stopping" and runtime.halt_event(task).is_set()
+
+
+async def test_only_clarify_and_approval_words_answer_a_waiting_question_from_the_chat(product):
+    store, _, _, runtime, id = product
+    runtime.closed = True
+    task = uid(); runtime.active[id] = task
+    store.put("tasks", task, {"id": task, "agent_id": id, "thread_id": id, "state": "running", "session_id": "s", "created_at": now()})
+    client = runtime.clients[id] = FakeClient()
+    # A secret prompt: chat text is a new message, never sent to Hermes as an empty secret.
+    await runtime.human_request(id, {"id": "q1", "method": "secret", "params": {"prompt": "API key"}})
+    assert "queued" in await runtime.submit(id, "等一下，金鑰我晚點給")
+    assert client.answers == [] and runtime.pending_requests[id]["id"] == "q1" and not [c for c in client.calls if c[0] == "session.steer"]
+    # An approval: anything but an approval word waits as a message instead of becoming a denial.
+    await runtime.human_request(id, {"id": "q2", "method": "approval", "params": {"command": "npm i", "choices": ["once", "deny"]}})
+    assert "queued" in await runtime.submit(id, "先說明一下這個指令要做什麼")
+    assert client.answers == []
+    assert await runtime.submit(id, "允許") == {"ok": True} and client.answers == [("q2", {"choice": "once"})]
+    await runtime.human_request(id, {"id": "q3", "method": "clarify", "params": {"questions": [{"qid": "a", "question": "寄給誰？"}]}})
+    assert await runtime.submit(id, "王經理") == {"ok": True} and client.answers[-1] == ("q3", {"answers": {"a": "王經理"}, "outcome": "answered"})
+
+
+async def test_another_sessions_turn_during_setup_does_not_finish_the_new_task(product):
+    store, _, _, runtime, id = product
+    runtime.closed = True
+    task = uid(); runtime.active[id] = task; runtime.finished[task] = asyncio.Event()
+    # Setup has not yet stored the task's session; a background delegate reports back on the main session meanwhile.
+    store.put("tasks", task, {"id": task, "agent_id": id, "thread_id": id, "state": "running", "created_at": now()})
+    runtime.clients[id] = SimpleNamespace(alive=True, product_session="main-sid")
+    for name, payload in [("message.start", {}), ("message.delta", {"text": "背景結果"}), ("message.complete", {"text": "背景工作的結果"})]:
+        await runtime.event(id, {"type": name, "session_id": "main-sid", "payload": payload})
+    assert store.get("tasks", task)["state"] == "running" and not runtime.finished[task].is_set() and task not in runtime.streams
+    assert [m["content"] for m in store.transcript(id) if m.get("background_report")] == ["背景工作的結果"]
+
+
+async def test_a_stop_before_the_computer_is_ready_starts_nothing(product, monkeypatch):
+    store, _, _, runtime, id = product
+    runtime.closed = True
+    route = SimpleNamespace(primary=lambda: ("p", "m", {}), intent=None, role=None, enabled=False)
+    started = []
+    async def select(*args, **kwargs):
+        await runtime.stop(id); return route
+    async def client(_id): started.append(_id)
+    monkeypatch.setattr(runtime.router, "select", select)
+    monkeypatch.setattr(runtime, "client", client)
+    queued = (await runtime.submit(id, "查天氣"))["queued"]
+    runtime.closed = False
+    await runtime._queue(id)
+    assert store.get("tasks", queued)["verdict"] == "cancelled" and started == [] and id not in runtime.active
+    # Stopped while the connection opened: no session is created.
+    fake = FakeClient()
+    async def stop_while_connecting(_id):
+        await runtime.stop(id); return fake
+    async def ready(*args, **kwargs): return route
+    monkeypatch.setattr(runtime.router, "select", ready)
+    monkeypatch.setattr(runtime, "client", stop_while_connecting)
+    runtime.closed = True; queued = (await runtime.submit(id, "查股價"))["queued"]; runtime.closed = False
+    await runtime._queue(id)
+    assert store.get("tasks", queued)["verdict"] == "cancelled" and fake.calls == []
+
+
+def test_a_multi_select_answer_reads_as_a_list_of_choices():
+    frame = {"method": "clarify", "params": {"questions": [{"qid": "a", "question": "要哪些平台？"}, {"qid": "b", "question": "語氣？"}]}}
+    text = Runtime.answer_text(frame, answers={"a": ["Threads (Recommended)", "IG"], "b": "輕鬆（Recommended）"})
+    assert text == "- 要哪些平台？：Threads、IG\n- 語氣？：輕鬆"
+    assert Runtime.answer_text({"method": "clarify", "params": {"questions": [{"qid": "a"}]}}, "明天 (Recommended)") == "明天"
+
+
+async def test_forgetting_a_deleted_bot_drops_its_per_bot_state(product):
+    store, _, _, runtime, id = product
+    runtime.closed = True
+    turn = asyncio.create_task(asyncio.sleep(60)); runtime.adopted[id] = turn
+    runtime.connect_locks[id] = asyncio.Lock(); runtime.admission_locks[id] = asyncio.Lock(); runtime.listeners[id] = set()
+    runtime.last_bindings[id] = ("p", "m", {}); runtime.skill_baselines[id] = {}; runtime.teaching[id] = "lesson"
+    store.put("tasks", "t1", {"id": "t1", "agent_id": id, "state": "terminal", "created_at": now()})
+    store.put("tasks", "other", {"id": "other", "agent_id": "someone", "state": "running", "created_at": now()})
+    runtime.worker_owner.update({"w1": "t1", "w2": "other"})
+    await runtime.forget(id)
+    assert turn.cancelled() and id not in runtime.adopted and runtime.worker_owner == {"w2": "other"}
+    assert all(id not in table for table in (runtime.connect_locks, runtime.admission_locks, runtime.listeners, runtime.last_bindings, runtime.skill_baselines, runtime.teaching))
+
+
+def test_release_forgets_workers_of_turns_that_are_done(product):
+    store, _, _, runtime, id = product
+    store.put("tasks", "done", {"id": "done", "agent_id": id, "state": "terminal", "created_at": now(), "background": [{"id": "w1", "status": "completed"}]})
+    store.put("tasks", "busy", {"id": "busy", "agent_id": id, "state": "terminal", "created_at": now(), "background": [{"id": "w2", "status": "running"}]})
+    runtime.worker_owner.update({"w1": "done", "w2": "busy", "w3": "gone"})
+    runtime.release(id, "done")
+    assert runtime.worker_owner == {"w2": "busy"}
+
+
+def test_a_null_base_url_keeps_the_saved_address(product):
+    _, settings, _, _, _ = product
+    settings.update({"provider": {"id": "p", "base_url": "https://api.example/v1", "api_key": "k"}})
+    settings.update({"provider": {"id": "p", "base_url": None}})
+    assert settings.read()["providers"]["p"]["base_url"] == "https://api.example/v1"

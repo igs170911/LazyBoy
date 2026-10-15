@@ -14,8 +14,11 @@ def test_container_selection_keeps_other_compose_projects_and_data_dirs():
     assert switch.container_owner(compose(switch.ROOT / "routing")) == "new-classifier"
     assert switch.container_owner(compose(switch.OLD.parent / "another/routing")) is None
     assert switch.container_owner(compose(Path(str(switch.OLD) + "-other/routing"))) is None
-    bot={"Name":"/lazyhermes-bot-abc","Config":{"Labels":{"lazyhermes.managed":"true","lazyhermes.bot":"abc"}},"Mounts":[{"Destination":"/hermes","Source":str(switch.DATA / "agents/abc/hermes")}]}
+    bot={"Name":"/lazyhermes-bot-abc","Config":{"Labels":{"lazyhermes.managed":"true","lazyhermes.bot":"abc"}},"Mounts":[{"Destination":"/hermes","Source":str(switch.DATA / "bots/abc/hermes")}]}
     assert switch.container_owner(bot) == "new-bot"
+    # Bots live under bots/ (Store.agent_directory); an agents/ folder is nobody's.
+    bot["Mounts"][0]["Source"]=str(switch.DATA / "agents/abc/hermes")
+    assert switch.container_owner(bot) is None
     bot["Mounts"][0]["Source"]="/tmp/unrelated/hermes"
     assert switch.container_owner(bot) is None
     assert switch.container_owner({"Name":"/lazyboy-box-abc","Config":{"Image":"other-box:local"}}) is None
@@ -54,7 +57,7 @@ def test_reused_pid_is_not_signalled(monkeypatch):
 
 
 def test_container_recreation_requires_all_durable_state_on_host():
-    item={"Config":{"Labels":{"lazyhermes.bot":"abc"}},"Mounts":[{"Type":"bind","Destination":target,"Source":str(switch.DATA / "agents" / "abc" / folder)} for target,folder in (("/hermes","hermes"),("/home/box","home"),("/workspace","workspace"))]}
+    item={"Config":{"Labels":{"lazyhermes.bot":"abc"}},"Mounts":[{"Type":"bind","Destination":target,"Source":str(switch.DATA / "bots" / "abc" / folder)} for target,folder in (("/hermes","hermes"),("/home/box","home"),("/workspace","workspace"))]}
     assert switch.persistent_computer(item)
     item["Mounts"].pop()
     assert not switch.persistent_computer(item)

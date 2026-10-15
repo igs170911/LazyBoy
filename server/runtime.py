@@ -30,6 +30,11 @@ ROUTINE_FRAME = ("【定時任務「{title}」時間到了，使用者現在不�
                  "或你的設定要求先取得同意的動作，才用 request_approval 送到「待你核定」。\n\n")
 
 log = logging.getLogger(__name__)
+# Approval replies typed into the chat; anything else typed while an approval waits is a message of its own.
+ALWAYS_WORDS = {"一律允許","always"}
+ONCE_WORDS = {"允許這次","允許","同意","once","approve"}
+APPROVAL_WORDS = ALWAYS_WORDS | ONCE_WORDS | {"拒絕","不允許","不同意","deny","reject"}
+RECOMMENDED = re.compile(r"\s*[(（]\s*recommended\s*[)）]\s*$", re.I)
 TERMINAL = {"terminal"}
 WORKER_LIVE = {"queued", "running"}
 
@@ -122,6 +127,8 @@ class Runtime:
         self.flushes = {}
         self.listeners = {}
         self.adopted = {}
+        # Task id -> asyncio.Event set when the user stops that turn (halt_event).
+        self.halts = {}
         self.worker_owner = {}
         # Task id -> its thread, for tasks with a turn in flight: every streamed event needs it.
         self.task_threads = {}
@@ -164,7 +171,7 @@ class Runtime:
 
     def patch_thread(self, id, thread_id, **fields):
         if thread_id == id:
-            mapped = {"main_thread_title" if key == "title" else key: value for key, value in fields.items() if key in {"title", "hermes_session", "live_session", "hermes_binding"}}
+            mapped = {"main_thread_title" if key == "title" else key: value for key, value in fields.items() if key in {"title", "hermes_session", "hermes_binding"}}
             if mapped: self.store.patch("agents", id, **mapped)
             return
         self.store.patch("threads", thread_id, **fields)
@@ -275,9 +282,7 @@ class Runtime:
         sid = result["session_id"]
         self.patch_thread(id, thread_id, hermes_session=result.get("stored_session_id") or stored or sid)
         # A connection-local cache, never a persisted Python object identity.
-        if thread["main"]:
-            self.store.patch("agents", id, live_session=sid)
-            client.product_session = sid
+        if thread["main"]: client.product_session = sid
         else:
             self._client_cache(client, "product_sessions")[thread_id] = sid
         return sid
@@ -301,13 +306,15 @@ class Runtime:
         if active and not force_queue and not lesson and self.task_thread(self.task(active)) == thread_id:
             task = self.task(active)
             uploads = self._uploads(id, text)
-            if task.get("question"):
+            asking = task.get("question")
+            if asking and (asking.get("method") == "clarify" or asking.get("method") == "approval" and text in APPROVAL_WORDS):
                 files = ("\n\n使用者附加的檔案已放在這台電腦：\n" + "\n".join("/workspace/" + u["path"] for u in uploads)) if uploads else ""
                 return await self.answer(id, task["question"]["question_id"], text=text + files, shown=text)
             # A steer carries text only; a message with a picture waits for its own turn so the picture is attached.
             pictures = any(u["media_type"].startswith("image/") for u in uploads)
             client = self.clients.get(id)
-            if not pictures and client and client.alive and task.get("session_id"):
+            # Any other text while the bot waits (e.g. on a secret) is a new message of its own, never a steer.
+            if not asking and not pictures and client and client.alive and task.get("session_id"):
                 response = await client.call("session.steer", {"session_id": task["session_id"], "text": self._prompt(id,text)})
                 if response.get("status") not in {"rejected", "failed"}:
                     self.store.admit(id,request_id,active,text)
@@ -377,12 +384,15 @@ class Runtime:
             try:
                 route = await self.router.select(self.agent(id), task["goal"], routine=bool(task.get("routine_id")), vision=bool(self._images(id, task["goal"], task)), emit=lambda kind, payload: self.emit(id, kind, payload, task_id))
                 self.routes[task_id] = route
+                # Stopped while the model was being chosen: nothing to start.
+                if self.finished[task_id].is_set(): continue
                 provider, model, selected = route.primary()
                 self.provider_bindings[task_id] = (provider, model, copy.deepcopy(selected))
                 effort = self.settings.reasoning(selected, model)
                 self.store.patch("tasks",task_id,provider=provider,model=model,protocol=self.settings.protocol(selected,model),reasoning_effort=effort,routing={"intent":route.intent,"role":route.role,"enabled":route.enabled})
                 self.computers.prepare(id)
                 client=await self.client(id)
+                if self.finished[task_id].is_set(): continue
                 if id in self.computers.env_dirty:
                     # New search/xAI keys were written to .env after this Hermes started.
                     with contextlib.suppress(Exception):
@@ -455,10 +465,25 @@ class Runtime:
         if task_id in self.provider_bindings: self.last_bindings[id]=self.provider_bindings.pop(task_id)
         self.routes.pop(task_id,None)
         self.flush_deltas(id,task_id)
-        for table in (self.steps,self.sources,self.seen,self.open_tools,self.stalled,self.persisted,self.task_threads): table.pop(task_id,None)
+        for table in (self.steps,self.sources,self.seen,self.open_tools,self.stalled,self.persisted,self.task_threads,self.halts): table.pop(task_id,None)
         timer=self.flushes.pop(task_id,None)
         if timer: timer.cancel()
         self.store.prune_events(id)
+        # A finished turn's worker keys are kept while its background children still report back, no longer.
+        for key,owner in list(self.worker_owner.items()):
+            task=self.store.get("tasks",owner)
+            if not task or task["state"]=="terminal" and not live_workers(task): self.worker_owner.pop(key,None)
+
+    async def forget(self,id):
+        """A deleted bot: drop what is kept per bot in memory. Its computer (and the computer's dirty flags) goes
+        with Computers.delete; its connection and queue runner with delete_agent."""
+        turn=self.adopted.pop(id,None)
+        if turn and not turn.done():
+            turn.cancel(); await asyncio.gather(turn,return_exceptions=True)
+        for table in (self.connect_locks,self.admission_locks,self.listeners,self.last_bindings,self.skill_baselines,self.teaching): table.pop(id,None)
+        owned={t["id"] for t in self.store.agent_tasks(id)}
+        for key,owner in list(self.worker_owner.items()):
+            if owner in owned: self.worker_owner.pop(key,None)
 
     def adopt(self,id,sid):
         """A turn Hermes started itself, e.g. to report background delegate_task results once they finish.
@@ -586,6 +611,7 @@ class Runtime:
         self.emit(id,"reply",{},task_id)
         event=self.finished.get(task_id)
         if event: event.set()
+        if verdict in {"cancelled","interrupted"}: self.halt(task_id)
         if self.collab: self.collab.finished(id,self.task(task_id),verdict,content)
         self.auto_continue(id,self.task(task_id),verdict,content)
         if self.on_idle and not self.closed and not [t for t in self.store.agent_tasks(id,live=True) if t["id"]!=task_id]:
@@ -663,7 +689,9 @@ class Runtime:
         state,task_sid=fields
         if state == "terminal": return
         sid=event.get("session_id")
-        if task_sid and sid and sid!=task_sid:
+        # Until the task's own session is known (its setup), any session's events are another turn's, e.g. a
+        # background delegate reporting back; they must not finish this task before its prompt is even sent.
+        if sid and sid!=task_sid:
             if name=="message.complete": self.side_report(id,sid,payload)
             return
         self.seen[task_id]=time.monotonic()
@@ -917,13 +945,15 @@ class Runtime:
         """How an answer reads in the conversation: the choice or each question with its answer."""
         method=frame["method"]
         if method=="approval":
-            decision=choice or ("always" if text in {"一律允許","always"} else "once" if text in {"允許這次","允許","同意","once","approve"} else "deny")
+            decision=choice or ("always" if text in ALWAYS_WORDS else "once" if text in ONCE_WORDS else "deny")
             return {"once":"允許這次","always":"一律允許","deny":"拒絕"}.get(decision,"已回覆")
+        # A multi-select answer is a list; the page shows its own 建議 badge, so Hermes' "(Recommended)" goes.
+        label=lambda value: "、".join(filter(None,(RECOMMENDED.sub("",str(v)).strip() for v in value))) if isinstance(value,list) else RECOMMENDED.sub("",str(value)).strip()
         if method=="clarify" and answers:
             questions={q.get("qid"):q.get("question","") for q in frame.get("params",{}).get("questions",[])}
-            lines=[f"{plain_text(questions.get(qid) or '',60)}：{plain_text(str(value),200)}" if questions.get(qid) else plain_text(str(value),200) for qid,value in answers.items() if str(value).strip()]
+            lines=[f"{plain_text(questions.get(qid) or '',60)}：{plain_text(label(value),200)}" if questions.get(qid) else plain_text(label(value),200) for qid,value in answers.items() if label(value)]
             return "\n".join(f"- {line}" for line in lines) if len(lines)>1 else (lines[0] if lines else "")
-        return text
+        return label(text) if method=="clarify" else text
 
     async def answer(self,id,rid,text="",answers=None,value=None,choice=None,note=None,shown=None):
         frame=self.pending_requests.get(id)
@@ -934,7 +964,7 @@ class Runtime:
             if answers is None and len(questions) != 1: raise ValueError("請使用問題卡片逐項回答")
             result={"answers":answers if answers is not None else {q["qid"]:text for q in questions}, "outcome":"answered"}
         elif method=="approval":
-            decision=choice or ("always" if text in {"一律允許","always"} else "once" if text in {"允許這次","允許","同意","once","approve"} else "deny")
+            decision=choice or ("always" if text in ALWAYS_WORDS else "once" if text in ONCE_WORDS else "deny")
             if decision not in {"once","always","deny"}: raise ValueError("核准選項無效")
             result={"choice":decision}
         elif method in {"secret","sudo","vault.code","vault.unlock_prompt","vault.save_login"}:result={"value":value or ""}
@@ -963,13 +993,16 @@ class Runtime:
         for task in live:
             if task["state"]=="queued":self.store.patch("tasks",task["id"],state="terminal",verdict="cancelled",ended_at=now())
         task_id=self.active.get(id)
-        if task_id:
-            task=self.task(task_id)
+        task=self.task(task_id) if task_id else None
+        # A turn that already ended (its release is pending) is not stopped again; its background work still is.
+        if task and task["state"]!="terminal":
             self.store.patch("tasks",task_id,state="stopping",question=None)
+            self.halt(task_id)
             self.stalled.setdefault(task_id,time.monotonic())
             client=self.clients.get(id)
             if client and client.alive and task.get("session_id"):
-                await client.call("session.interrupt",{"session_id":task["session_id"]})
+                # Already marked stopping: a failed interrupt is settled by the watchdog, not reported as an error.
+                with contextlib.suppress(Exception): await client.call("session.interrupt",{"session_id":task["session_id"]})
             else:self.finish(id,task_id,"cancelled","")
             return {"status":"stopping"}
         background=[t for t in self.store.agent_tasks(id,live=True) if live_workers(t)]
@@ -994,6 +1027,7 @@ class Runtime:
             return
         if self.active.get(id)!=task_id: return
         self.store.patch("tasks",task_id,state="stopping",question=None)
+        self.halt(task_id)
         self.stalled.setdefault(task_id,time.monotonic())
         client=self.clients.get(id)
         if client and client.alive and task.get("session_id"):
@@ -1004,6 +1038,19 @@ class Runtime:
         """The user stopped this turn. A turn that simply ended must not cut off its background children."""
         row=self.store.fields("tasks",task_id,"state","verdict") if task_id else None
         return bool(row) and (row[0]=="stopping" or row[1] in {"cancelled","interrupted"})
+
+    def halt_event(self,task_id):
+        """Set once the user stops this turn, so in-flight model requests wait on it instead of polling halted()."""
+        event=self.halts.get(task_id)
+        if event is None:
+            event=asyncio.Event()
+            if self.halted(task_id): event.set()
+            # Only a routed turn in flight has owned requests and can still be stopped; release() clears it.
+            if task_id in self.routes: self.halts[task_id]=event
+        return event
+
+    def halt(self,task_id):
+        if event:=self.halts.get(task_id): event.set()
 
     async def disconnected(self,id,error):
         self.lose_workers(id)
@@ -1045,7 +1092,6 @@ class Runtime:
                 self.finish(task["agent_id"],task["id"],"interrupted","服務曾中斷；保留檔案及對話，沒有自動重播未知結果的操作。")
         for agent in self.store.all("agents"):
             self.lose_workers(agent["id"],everything=True)
-            self.store.patch("agents",agent["id"],live_session=None)
             self.kick(agent["id"])
 
     async def shutdown(self):

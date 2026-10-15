@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OLD = ROOT.parent / "LazyBoy2"
 DATA = Path(os.environ.get("LAZYHERMES_DATA_DIR", str(ROOT / ".data"))).resolve()
 PORT = int(os.environ.get("LAZYHERMES_PORT", "8790"))
+# Each bot's folders, as server/store.py lays them out (Store.agent_directory).
+BOTS = DATA / "bots"
 
 
 def run(args, *, capture=False, timeout=60, cwd=ROOT, env=None):
@@ -41,7 +43,7 @@ def container_owner(item):
         return "old"
     if labels.get("lazyhermes.managed") == "true" and name == "lazyhermes-bot-" + labels.get("lazyhermes.bot", ""):
         homes = [m.get("Source", "") for m in item.get("Mounts", []) if m.get("Destination") == "/hermes"]
-        if any(source and Path(source).is_relative_to(DATA / "agents") for source in homes): return "new-bot"
+        if any(source and Path(source).is_relative_to(BOTS) for source in homes): return "new-bot"
     return None
 
 
@@ -67,7 +69,7 @@ def persistent_computer(item):
     mounts = {m.get("Destination"): m for m in item.get("Mounts", [])}
     for target, folder in (("/hermes", "hermes"), ("/home/box", "home"), ("/workspace", "workspace")):
         mount = mounts.get(target, {})
-        if mount.get("Type") != "bind" or Path(mount.get("Source", "")).resolve() != DATA / "agents" / agent / folder:
+        if mount.get("Type") != "bind" or Path(mount.get("Source", "")).resolve() != BOTS / agent / folder:
             return False
     return True
 

@@ -16,7 +16,6 @@ TO_PDF = {".doc", ".docx", ".docm", ".dot", ".dotx", ".odt", ".ott", ".rtf", ".w
           ".ppt", ".pptx", ".pptm", ".pps", ".ppsx", ".odp", ".otp", ".key", ".vsd", ".vsdx", ".odg", ".pub"}
 TO_HTML = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".ots", ".numbers"}
 CACHE = ".cache/lazyboy-preview"
-CACHE_DAYS = 7
 ARCHIVE_ENTRIES = 2000
 CONVERT_SECONDS = 120
 

@@ -113,6 +113,26 @@ def test_a_team_is_built_in_one_step(company):
     with pytest.raises(ValueError, match="最多 10 位"): org.create_team("大隊", {"name": "隊長"}, [{"name": f"成員{i}"} for i in range(10)])
 
 
+def test_a_team_that_cannot_be_built_leaves_nothing_behind(company):
+    org, b, store = company.org, company.bots, company.store
+    before = {a["id"]: a for a in store.all("agents")}
+    # The lead listed again as a member, a member nobody knows, and a chart that would loop (the lead's manager is
+    # one of its own members): each fails before any section, bot or line changes.
+    with pytest.raises(ValueError, match="出現兩次"): org.create_team("營運組", "Ops", ["Ops", {"name": "新人"}])
+    with pytest.raises(ValueError, match="找不到"): org.create_team("營運組", "Ops", [{"name": "新人"}, "Nobody"])
+    with pytest.raises(ValueError, match="繞成一圈"): org.create_team("營運組", "Ops", ["Dev", {"name": "新人"}], reports_to="Dev")
+    assert store.all("groups") == [] and store.all("rooms") == []
+    assert {a["id"]: a for a in store.all("agents")} == before
+
+
+def test_an_approval_from_a_group_chat_turn_is_decided_in_the_bots_own_chat(company):
+    org, b, store = company.org, company.bots, company.store
+    seat = uid(); store.put("threads", seat, {"id": seat, "agent_id": b["Dev"], "room_id": "room-1", "title": "群組"})
+    task(company, b["Dev"], thread_id=seat, room_id="room-1")
+    sent = org.request_approval(b["Dev"], "上架新商品")
+    assert store.get("approvals", sent["approval_id"])["thread_id"] == b["Dev"]
+
+
 def test_only_a_bot_with_team_management_changes_others(company):
     org, b, store = company.org, company.bots, company.store
     with pytest.raises(ValueError, match="團隊管理權限"): org.update_bot(b["CEO"], "QA", title="測試主管")

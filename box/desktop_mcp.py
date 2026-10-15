@@ -16,6 +16,15 @@ observed = {}
 desktop_lock = asyncio.Lock()
 
 
+def screen_size():
+    """The desktop's size as start-desktop.sh set it (LAZYBOY_SCREEN_GEOMETRY, e.g. 1280x720)."""
+    try:
+        width, height = os.environ.get("LAZYBOY_SCREEN_GEOMETRY", "1280x720").lower().split("x")
+        return int(width), int(height)
+    except ValueError:
+        return 1280, 720
+
+
 async def command(*args: str, timeout: float = 12) -> str:
     p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
@@ -80,9 +89,9 @@ async def act(action, element, x, y, text, key, amount):
             hit = next((row for row in rows if fingerprint(row) == target), None)
             if hit is None:
                 raise ValueError("Element no longer visible; observe again")
-            center = hit.get("center")
-            x, y = center if isinstance(center, list) else (hit.get("cx"), hit.get("cy"))
-        if x is None or y is None or not (0 <= x < 1280 and 0 <= y < 720):
+            x, y = hit.get("cx"), hit.get("cy")
+        width, height = screen_size()
+        if x is None or y is None or not (0 <= x < width and 0 <= y < height):
             raise ValueError("Valid observed element or in-screen coordinates required")
         await command("xdotool", "mousemove", str(x), str(y), "click", "1")
     elif action == "type":

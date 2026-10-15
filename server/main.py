@@ -86,12 +86,15 @@ def clean_face(row):
         row["ask_first"] = sorted({str(v) for v in row["ask_first"] if str(v) in ASK_FIRST}) if isinstance(row["ask_first"], list) else []
     return row
 
+# What the user sets on a bot (create, edit, duplicate, share as a template).
+PROFILE_KEYS = {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression", "ask_first"}
+
+
 def make_agent(body):
     name = str(body.get("name", "")).strip()
     if not name or len(name) > 100: raise ValueError("Bot 名稱須為 1 至 100 字元")
-    keys = ["name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression", "ask_first"]
-    row = clean_face({k: body[k] for k in keys if k in body})
-    row.update(id=uid(), name=name, created_at=now(), hermes_session=None, live_session=None)
+    row = clean_face({k: body[k] for k in PROFILE_KEYS if k in body})
+    row.update(id=uid(), name=name, created_at=now(), hermes_session=None)
     store.put("agents", row["id"], row)
     computers.prepare(row["id"])
     return row
@@ -187,7 +190,7 @@ def agent_row(id, threads=None):
     seats = {t["id"] for t in (store.all("threads") if threads is None else threads) if t.get("agent_id") == id and t.get("room_id")}
     last = store.last_message(id, keep=lambda m: m.get("thread") not in seats and not m.get("silent"))
     activity = runtime.activity(id)
-    result = {k: v for k, v in agent.items() if k not in {"hermes_session", "live_session"}}
+    result = {k: v for k, v in agent.items() if k not in {"hermes_session", "live_session"}}  # live_session: rows saved before it was dropped
     avatar = store.agent_directory(id) / "avatar.png"
     result.update(expertise=agent.get("title", ""), preview=plain_text(last["content"], 140) if last else "", last_at=last.get("at") if last else None,
                   running=activity["running"], activity=activity, skill_count=skills.count(id), has_avatar=avatar.exists(), avatar_url=f"/api/agents/{id}/avatar?updated={avatar.stat().st_mtime_ns}" if avatar.exists() else None)
@@ -353,8 +356,8 @@ async def refresh_souls():
 async def create_agent(request: Request): return agent_row(make_agent(await request.json())["id"])
 @app.get("/api/agents/{id}")
 async def agent_detail(id: str, thread: str | None = None):
-    current = runtime.thread(id, thread)
-    return {**agent_row(id), "thread": thread_row(id, current), "transcript": store.transcript(id, current["id"])}
+    current = runtime.thread(id, thread); transcript = store.transcript(id, current["id"])
+    return {**agent_row(id), "thread": thread_row(id, current, transcript), "transcript": transcript}
 
 
 def thread_row(id, thread, transcript=None, activity=None):
@@ -430,8 +433,7 @@ async def thread_delete(id: str, thread_id: str):
 async def update_agent(id: str, request: Request):
     before = runtime.agent(id); body = await request.json()
     if "name" in body and (not str(body["name"]).strip() or len(str(body["name"])) > 100): raise ValueError("請填寫 Bot 名稱")
-    keys = {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "group_id", "reply_style", "avatar_traits", "avatar_expression", "ask_first"}
-    fields = clean_face({k: v for k, v in body.items() if k in keys})
+    fields = clean_face({k: v for k, v in body.items() if k in PROFILE_KEYS})
     # Reporting lines and team management are the user's to set; bots change neither of their own.
     if "reports_to" in body: fields["reports_to"] = org.check_manager(id, body["reports_to"])
     if "can_manage" in body: fields["can_manage"] = bool(body["can_manage"])
@@ -451,7 +453,7 @@ async def delete_agent(id: str):
     runner = runtime.runners.pop(id, None)
     if runner:
         runner.cancel(); await asyncio.gather(runner, return_exceptions=True)
-    await computers.delete(id)
+    await computers.delete(id); await runtime.forget(id)
     for routine in [r for r in store.all("routines") if r.get("agent_id") == id]: store.remove("routines", routine["id"])
     for thread in store.all("threads"):
         if thread.get("agent_id") == id: store.remove("threads", thread["id"])
@@ -471,8 +473,7 @@ async def duplicate_agent(id: str):
     for n in range(2, 100):
         if name not in names: break
         name = f"{agent['name']} 副本 {n}"
-    keep = {"title", "description", "persona", "tags", "avatar_color", "avatar_shape", "avatar_traits", "avatar_expression", "provider", "model", "group_id", "reply_style", "ask_first"}
-    row = make_agent({**{k: v for k, v in agent.items() if k in keep}, "name": name})
+    row = make_agent({**{k: v for k, v in agent.items() if k in PROFILE_KEYS - {"name"}}, "name": name})
     # The whole skills folder (Hermes' own, the product's and the user's, as edited) and which of them are switched off.
     source, target = store.agent_directory(id) / "hermes", store.agent_directory(row["id"]) / "hermes"
     if (source / "skills").is_dir(): shutil.copytree(source / "skills", target / "skills", dirs_exist_ok=True)
@@ -517,8 +518,6 @@ async def activity(id: str): runtime.agent(id); return runtime.activity(id)
 @app.post("/api/agents/{id}/messages")
 async def messages(id: str, request: Request):
     body = await request.json()
-    if body.get("question_id"):
-        return await runtime.answer(id, body["question_id"], text=body.get("text", ""))
     return await runtime.submit(id, body.get("text", ""), body.get("request_id"), thread=body.get("thread_id"))
 @app.post("/api/agents/{id}/stop")
 async def stop(id: str): runtime.agent(id); return await runtime.stop(id)
@@ -528,7 +527,7 @@ async def clear(id: str, thread: str | None = None):
     if thread_busy(id, current["id"]): raise ValueError("請先停止正在執行或排隊的工作")
     await release_thread_session(id, current["id"])
     store.clear_messages(id, current["id"])
-    runtime.patch_thread(id, current["id"], hermes_session=None, **({"live_session": None} if current["main"] else {}))
+    runtime.patch_thread(id, current["id"], hermes_session=None)
     runtime.emit(id, "conversation_cleared", {"thread_id": current["id"]})
     return {"ok": True, "cleared_at": now(), "thread_id": current["id"]}
 
@@ -626,8 +625,6 @@ async def compress_context(id: str, thread: str | None = None):
     return {k: result.get(k) for k in ("status", "removed", "before_messages", "after_messages", "before_tokens", "after_tokens")}
 
 
-@app.get("/api/agents/{id}/computer")
-async def computer_status(id: str): runtime.agent(id); return await computers.status(id)
 @app.post("/api/agents/{id}/computer")
 async def computer_start(id: str, request: Request):
     runtime.agent(id); action = (await request.json()).get("action", "start")
@@ -776,12 +773,6 @@ async def room_upload(room_id: str, request: Request, name: str = "attachment"):
     return {"id": key, "name": name, "path": rel, "media_type": media, "bytes": len(data), "url": f"/api/agents/{first}/files/content?path={quote(rel)}"}
 @app.get("/api/tasks/{id}")
 async def task_detail(id: str): return runtime.task(id)
-@app.post("/api/tasks/{id}/approve")
-async def approve(id: str, request: Request):
-    task = runtime.task(id); body = await request.json()
-    if body.get("agent") != task["agent_id"] or body.get("decision") not in {"approve", "reject"}: raise ValueError("無效的成果確認")
-    store.patch("tasks", id, approval={"decision": body["decision"], "note": body.get("note", ""), "decided_at": now(), "decided_by": "owner"})
-    return {"approved": body["decision"] == "approve"}
 @app.get("/api/tasks/{id}/artifacts/{artifact}/content")
 async def artifact_content(id: str, artifact: str):
     task = runtime.task(id); row = next((a for a in task.get("artifacts", []) if a["id"] == artifact), None)
@@ -936,7 +927,8 @@ async def get_avatar(id: str): runtime.agent(id); return FileResponse(contained(
 def template_of(id):
     """A bot as a portable template: profile, look, skills and connector settings, with every secret removed."""
     agent = runtime.agent(id)
-    profile = {k: v for k, v in agent.items() if k in {"name", "title", "description", "persona", "tags", "avatar_color", "avatar_shape", "provider", "model", "reply_style", "avatar_traits", "avatar_expression", "ask_first"}}
+    # The sidebar group is this install's, not the bot's.
+    profile = {k: v for k, v in agent.items() if k in PROFILE_KEYS - {"group_id"}}
     entries = {**store.get("mcp", "shared", {}), **store.get("mcp", id, {})}
     mcp, known_secrets = portable_connectors(entries)
     known_secrets.extend(p.get("api_key", "") for p in settings.read().get("providers", {}).values())
@@ -1221,16 +1213,17 @@ async def close_model_http():
 async def wait_model(awaitable, task_id):
     """Stop also owns requests waiting for HTTP headers or the first SSE byte."""
     pending = asyncio.ensure_future(awaitable)
+    halt = asyncio.ensure_future(runtime.halt_event(task_id).wait())
     try:
-        while True:
-            if runtime.halted(task_id):
-                if pending.done() and not pending.cancelled() and pending.exception() is None:
-                    value = pending.result()
-                    if isinstance(value, httpx.Response): await value.aclose()
-                raise ValueError("這個工作已停止")
-            done, _ = await asyncio.wait({pending}, timeout=.05)
-            if done: return pending.result()
+        await asyncio.wait({pending, halt}, return_when=asyncio.FIRST_COMPLETED)
+        if halt.done():
+            if pending.done() and not pending.cancelled() and pending.exception() is None:
+                value = pending.result()
+                if isinstance(value, httpx.Response): await value.aclose()
+            raise ValueError("這個工作已停止")
+        return pending.result()
     finally:
+        halt.cancel()
         if not pending.done():
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)

@@ -111,6 +111,24 @@ async def test_desktop_type_timeout_scales_with_text_length(monkeypatch):
     assert args == ("xdotool", "type") and timeout >= 100
 
 
+async def test_desktop_clicks_are_bounded_by_the_configured_screen(monkeypatch):
+    server = ModuleType("mcp.server.mcpserver")
+    server.MCPServer = lambda name: SimpleNamespace(tool=lambda: lambda function: function)
+    server.Image = object
+    for name in ("mcp", "mcp.server"): monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", server)
+    desktop = load("desktop_mcp_screen_fixture", "box/desktop_mcp.py")
+    calls = []
+    async def command(*args, timeout=12): calls.append(args); return ""
+    async def observation(image=False): return ["observed"]
+    monkeypatch.setattr(desktop, "command", command)
+    monkeypatch.setattr(desktop, "observation", observation)
+    with pytest.raises(ValueError): await desktop.act("click", None, 1500, 800, "", "", 3)
+    monkeypatch.setenv("LAZYBOY_SCREEN_GEOMETRY", "1920x1080")
+    assert await desktop.act("click", None, 1500, 800, "", "", 3) == "observed"
+    assert calls == [("xdotool", "mousemove", "1500", "800", "click", "1")]
+
+
 def test_evaluate_reads_busy_from_unready_health(monkeypatch):
     evaluate = load("routing_evaluate_fixture", "routing/evaluate.py")
     def unready(url, timeout):

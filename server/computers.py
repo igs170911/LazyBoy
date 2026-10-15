@@ -396,3 +396,4 @@ class Computers:
         if item: await docker("rm", "-f", self.name(id))
         self.cache.pop(id, None)
         self.keys.pop(id, None)
+        self.locks.pop(id, None); self.env_dirty.discard(id); self.mcp_dirty.discard(id)

@@ -244,9 +244,11 @@ class Teaching:
         return self.view(self.store.get("lessons", lesson_id))
 
     def pause(self, id, lesson_id, paused):
+        # Validated first: a cancelled lesson's folder is gone and the flag could not be written.
+        view = self.change(id, lesson_id, state="paused" if paused else "recording")
         flag = self.folder(id, lesson_id) / ".paused"
         flag.touch() if paused else flag.unlink(missing_ok=True)
-        return self.change(id, lesson_id, state="paused" if paused else "recording")
+        return view
 
     def note(self, id, lesson_id, text):
         text = str(text or "").strip()[:500]
@@ -274,7 +276,16 @@ class Teaching:
         watcher = self.watchers.pop(id, None)
         if watcher: watcher.cancel()
         folder = self.folder(id, lesson_id)
-        await self.stop_recorders(id, folder)
+        try: await self.stop_recorders(id, folder)
+        except BaseException:
+            # The recorders could not be stopped cleanly (e.g. the folder is gone): the lesson still ends, and the
+            # bot's queue must not stay held by it.
+            self.ending.discard(lesson_id)
+            self.runtime.teaching.pop(id, None)
+            self.store.patch("lessons", lesson_id, state="cancelled", ended_at=now())
+            self.announce(id)
+            self.runtime.kick(id)
+            raise
         return lesson, folder
 
     async def finish(self, id, lesson_id):

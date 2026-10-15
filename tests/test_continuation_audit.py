@@ -358,7 +358,7 @@ async def test_clear_conversation_preserves_native_state_and_blocks_queued_work(
     retained={"hermes/memories/MEMORY.md":"private memory","hermes/skills/learned/SKILL.md":"---\nname: learned\n---\n\nVerify results.","workspace/result.txt":"artifact","home/login-state":"browser profile"}
     for relative,content in retained.items():
         path=root/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(content)
-    product.store.patch("agents",agent,hermes_session="old-session",live_session="old-live")
+    product.store.patch("agents",agent,hermes_session="old-session")
     product.store.message(agent,"user","old conversation")
     assert (await client.delete(f"/api/agents/{agent}/conversation")).status_code==200
     assert product.store.transcript(agent)==[]

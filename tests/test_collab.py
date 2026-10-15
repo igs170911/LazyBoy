@@ -303,6 +303,26 @@ async def test_a_retried_message_is_delivered_once(team):
     assert len(queued(team, writer)) == 1
 
 
+async def test_two_bots_may_use_the_same_request_id(team):
+    """Each bot picks its own ids: Chief's and Scout's "task-1" are two messages to Writer, not one retried."""
+    chief, scout, writer = team.bots["Chief"], team.bots["Scout"], team.bots["Writer"]
+    running(team, chief); running(team, scout)
+    first = await team.collab.send(chief, "Writer", "寫三則貼文", request_id="task-1")
+    second = await team.collab.send(scout, "Writer", "寫三則貼文", request_id="task-1")
+    assert first["sent"] and second["sent"] and not second.get("replayed")
+    assert len(queued(team, writer)) == 2 and len(team.store.all("bot_messages")) == 2
+    assert (await team.collab.send(scout, "Writer", "寫三則貼文", request_id="task-1")).get("replayed")
+
+
+def test_clearing_a_group_name_goes_back_to_naming_it_after_its_members(team):
+    chief, writer, scout = team.bots["Chief"], team.bots["Writer"], team.bots["Scout"]
+    room = team.collab.create_room([chief, writer], "發表會")
+    assert not room["auto_name"]
+    room = team.collab.update_room(room["id"], name="", member_ids=[chief, writer, scout])
+    assert room["name"] == "Chief、Writer、Scout" and room["auto_name"]
+    assert team.collab.update_room(room["id"], member_ids=[chief, scout])["name"] == "Chief、Scout"
+
+
 def test_the_primary_bot_is_named_in_every_teammate_list(team):
     chief, writer = team.bots["Chief"], team.bots["Writer"]
     team.store.patch("agents", chief, primary=True)

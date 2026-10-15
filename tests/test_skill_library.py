@@ -91,3 +91,15 @@ def test_switching_a_builtin_skill_off_and_on_leaves_its_file_untouched(store):
     skills.manage(bot, {"action": "save", "id": "productivity/pdf", "name": "pdf", "description": "PDF tools", "instructions": "Use qpdf."})
     meta = yaml.safe_load(path.read_text().split("---")[1])
     assert meta == {"name": "pdf", "description": "PDF tools", "platforms": ["linux"]}
+
+
+def test_a_deleted_skill_leaves_no_name_behind(store):
+    bot, skills = bot_with_skills(store)
+    skills.manage(bot, {"action": "place", "id": "threads-patrol", "place": "library"})
+    skills.manage(bot, {"action": "toggle", "id": "media/youtube-content", "enabled": False})
+    skills.manage(bot, {"action": "delete", "id": "threads-patrol"})
+    skills.manage(bot, {"action": "delete", "id": "media/youtube-content"})
+    cfg = skills.config(bot)
+    assert "threads-patrol" not in skills.library_names(bot) and "threads-patrol" not in cfg["product_skill_library"]
+    assert not {"threads-patrol", "youtube-content"} & set(cfg["skills"]["disabled"])
+    assert not {"threads-patrol", "youtube-content"} & set(store.get("skill_library", bot, {}).get("places") or {})

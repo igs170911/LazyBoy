@@ -194,6 +194,8 @@ class Collaboration:
         chain = (origin or {}).get("chain") or (origin or {}).get("id") or uid()
         sender_thread = self.runtime.task_thread(origin) if origin else sender_id
         # The same request sent again (a retried tool call) was already delivered; only the reply is repeated.
+        # Each bot picks its own ids, so two senders' "task-1" are different messages to the same recipient.
+        if request_id: request_id = f"{sender_id}:{request_id}"
         if request_id and (admitted := self.store.admission(target["id"], request_id)):
             return {"sent": True, "to": target["name"], "message_id": None, "replayed": True, "task": admitted["task"],
                     "note": f"這則訊息先前已送達 {target['name']}，不會重複傳送。"}
@@ -377,7 +379,10 @@ class Collaboration:
         if member_ids is not None:
             fields["member_ids"] = self.clean_members(member_ids)
             if room.get("auto_name"): fields["name"] = plain("、".join(self.runtime.agent(i)["name"] for i in fields["member_ids"]), 60)
+        # An emptied name goes back to naming the group after its members.
         if name is not None and str(name).strip(): fields.update(name=plain(name, 60), auto_name=False)
+        elif name is not None:
+            fields.update(auto_name=True, name=plain("、".join(self.runtime.agent(i)["name"] for i in fields.get("member_ids", room["member_ids"])), 60))
         self.store.patch("rooms", room_id, **fields)
         self.runtime.emit(room_id, "room_updated", {})
         return self.room(room_id)
@@ -409,7 +414,7 @@ class Collaboration:
         room = self.room(room_id)
         text = str(text or "").strip()
         if not text: raise ValueError("請輸入訊息")
-        if len(text) > 12000: raise ValueError("訊息最多 12000 字元")
+        if len(text) > MESSAGE_MAX: raise ValueError(f"訊息最多 {MESSAGE_MAX} 字元")
         members = self.members(room)
         if len(members) < ROOM_MIN: raise ValueError("群組成員不足兩位，請先編輯成員")
         named, everyone = mentions(text, members)
@@ -504,7 +509,7 @@ class Collaboration:
         self.note(agent_id, "group_created", room["name"], room_id=room["id"], peer_name=room["name"])
         woke = []
         if str(message or "").strip():
-            text = str(message).strip()[:12000]
+            text = str(message).strip()[:MESSAGE_MAX]
             posted, named = self.speak(room, agent_id, text)
             # Nobody named: the other members decide for themselves whether to answer.
             targets = named or [m for m in self.members(room) if m["id"] != agent_id]
@@ -518,9 +523,9 @@ class Collaboration:
         room = self.find_room(ref, agent_id)
         text = str(message or "").strip()
         if not text: raise ValueError("訊息內容是空的")
-        posted, named = self.speak(room, agent_id, text[:12000])
+        posted, named = self.speak(room, agent_id, text[:MESSAGE_MAX])
         self.wake(room, named, posted["id"], 1)
-        self.note(agent_id, "group_post", text[:12000], room_id=room["id"], peer_name=room["name"])
+        self.note(agent_id, "group_post", text[:MESSAGE_MAX], room_id=room["id"], peer_name=room["name"])
         return {"posted": True, "group": room["name"], "woke": [m["name"] for m in named]}
 
     # ---------- Helper bots and profile ----------

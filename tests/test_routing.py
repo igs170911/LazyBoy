@@ -317,7 +317,7 @@ async def test_stop_cancels_waiting_first_byte_without_starting_fallback(product
     async with client:
         posting=asyncio.create_task(client.post("/internal/providers/primary/v1/chat/completions",headers={"Authorization":"Bearer "+product.computers.key(product.agent["id"])},json=protocol_payload("chat_completions")))
         await entered.wait()
-        product.store.patch("tasks",task,state="stopping")
+        await product.runtime.stop_task(product.agent["id"],task)
         response=await asyncio.wait_for(posting,1)
     assert response.status_code==400 and cancelled.is_set() and len(seen)==1
 
