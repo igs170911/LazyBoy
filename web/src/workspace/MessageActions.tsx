@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Reply, SmilePlus, Square, Volume2 } from "../ui/icons";
 import { speak, speakable, speechSupported, stopSpeaking } from "./voice";
 
-export const REACTIONS = ["👍", "❤️", "😂", "🎉", "🙏", "👀"] as const;
+const REACTIONS = ["👍", "❤️", "😂", "🎉", "🙏", "👀"] as const;
 
 /** Markdown reduced to the words, for the one-line quote of a reply. */
 export function plainLine(markdown: string) {

@@ -395,7 +395,6 @@ export const api = {
       return data;
     });
   },
-  health: () => request<{ ok: boolean; service: boolean; model: string; provider?: string }>("/api/health"),
   settings: () => request<AppSettings>("/api/settings"),
   saveSettings: (body: Record<string, unknown>) =>
     request<AppSettings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
@@ -445,8 +444,6 @@ export const api = {
   sidebar: (id: string, change: { pinned?: boolean; hidden?: boolean }) => request<AgentRow>(`/api/agents/${encodeURIComponent(id)}/sidebar`, { method: "POST", body: JSON.stringify(change) }),
   updateAgent: (id: string, profile: Partial<AgentProfile>) =>
     request<AgentRow>(`/api/agents/${id}`, { method: "PATCH", body: JSON.stringify(profile) }),
-  renameAgent: (id: string, name: string) =>
-    request<AgentRow>(`/api/agents/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   setAvatar: async (id: string, png: Blob) => {
     return withRequestTimeout(undefined, 30000, async signal => {
       const res = await fetch(`/api/agents/${encodeURIComponent(id)}/avatar`, {
@@ -492,29 +489,10 @@ export const api = {
   handoverDone: (id: string, taskId: string, questionId: string, action: "done" | "cancel" = "done") => request(`/api/agents/${id}/handover`, { method: "POST", body: JSON.stringify({ task_id: taskId, question_id: questionId, action }) }, 8000),
   submitSecret: (id: string, body: { question_id: string; name?: string; value?: string; values?: Record<string, string>; action?: "cancel" }) =>
     request<{ ok?: boolean; status?: string; names?: string[] }>(`/api/agents/${id}/secrets`, { method: "POST", body: JSON.stringify(body) }, 8000),
-  // L2a challenge routes (78b8124)
-  submitCaptchaChallenge: (id: string, body: { question_id: string; answer?: string; action?: "cancel" | "escalate" }) =>
-    request<{ ok?: boolean; status?: string }>(`/api/agents/${id}/challenges/captcha`, { method: "POST", body: JSON.stringify(body) }, 8000),
-  submitOtpChallenge: (id: string, body: { question_id: string; code?: string; action?: "cancel" | "escalate" }) =>
-    request<{ ok?: boolean; status?: string }>(`/api/agents/${id}/challenges/otp`, { method: "POST", body: JSON.stringify(body) }, 8000),
   stop: (id: string) => request(`/api/agents/${id}/stop`, { method: "POST", body: "{}" }),
   clearConversation: (id: string, thread?: string | null) =>
     request<{ ok: boolean; cleared_at?: string }>(`/api/agents/${encodeURIComponent(id)}/conversation${thread && thread !== id ? `?thread=${encodeURIComponent(thread)}` : ""}`, { method: "DELETE" }),
-  computerStatus: (id: string) =>
-    request<{
-      ready: boolean;
-      state?: string;
-      viewer_url: string;
-      error?: string;
-      revision?: string;
-      crowded?: boolean;
-    }>(`/api/agents/${encodeURIComponent(id)}/computer`),
   getTask: (taskId: string) => request<TaskDetail>(`/api/tasks/${taskId}`),
-  approveTask: (taskId: string, agent: string, decision: "approve" | "reject", note?: string, artifactIds?: string[]) =>
-    request<{ approved: boolean }>(`/api/tasks/${taskId}/approve`, {
-      method: "POST",
-      body: JSON.stringify({ agent, decision, note, artifact_ids: artifactIds }),
-    }),
   computer: (id: string, action: "start" | "restart" | "update" = "start") =>
     request<{
       ready: boolean;
@@ -524,7 +502,7 @@ export const api = {
       updated?: boolean;
       revision?: string;
       crowded?: boolean;
-    }>(id ? `/api/agents/${encodeURIComponent(id)}/computer` : "/api/computer", {
+    }>(`/api/agents/${encodeURIComponent(id)}/computer`, {
       method: "POST",
       body: JSON.stringify({ action }),
     }, action === "update" ? 960000 : 120000),

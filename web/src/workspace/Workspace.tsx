@@ -9,7 +9,7 @@ import { Bell, BellOff, CircleDot, Copy, Eye, EyeOff, Pin, Star, KeyRound, Brain
 import { ConfirmDialog, toast, Toaster, type MenuItem } from "../ui/overlay";
 import { ComputerPane } from "./ComputerPane";
 import { Conversation, type PanelTab } from "./Conversation";
-import { appendDraft, draftKey, readDraft, writeDraft } from "./drafts";
+import { appendDraft, draftKey } from "./drafts";
 import { ShareInDialog, sharedText } from "./ShareIn";
 import { FilesPane } from "./FilesPane";
 import { Sidebar, type DropTarget } from "./Sidebar";
@@ -45,6 +45,8 @@ const LoginShareDialog = deferDialog<Parameters<typeof import("./LoginShare").Lo
 const WelcomeTemplates = lazy(() => import("./NewChat").then(m => ({ default: m.WelcomeTemplates })));
 const AboutDialog = deferDialog<Parameters<typeof import("../settings").AboutDialog>[0]>(() => import("../settings").then(m => ({ default: m.AboutDialog })), "AboutDialog");
 
+// Nothing to hand focus back to: the routines dialog falls back to whatever was focused before it opened.
+const NO_RETURN_FOCUS = { current: null };
 const ACTIVE_KEY = "lazyhermes.active";
 const ROOM_KEY = "lazyhermes.room";
 const PANEL_KEY = "lazyhermes.panel";
@@ -113,7 +115,6 @@ export function Workspace() {
   const [compact, setCompact] = useState(() => readStorage(COMPACT_KEY) === "1");
   const [finding, setFinding] = useState(false);
   const [focus, setFocus] = useState<(FocusTarget & { owner: string }) | null>(null);
-  const routinesButton = useRef<HTMLButtonElement>(null);
   const active = agents.find(agent => agent.id === activeId) || null;
   const session = useSession(active?.id || null, () => void refresh());
 
@@ -313,7 +314,7 @@ export function Workspace() {
         toast(`已刪除 ${agent.name}`, "ok");
       },
     }) },
-  ], [groups.length, active?.id, activeId, session, refresh, remove, back, applyTeam, agents]);
+  ], [groups.length, active?.id, activeId, session.thread, session.clear, session.refresh, refresh, remove, back, applyTeam, agents]);
 
   const groupActions = useCallback((group: AgentGroup): MenuItem[] => [
     { label: "編輯分區", icon: <Pencil />, onSelect: () => setDialog({ kind: "group", group }) },
@@ -329,7 +330,7 @@ export function Workspace() {
     if (hit.kind === "room") selectRoom(hit.owner_id);
     else { session.showThread(hit.owner_id, hit.thread_id); select(hit.owner_id); }
     setFocus({ owner: hit.owner_id, id: hit.message_id, nonce });
-  }, [select, selectRoom, session]);
+  }, [select, selectRoom, session.showThread]);
   const openFileOf = useCallback((agentId: string, path: string, title: string, mediaType?: string) => {
     select(agentId);
     openFile({ title, path, url: contentUrl(agentId, path), mediaType });
@@ -362,7 +363,7 @@ export function Workspace() {
       { id: "bot-context", label: `${active.name} 的 Context 用量`, hint: "看對話佔了多少，或壓縮舊對話", icon: <ChartColumn />, run: () => window.dispatchEvent(new Event("lazyboy-context")) },
     );
     return list;
-  }, [active, roomId, compact, session, toggleCompact, togglePanel]);
+  }, [active, roomId, compact, session.createThread, toggleCompact, togglePanel]);
 
   /** A bot dropped on a sidebar section: pin it, hide it, or file it under a section (leaving pinned/hidden). */
   const moveBot = useCallback(async (agent: AgentRow, target: DropTarget) => {
@@ -401,8 +402,6 @@ export function Workspace() {
   };
 
   // On phones both pages stay mounted and slide, so going back and forth never reloads or flashes.
-  const showSidebar = true;
-  const showChat = true;
   const appRef = useRef<HTMLDivElement>(null);
   useSwipeBack(appRef, mobile && view === "chat" && !panel.open, back);
   useEffect(() => {
@@ -421,20 +420,18 @@ export function Workspace() {
   return (
     <AvatarLookProvider value={looks}>
       <div ref={appRef} className={`app${mobile ? " is-mobile" : ""}${panelVisible ? " has-panel" : ""}${compact && !mobile ? " sidebar-compact" : ""}`} data-view={view}>
-        {showSidebar ? (
-          <Sidebar agents={agents} groups={groups} activeId={mobile || roomId ? null : activeId} loaded={loaded} onSelect={select}
-            rooms={rooms} activeRoomId={mobile ? null : roomId} onSelectRoom={selectRoom} onCreateRoom={() => setDialog({ kind: "room" })} unread={unread}
-            onCreate={() => setDialog({ kind: "create" })} onImport={() => setDialog({ kind: "import" })}
-            onCreateGroup={() => setDialog({ kind: "group" })} onSettings={() => setDialog({ kind: "settings" })}
-            agentActions={agent => agentActions(agent)} groupActions={groupActions}
-            onMove={moveBot} onReorderGroups={reorderGroups}
-            compact={compact && !mobile} onToggleCompact={mobile ? undefined : toggleCompact}
-            onNew={() => setDialog({ kind: "new" })} onTemplates={() => setDialog({ kind: "new", startAt: "templates" })}
-            onSearch={query => setDialog({ kind: "palette", query })} onConnectApps={() => setDialog({ kind: "settings", section: "mcp" })}
-            onOrg={() => setDialog({ kind: "org" })} approvals={approvals.length} onApprovals={() => setDialog({ kind: "approvals" })} />
-        ) : null}
+        <Sidebar agents={agents} groups={groups} activeId={mobile || roomId ? null : activeId} loaded={loaded} onSelect={select}
+          rooms={rooms} activeRoomId={mobile ? null : roomId} onSelectRoom={selectRoom} onCreateRoom={() => setDialog({ kind: "room" })} unread={unread}
+          onCreate={() => setDialog({ kind: "create" })} onImport={() => setDialog({ kind: "import" })}
+          onCreateGroup={() => setDialog({ kind: "group" })} onSettings={() => setDialog({ kind: "settings" })}
+          agentActions={agent => agentActions(agent)} groupActions={groupActions}
+          onMove={moveBot} onReorderGroups={reorderGroups}
+          compact={compact && !mobile} onToggleCompact={mobile ? undefined : toggleCompact}
+          onNew={() => setDialog({ kind: "new" })} onTemplates={() => setDialog({ kind: "new", startAt: "templates" })}
+          onSearch={query => setDialog({ kind: "palette", query })} onConnectApps={() => setDialog({ kind: "settings", section: "mcp" })}
+          onOrg={() => setDialog({ kind: "org" })} approvals={approvals.length} onApprovals={() => setDialog({ kind: "approvals" })} />
 
-        {showChat ? (roomId && room ? (
+        {roomId && room ? (
           <RoomView key={room.id} roomId={room.id} mobile={mobile} onBack={back}
             finding={finding} onCloseFind={() => setFinding(false)}
             focusMessage={focus && focus.owner === room.id ? focus : null} onFocused={() => setFocus(null)}
@@ -469,7 +466,7 @@ export function Workspace() {
               </div>
             )}
           </main>
-        )) : null}
+        )}
 
         {panelVisible && active ? (
           <>
@@ -511,7 +508,7 @@ export function Workspace() {
           onShare={row => setDialog({ kind: "share", agent: row })} onClose={() => { setDialog(null); setLooks(readAvatarLooks()); }}
           onSaved={row => { upsert(row); setLooks(readAvatarLooks()); void refresh(); }} />
       ) : null}
-      {dialog?.kind === "routines" ? <RoutinesDialog key={dialog.id} agentId={dialog.id} onClose={() => setDialog(null)} onOpen={file => { setDialog(null); if (dialog.id !== activeId) select(dialog.id); openFile(file); }} returnFocus={routinesButton} /> : null}
+      {dialog?.kind === "routines" ? <RoutinesDialog key={dialog.id} agentId={dialog.id} onClose={() => setDialog(null)} onOpen={file => { setDialog(null); if (dialog.id !== activeId) select(dialog.id); openFile(file); }} returnFocus={NO_RETURN_FOCUS} /> : null}
       {dialog?.kind === "share" ? <AgentShareDialog agent={dialog.agent} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "import" ? (
         <TemplateImportDialog onCreated={() => void refresh()} onClose={() => setDialog(null)} onImported={row => { setDialog(null); upsert(row); void refresh(); select(row.id); }} />
@@ -554,8 +551,8 @@ export function Workspace() {
       {dialog?.kind === "logins" ? <LoginShareDialog agent={dialog.agent} agents={agents} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "share-in" ? (
         <ShareInDialog text={dialog.text} agents={agents} rooms={rooms} onClose={() => setDialog(null)}
-          onPickBot={id => { const text = dialog.text; setDialog(null); appendDraft(draftKey(id, id), text); select(id); }}
-          onPickRoom={id => { const text = dialog.text; setDialog(null); const current = readDraft(`room:${id}`).text; writeDraft(`room:${id}`, { text: [current.trim(), text].filter(Boolean).join("\n\n") }); selectRoom(id); }} />
+          onPickBot={id => { const text = dialog.text; setDialog(null); appendDraft(draftKey(id, session.threadOf(id)), text); select(id); }}
+          onPickRoom={id => { const text = dialog.text; setDialog(null); appendDraft(`room:${id}`, text); selectRoom(id); }} />
       ) : null}
       {dialog?.kind === "new" ? (
         <NewChatDialog agents={agents} startAt={dialog.startAt} onClose={() => setDialog(null)} onCreate={preset => setDialog({ kind: "create", preset })}

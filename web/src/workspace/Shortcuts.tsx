@@ -1,7 +1,7 @@
 import { Modal, ModalHeader } from "../ui/overlay";
 import { keys } from "./shortcut-keys";
 
-export const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
+const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
   { group: "前往", rows: [
     ["Mod+K", "搜尋與指令（Bot、群組、訊息、檔案、定時任務）"],
     ["Mod+Shift+F", "搜尋側欄的 Bot"],

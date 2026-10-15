@@ -10,9 +10,9 @@ import { useMood } from "./mood";
 import { avatarProps } from "./Sidebar";
 import { RoomAvatar } from "./Team";
 import { FindBar } from "./FindBar";
-import { ReactButton, ReactionList } from "./MessageActions";
+import { ReactButton, ReactionList, toggleReaction } from "./MessageActions";
 import { useFocusMessage, type FocusTarget } from "./focus";
-import { readDraft, writeDraft } from "./drafts";
+import { onDraftChange, readDraft, writeDraft } from "./drafts";
 
 const EVERYONE = { id: "everyone", name: "everyone", label: "所有人" };
 
@@ -225,6 +225,8 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
     writeDraft(draftId, { text: next });
     return next;
   }), [draftId]);
+  // Text shared in from another app lands in the draft of the room that may already be open.
+  useEffect(() => onDraftChange(id => { if (id === draftId) { setDraftState(readDraft(id).text); area.current?.focus(); } }), [draftId]);
   const [confirm, setConfirm] = useState<"clear" | "delete" | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -237,16 +239,19 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
   useFocusMessage(scroller, focusMessage, room?.transcript, pinned, onFocused);
 
   const [files, setFiles] = useState<Upload[]>([]);
-  useEffect(() => { setFiles([]); }, [roomId]);
   const send = async () => {
     const text = [draft.trim(), ...files.map(file => `[${file.name}](${file.url})`)].filter(Boolean).join("\n\n");
     if (!text || !room) return;
-    const sentFiles = files;
+    const sentText = draft, sentFiles = files;
     setFiles([]);
     const local: RoomMessage = { id: `local:${randomUUID()}`, role: "user", content: text, at: new Date().toISOString(), pending: true };
     setRoom({ ...room, transcript: [...room.transcript, local] }); setDraft(""); pinned.current = true;
     try { await api.postRoom(room.id, text, local.id); await load(); onChanged(); }
-    catch (err) { setDraft(draft); setFiles(sentFiles); setRoom(current => current && { ...current, transcript: current.transcript.filter(m => m.id !== local.id) }); toast(err instanceof Error ? err.message : String(err), "error"); }
+    catch (err) {
+      // Anything typed while it was sending stays, after the message that failed.
+      setDraft(current => current ? `${sentText}\n\n${current}` : sentText); setFiles(current => [...sentFiles, ...current]);
+      setRoom(current => current && { ...current, transcript: current.transcript.filter(m => m.id !== local.id) }); toast(err instanceof Error ? err.message : String(err), "error");
+    }
   };
   const reply = (name: string) => {
     setDraft(current => current.startsWith(`@${name} `) ? current : `@${name} ${current}`);
@@ -254,8 +259,7 @@ export function RoomView({ roomId, mobile, onBack, onEdit, onDeleted, onOpenBot,
   };
   const openFile = (file: PreviewFile) => onOpenFile(file);
   const react = (message: RoomMessage, emoji: string) => {
-    const flip = (list?: string[]) => list?.includes(emoji) ? list.filter(item => item !== emoji) : [...(list || []), emoji];
-    setRoom(current => current && { ...current, transcript: current.transcript.map(m => m.id === message.id ? { ...m, reactions: flip(m.reactions) } : m) });
+    setRoom(current => current && { ...current, transcript: current.transcript.map(m => m.id === message.id ? { ...m, reactions: toggleReaction(m.reactions, emoji) } : m) });
     void api.react(roomId, message.id, emoji).catch(err => { toast(err instanceof Error ? err.message : String(err), "error"); void load(); });
   };
 

@@ -33,8 +33,10 @@ type Drag = { kind: "bot"; id: string } | { kind: "group"; id: string } | null;
 /** Dragging is for a mouse or trackpad; on a touch screen a long press opens the menu instead. */
 const canDrag = () => typeof window !== "undefined" && window.matchMedia?.("(pointer: fine)").matches;
 
-const BotRow = memo(function BotRow({ agent, active, onSelect, actions, unread = false, onDrag }: {
+const BotRow = memo(function BotRow({ agent, active, onSelect, actions, unread = false, onDrag, hidden = false }: {
   agent: AgentRow; active: boolean; onSelect: (id: string) => void; actions: () => MenuItem[]; unread?: boolean; onDrag?: (drag: Drag) => void;
+  /** In the 已隱藏 section: Alt+↑/↓ skips it (the `hidden-row` hook). */
+  hidden?: boolean;
 }) {
   const status = activityStatus(agent.activity);
   const busy = status.tone === "busy";
@@ -43,7 +45,7 @@ const BotRow = memo(function BotRow({ agent, active, onSelect, actions, unread =
   const { bind, menu, opened } = useContextMenu(`${agent.name} 的選項`, actions);
   const draggable = !!onDrag && canDrag();
   return (
-    <li className={`bot-row${active ? " active" : ""}${unread ? " unread" : ""}${opened ? " menu-open" : ""}`} data-tone={status.tone} {...bind}
+    <li className={`bot-row${hidden ? " hidden-row" : ""}${active ? " active" : ""}${unread ? " unread" : ""}${opened ? " menu-open" : ""}`} data-tone={status.tone} {...bind}
       draggable={draggable || undefined}
       onDragStart={draggable ? event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", agent.name); onDrag!({ kind: "bot", id: agent.id }); } : undefined}
       onDragEnd={draggable ? () => onDrag!(null) : undefined}>
@@ -67,7 +69,7 @@ const BotRow = memo(function BotRow({ agent, active, onSelect, actions, unread =
 const RoomRowItem = memo(function RoomRowItem({ room, active, onSelect, unread = false }: { room: RoomRow; active: boolean; onSelect: (id: string) => void; unread?: boolean }) {
   const working = room.members.filter(m => room.working.includes(m.id));
   return (
-    <li className={`bot-row room-row${active ? " active" : ""}${unread ? " unread" : ""}`} data-tone={working.length ? "busy" : "idle"}>
+    <li className={`bot-row${active ? " active" : ""}${unread ? " unread" : ""}`} data-tone={working.length ? "busy" : "idle"}>
       <button type="button" className="bot-row-main" aria-current={active ? "page" : undefined} title={room.name} onClick={() => onSelect(room.id)}>
         <RoomAvatar members={room.members} size={36} />
         <span className="bot-row-text">
@@ -192,9 +194,9 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
     },
   };
   const zoneClass = (key: string) => drag && accepts(key) ? (over === key ? " drop-target drop-over" : " drop-target") : "";
-  const row = (agent: AgentRow, withUnread = true) => (
+  const row = (agent: AgentRow, hidden = false) => (
     <BotRow key={agent.id} agent={agent} active={agent.id === activeId} onSelect={onSelect} actions={() => agentActions(agent)}
-      unread={withUnread && !!unread?.(agent.id, agent.last_at)} onDrag={startDrag} />
+      unread={!hidden && !!unread?.(agent.id, agent.last_at)} onDrag={startDrag} hidden={hidden} />
   );
 
   return (
@@ -267,14 +269,14 @@ export function Sidebar({ agents, groups, activeId, loaded, onSelect, onCreate, 
           className={zoneClass(`g:${group.id}`)} zone={dropZone(`g:${group.id}`)} row={row}
           onDrag={startDrag && onReorderGroups && groups.length > 1 ? startDrag : undefined} />)}
         {sections.hidden.length || dragBot ? (
-          <section className={`bot-section hidden-section${zoneClass("hidden")}`} {...dropZone("hidden")}>
+          <section className={`bot-section${zoneClass("hidden")}`} {...dropZone("hidden")}>
             <div className="bot-section-head">
               <button type="button" className="bot-section-toggle" aria-expanded={collapsed.includes(HIDDEN_OPEN)} onClick={() => toggle(HIDDEN_OPEN)}>
                 <ChevronDown className={collapsed.includes(HIDDEN_OPEN) ? "" : "collapsed"} aria-hidden="true" /><span>已隱藏</span><small>{sections.hidden.length}</small>
               </button>
             </div>
             {!sections.hidden.length ? <p className="bot-section-empty">放開以從側欄隱藏</p>
-              : collapsed.includes(HIDDEN_OPEN) ? <ul>{sections.hidden.map(agent => row(agent, false))}</ul> : null}
+              : collapsed.includes(HIDDEN_OPEN) ? <ul>{sections.hidden.map(agent => row(agent, true))}</ul> : null}
           </section>
         ) : null}
       </nav>

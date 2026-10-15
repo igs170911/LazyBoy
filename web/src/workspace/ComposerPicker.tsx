@@ -5,7 +5,7 @@ import { Brain, Plug } from "../ui/icons";
 import { avatarProps } from "./Sidebar";
 import { RoomAvatar } from "./Team";
 
-export type PickOption = { key: string; label: string; detail: string; icon: ReactNode; insert: string; group: string };
+type PickOption = { key: string; label: string; detail: string; icon: ReactNode; insert: string; group: string };
 type Trigger = { char: "/" | "@"; query: string; start: number };
 
 const CACHE_MS = 60_000;

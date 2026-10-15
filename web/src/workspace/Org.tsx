@@ -27,7 +27,7 @@ function below(bots: OrgBot[], id: string) {
   return found;
 }
 
-function BotNode({ bot, chart, agents, depth, selected, onSelect }: { bot: OrgBot; chart: OrgChart; agents: AgentRow[]; depth: number; selected: string | null; onSelect: (id: string | null) => void }) {
+function BotNode({ bot, chart, agents, selected, onSelect }: { bot: OrgBot; chart: OrgChart; agents: AgentRow[]; selected: string | null; onSelect: (id: string | null) => void }) {
   const children = chart.bots.filter(item => item.reports_to_id === bot.id);
   const open = selected === bot.id;
   return (
@@ -44,7 +44,7 @@ function BotNode({ bot, chart, agents, depth, selected, onSelect }: { bot: OrgBo
       </button>
       {children.length ? (
         <ul className="org-children">
-          {children.map(child => <BotNode key={child.id} bot={child} chart={chart} agents={agents} depth={depth + 1} selected={selected} onSelect={onSelect} />)}
+          {children.map(child => <BotNode key={child.id} bot={child} chart={chart} agents={agents} selected={selected} onSelect={onSelect} />)}
         </ul>
       ) : null}
     </li>
@@ -135,7 +135,7 @@ export function OrgDialog({ agents, onClose, onOpenBot, onCreateTeam }: { agents
             <div className="org-root"><Crown aria-hidden="true" /><span><strong>你</strong><small>董事長 · 唯一最終核定者</small></span>
               <span className="org-summary">{chart.bots.length} 個 Bot · {working} 個工作中</span></div>
             <ul className="org-tree">
-              {top.map(bot => <BotNode key={bot.id} bot={bot} chart={chart} agents={agents} depth={0} selected={selected} onSelect={setSelected} />)}
+              {top.map(bot => <BotNode key={bot.id} bot={bot} chart={chart} agents={agents} selected={selected} onSelect={setSelected} />)}
             </ul>
             <div className="org-actions">
               <button type="button" className="primary" onClick={onCreateTeam}><Plus />建立團隊</button>

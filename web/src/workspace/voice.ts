@@ -80,7 +80,7 @@ function listenOnce(onText: (text: string) => void, onInterim: (text: string) =>
   return r;
 }
 
-export type VoicePhase = "off" | "listening" | "waiting" | "speaking";
+type VoicePhase = "off" | "listening" | "waiting" | "speaking";
 
 /**
  * Grok's "Start voice chat", built from the browser's own speech tools: listen until a pause, send what was said,

@@ -43,7 +43,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
 
   if (question.method === "approval") {
     return (
-      <section className="question-card approval" aria-label="需要你的允許">
+      <section className="question-card" aria-label="需要你的允許">
         <header><Hand aria-hidden="true" /><strong>需要允許這項操作</strong><Expiry at={question.expires_at} /></header>
         {prompt ? <pre className="question-prompt">{prompt}</pre> : null}
         {error ? <p className="pane-error" role="alert">{error}</p> : null}
@@ -58,7 +58,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
 
   if (question.kind === "handoff" || question.kind === "box_help") {
     return (
-      <section className="question-card handoff" aria-label="需要你協助操作電腦">
+      <section className="question-card" aria-label="需要你協助操作電腦">
         <header><Hand aria-hidden="true" /><strong>需要你在電腦上協助</strong><Expiry at={question.expires_at} /></header>
         {prompt ? <p className="question-prompt">{prompt}</p> : null}
         {error ? <p className="pane-error" role="alert">{error}</p> : null}
@@ -78,7 +78,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
       void run(() => api.submitSecret(agentId, { question_id: id, value: values.value ?? values[fields[0].name], values }));
     };
     return (
-      <form className="question-card secret" aria-label="需要秘密輸入" onSubmit={submit}>
+      <form className="question-card" aria-label="需要秘密輸入" onSubmit={submit}>
         <header><KeyRound aria-hidden="true" /><strong>需要你輸入資料</strong><Expiry at={question.expires_at} /></header>
         {prompt ? <p className="question-prompt">{prompt}</p> : null}
         <div className="question-fields">
@@ -110,7 +110,7 @@ export function QuestionCard({ agentId, question, onDone, onOpenComputer }: { ag
     }));
     const quick = questions.length === 1 && !questions[0].multi_select;
     return (
-      <form className="question-card clarify" aria-label="Bot 的問題" onSubmit={event => { event.preventDefault(); void submit(); }}>
+      <form className="question-card" aria-label="Bot 的問題" onSubmit={event => { event.preventDefault(); void submit(); }}>
         <header><strong>{questions.length > 1 ? `${questions.length} 個問題需要你回答` : "Bot 想確認一件事"}</strong><Expiry at={question.expires_at} />{onComputer ? <button type="button" className="btn small ghost" onClick={onOpenComputer}><Monitor />打開電腦</button> : null}</header>
         {questions.map(q => (
           <fieldset key={q.qid} disabled={busy}>

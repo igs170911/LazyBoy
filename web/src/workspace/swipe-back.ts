@@ -3,7 +3,7 @@ import { useEffect, type RefObject } from "react";
 const EDGE = 28;
 
 /** A home-screen web app on iOS has no system back swipe, so the chat page provides its own from the left edge. */
-export function swipeBackSupported() {
+function swipeBackSupported() {
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const standalone = window.matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
   return ios && standalone;

@@ -1,4 +1,4 @@
-export type StepKind = "browser" | "search" | "web" | "terminal" | "write" | "read" | "desktop" | "skill" | "memory" | "plan" | "ask" | "image" | "tool";
+type StepKind = "browser" | "search" | "web" | "terminal" | "write" | "read" | "desktop" | "skill" | "memory" | "plan" | "ask" | "image" | "tool";
 
 export function stepKind(name: string): StepKind {
   const tool = name.trim().toLowerCase();

@@ -9,7 +9,8 @@ import { clock, dayLabel } from "./format";
 import { avatarProps } from "./Sidebar";
 
 export const INTENT_LABEL: Record<string, string> = { request: "請求", question: "提問", result: "回覆", fyi: "通知" };
-export const ROOM_MIN = 2, ROOM_MAX = 10;
+const ROOM_MIN = 2;
+export const ROOM_MAX = 10;
 
 type Face = Pick<AgentRow, "id" | "name"> & Partial<Pick<AgentRow, "avatar_color" | "avatar_shape" | "avatar_url" | "avatar_traits" | "avatar_expression">>;
 
@@ -119,7 +120,7 @@ export function PeerGroup({ items, agentId, team, knownPaths, onOpen, onPeer }: 
   })).values()];
   const who = peers.length === 1 ? peers[0].name : `${peers.length} 個 Bot`;
   return (
-    <div className={`peer-event peer-group${open ? " open" : ""}`}>
+    <div className={`peer-event${open ? " open" : ""}`}>
       <button type="button" className="peer-event-line" aria-expanded={open} onClick={() => setOpen(v => !v)}>
         <span className="peer-faces">{peers.slice(0, 3).map(face => <Avatar key={face.id} {...avatarProps(face as AgentRow)} size={18} gaze={false} />)}</span>
         <span>與 <b>{who}</b> 的 {items.length} 則訊息</span>
@@ -138,7 +139,7 @@ export function PeerDialog({ agentId, peerId, team, onClose }: { agentId: string
   useEffect(() => { api.peerMessages(agentId, peerId).then(data => setRows(data.messages)).catch(err => setError(err instanceof Error ? err.message : String(err))); }, [agentId, peerId]);
   const a = faceOf(team, agentId), b = faceOf(team, peerId);
   return (
-    <Modal label={`${a.name} 與 ${b.name}`} onClose={onClose} className="peer-dialog">
+    <Modal label={`${a.name} 與 ${b.name}`} onClose={onClose}>
       <ModalHeader title={<span className="peer-title"><Avatar {...avatarProps(a as AgentRow)} size={24} gaze={false} />{a.name}<ArrowLeftRight aria-hidden="true" /><Avatar {...avatarProps(b as AgentRow)} size={24} gaze={false} />{b.name}</span>} onClose={onClose} />
       {error ? <p className="pane-error" role="alert">{error}</p> : null}
       {!rows ? <p className="muted">讀取中…</p> : !rows.length ? <p className="muted">{a.name} 和 {b.name} 還沒有往來。</p> : (
@@ -188,7 +189,7 @@ export function RoomDialog({ room, agents, onClose, onSaved }: {
     if (!ready || busy) return;
     setBusy(true); setError("");
     try {
-      onSaved(room ? await api.updateRoom(room.id, { name: name.trim() || undefined, member_ids: members }) : await api.createRoom(members, name.trim()));
+      onSaved(room ? await api.updateRoom(room.id, { name: name.trim(), member_ids: members }) : await api.createRoom(members, name.trim()));
       onClose();
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); }
   }

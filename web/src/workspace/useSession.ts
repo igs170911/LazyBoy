@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AgentActivity, type AgentFile, type Lesson, type PlanItem, type TaskDetail, type TeamEvent, type ThreadRow, type TranscriptItem, type Worker } from "../api";
 import { readStorage, writeStorage } from "../storage";
 import { randomUUID } from "../uuid";
+import { toggleReaction } from "./MessageActions";
 import { stepDetail, stepLabel } from "./steps";
 
 export type Step = { id: string; name: string; label: string; detail: string; state: "running" | "done" | "failed" };
@@ -22,7 +23,7 @@ function storedThreads(): Record<string, string> {
 }
 
 /** Where the bot's single computer is busy, relative to the thread on screen. */
-export function threadState(activity: AgentActivity, threadId: string): { here: string; elsewhere: boolean } {
+function threadState(activity: AgentActivity, threadId: string): { here: string; elsewhere: boolean } {
   const owner = activity.thread_id || (BUSY_STATES.has(activity.state) && activity.state !== "queued" ? threadId : null);
   if (owner === threadId) return { here: activity.state, elsewhere: false };
   const queuedHere = activity.queued_thread_ids ? activity.queued_thread_ids.includes(threadId) : !owner && activity.state === "queued";
@@ -58,6 +59,8 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   const [lesson, setLesson] = useState<Lesson | null>(null);
   const [selection, setSelection] = useState<Record<string, string>>(storedThreads);
   const threadId = agentId ? selection[agentId] || agentId : "";
+  const selected = useRef(selection);
+  selected.current = selection;
   const current = useRef(agentId);
   current.current = agentId;
   const currentThread = useRef(threadId);
@@ -66,8 +69,11 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   changed.current = onAgentChanged;
   const timers = useRef<Record<string, number>>({});
   const owner = useRef("");
+  // Only a transcript the server has answered for is cached: an empty one written before the first load
+  // would show "no messages" (and hide a load error) the next time the thread opens.
+  const loadedKey = useRef("");
   useEffect(() => {
-    if (!owner.current) return;
+    if (!owner.current || loadedKey.current !== owner.current) return;
     transcripts.delete(owner.current);
     transcripts.set(owner.current, transcript.filter(item => !item.pending));
     while (transcripts.size > 24) transcripts.delete(transcripts.keys().next().value!);
@@ -104,6 +110,7 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
     try {
       const data = await api.agent(id, thread);
       if (current.current !== id || currentThread.current !== thread) return;
+      loadedKey.current = `${id}:${thread}`;
       setTranscript(cur => mergeTranscript(cur, data.transcript || []));
       setActivity(data.activity || IDLE);
       setLoadError("");
@@ -370,13 +377,12 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
   const react = useCallback(async (messageId: string, emoji: string) => {
     const id = current.current;
     if (!id) return;
-    const flip = (list?: string[]) => list?.includes(emoji) ? list.filter(item => item !== emoji) : [...(list || []), emoji];
-    setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: flip(item.reactions) } : item));
+    setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: toggleReaction(item.reactions, emoji) } : item));
     try {
       const result = await api.react(id, messageId, emoji);
       setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: result.reactions } : item));
     } catch (err) {
-      setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: flip(item.reactions) } : item));
+      setTranscript(cur => cur.map(item => item.id === messageId ? { ...item, reactions: toggleReaction(item.reactions, emoji) } : item));
       throw err;
     }
   }, []);
@@ -448,11 +454,17 @@ export function useSession(agentId: string | null, onAgentChanged: () => void) {
     void reloadThreads(id);
   }, [reloadThreads, reloadTranscript]);
 
-  return {
-    transcript, activity, busy, here: placement.here, elsewhere: placement.elsewhere, live, tasks, files, loading, loadError,
+  /** The thread a bot opens on, so a draft can be written where its composer will read it. */
+  const threadOf = useCallback((id: string) => selected.current[id] || id, []);
+
+  // One object per change, not per render, so memoised consumers skip the renders nothing changed in.
+  const { here, elsewhere } = placement;
+  return useMemo(() => ({
+    transcript, activity, busy, here, elsewhere, live, tasks, files, loading, loadError,
     threadId, thread, threads, workingThread, openThread, createThread, renameThread, deleteThread, clear,
-    send, stop, refresh, refreshActivity, reloadFiles, lesson, teach, react,
+    send, stop, refresh, refreshActivity, reloadFiles, lesson, teach, react, threadOf,
     /** Choose which thread a bot opens on (search results jump into a side thread). */
     showThread: selectThread,
-  };
+  }), [transcript, activity, busy, here, elsewhere, live, tasks, files, loading, loadError, threadId, thread, threads, workingThread, openThread, createThread,
+    renameThread, deleteThread, clear, send, stop, refresh, refreshActivity, reloadFiles, lesson, teach, react, threadOf, selectThread]);
 }

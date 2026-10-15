@@ -18,7 +18,7 @@ function FileIcon({ file }: { file: AgentFile }) {
   return <FileText aria-hidden="true" />;
 }
 
-export function toPreview(agentId: string, file: AgentFile): PreviewFile {
+function toPreview(agentId: string, file: AgentFile): PreviewFile {
   return { title: file.title, path: file.path, url: contentUrl(agentId, file.path), mediaType: file.media_type };
 }
 

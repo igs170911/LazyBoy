@@ -1,4 +1,4 @@
-export const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const MOD = MAC ? "⌘" : "Ctrl";
 const ALT = MAC ? "⌥" : "Alt";
 

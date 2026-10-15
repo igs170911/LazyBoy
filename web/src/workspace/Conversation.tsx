@@ -593,7 +593,7 @@ export function Conversation({ agent, session, mobile, panel, onBack, onTogglePa
           <QuoteButton scroller={scroller} draft={draftKey(agent.id, threadId)} />
           {session.loading && !visible.length ? <div className="chat-loading"><LoaderCircle className="spin" />載入對話…</div> : null}
           {session.loadError && !visible.length ? <div className="pane-error" role="alert">{session.loadError}<button type="button" className="btn small" onClick={session.refresh}>重試</button></div> : null}
-          {!session.loading && !visible.length && !busy ? <EmptyChat agent={agent} thread={thread} onPick={onPick} /> : null}
+          {!session.loading && !session.loadError && !visible.length && !busy ? <EmptyChat agent={agent} thread={thread} onPick={onPick} /> : null}
           {visible.map((item, index) => {
             // Two or more hand-offs in a row fold into one "N messages with …" line.
             const run = peerRuns.get(index);

@@ -23,7 +23,7 @@ export function viewerUrl(url: string, mobile: boolean) {
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
-export function isHandover(question?: HumanQuestion | null) {
+function isHandover(question?: HumanQuestion | null) {
   return question?.kind === "handoff" || question?.kind === "box_help";
 }
 

@@ -569,3 +569,50 @@ test("text shared from another app goes into the chosen conversation's composer"
   await expect(page.getByRole("textbox", { name: "訊息" })).toHaveValue("好文\n看這篇 https://example.com/a");
   expect(new URL(page.url()).search).toBe("");
 });
+
+test("shared text reaches the side thread a bot reopens on, and a group chat that is already open", async ({ page }) => {
+  const fixture = setup();
+  fixture.state.threads.push({ id: "thread-1", title: "旁支", main: false, preview: "", message_count: 0, running: false, queued: false });
+  const member = { id: AGENT, name: "測試 Bot", avatar_color: "#9159FE", avatar_shape: "round", seat: "idle" };
+  const room = { id: "room-1", name: "小組", member_ids: [AGENT, "b2"], members: [member, { ...member, id: "b2", name: "第二 Bot" }], preview: "", working: [], message_count: 0 };
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    (window as unknown as { EventSource: unknown }).EventSource = class { close() {} };
+    if (!sessionStorage.getItem("seeded")) {
+      sessionStorage.setItem("seeded", "1");
+      localStorage.setItem("lazyhermes.active", "fixture-bot");
+      localStorage.setItem("lazyhermes.threads", JSON.stringify({ "fixture-bot": "thread-1" }));
+    }
+  });
+  await page.route("**/api/**", fixture.handle);
+  await page.route("**/api/rooms**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/rooms") return route.fulfill({ json: { rooms: [room] } });
+    if (path === "/api/rooms/room-1") return route.fulfill({ json: { ...room, transcript: [] } });
+    return route.fulfill({ json: {} });
+  });
+  const share = (text: string) => page.goto("/?share_text=" + encodeURIComponent(text));
+  await share("給旁支的文字");
+  await page.getByRole("dialog", { name: "分享到 LazyBoy" }).getByRole("button", { name: /測試 Bot/ }).click();
+  await expect(page.locator(".chat-title")).toHaveText("測試 Bot");
+  await expect(page.getByRole("textbox", { name: "訊息" })).toHaveValue("給旁支的文字");
+
+  // The group chat is on screen behind the share dialog when the text is sent to it.
+  await page.evaluate(() => localStorage.setItem("lazyhermes.room", "room-1"));
+  await share("給群組的文字");
+  await expect(page.getByRole("textbox", { name: "群組訊息" })).toBeAttached();
+  await page.getByRole("dialog", { name: "分享到 LazyBoy" }).getByRole("button", { name: /小組/ }).click();
+  await expect(page.getByRole("textbox", { name: "群組訊息" })).toHaveValue("給群組的文字");
+});
+
+test("a conversation that fails to load shows the error, not the empty-chat welcome", async ({ page }) => {
+  const fixture = setup();
+  await open(page, fixture);
+  const fail = (route: Route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "讀取失敗 FIXTURE" }) });
+  await page.route(`**/api/agents/${AGENT}`, fail);
+  await page.route(`**/api/agents/${AGENT}?*`, fail);
+  await page.reload();
+  if ((page.viewportSize()?.width || 1280) <= 860) await page.locator(".bot-row-main", { hasText: "測試 Bot" }).click();
+  await expect(page.locator(".chat .pane-error")).toBeVisible();
+  await expect(page.locator(".chat .chat-empty")).toHaveCount(0);
+});
