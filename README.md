@@ -21,7 +21,7 @@
 
 ## LazyBoy 是什麼
 
-LazyBoy 是一個可以自己架設的 AI Bot 工作平台。每個 Bot 在 Docker 中擁有一台持久的 Linux 桌面，包含 Chromium、終端機、檔案管理與 LibreOffice，並由 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 負責思考與使用工具。你像傳訊息一樣交辦工作，看著它查資料、操作瀏覽器、產出檔案；需要時直接打開它的電腦接手。
+LazyBoy 是一個可以自己架設的 AI Bot 工作平台。每個 Bot 在 Docker 中擁有一台持久的 Linux 桌面（Debian 13），包含 Chromium、終端機、檔案管理與 LibreOffice，並由 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 負責思考與使用工具。你像傳訊息一樣交辦工作，看著它查資料、操作瀏覽器、產出檔案；需要時直接打開它的電腦接手。
 
 - **每個 Bot 一台電腦**：網站登入、檔案與瀏覽器狀態都會保留，下次接著做。
 - **過程看得見**：計畫、每一步、引用的來源與產出的檔案都留在對話中。
@@ -41,7 +41,9 @@ LazyBoy 是一個可以自己架設的 AI Bot 工作平台。每個 Bot 在 Dock
 
 ![Bot 的電腦：完整的 Linux 桌面與 Chromium](docs/images/computer.png)
 
-Bot 使用的桌面即時顯示在畫面上。遇到登入或驗證碼時，你直接在同一個瀏覽器操作，完成後交還給 Bot。也可以「教它一件事」：親自示範一次，Bot 會整理成可以重複使用的技能。
+Bot 使用的桌面即時顯示在畫面上。遇到登入或驗證碼時，你直接在同一個瀏覽器操作，完成後交還給 Bot。也可以「教它一件事」：親自示範一次，Bot 會整理成可以重複使用的技能。Bot 做完手上的工作後，瀏覽器只留最後用的那個分頁，不會越開越多。
+
+要寫程式、建專案或修 bug 時，Bot 會把工作交給電腦裡的 Grok Build CLI（`grok`）實作，自己負責驗收與回報；需要比較多個來源的題目則用內建的「深入研究」技能，平行查證後把附來源的報告寫進工作區。
 
 ### 團隊與群組對話
 
@@ -74,6 +76,10 @@ Bot 使用的桌面即時顯示在畫面上。遇到登入或驗證碼時，你�
 
 安裝成 App 之後，對話、交辦與接手電腦都能在手機上完成。LazyBoy 自帶 HTTPS，在「設定 → 其他裝置與 App」用手機掃兩個 QR code，就能信任憑證並直接登入。Android 上還能從其他 App 直接把文字與連結分享給 Bot。
 
+### 模型分流與網路搜尋
+
+「設定 → 模型 → 對話與工作分流」可以分別指定聊天、工作與備援模型：閒聊用快又便宜的模型，工作開始用工具時自動升級到工作模型，遇到限流或連線失敗依序改用備援。選用的語意路由（`./scripts/routing.sh start`）會在本機用分類模型判斷每句話的意圖，再決定走哪一條。網路搜尋預設用 Exa 的免費額度，也可以改用 Tavily、Brave 或 DuckDuckGo；填入 xAI 的 API key 後，Bot 還能搜尋 X 貼文。
+
 ### 掌握 context 與花費
 
 ![Context 用量與模型用量](docs/images/usage.png)
@@ -85,6 +91,8 @@ Bot 使用的桌面即時顯示在畫面上。遇到登入或驗證碼時，你�
 - **定時任務**：單次、每天、平日、每週、每月、每隔 N 分鐘，或由 Webhook 網址觸發。可以設「時間飄移」，每次在設定時間後 N 分鐘內隨機執行，發文時間不會天天一樣。跟 Bot 說「每天幫我發」，它會自己建立定時任務。
 - **連接應用程式**：Notion、GitHub、Linear、Figma、Canva 等 60 多個 MCP 服務；登入一次所有 Bot 共用，每個工具都能單獨開關。
 - **技能與記憶**：直接檢視與編輯 Hermes 的技能（`SKILL.md`）與記憶。
+- **AI 產生頭像**：Bot 設定的頭像除了十種造型和上傳圖片，也能描述一句話請生圖模型畫一張。有填金鑰的供應商裡能畫圖的模型都會列出（例如 xAI 的 grok-imagine）。
+- **儲存空間**：Bot 設定裡看得到工作區、上傳、快取與瀏覽器各佔多少空間，可以一鍵清理快取；快取每天也會自動清理。
 - **先問我**：寄出訊息、公開發佈、付款與刪除資料之前，Bot 會先等你同意。你在對話中時它會直接問；定時任務或隊友交辦的工作則送到「待你核定」，不會因為你沒即時回覆而作罷。
 - **分享登入**：把一個 Bot 已經登入的網站分享給其他 Bot，不必重新登入。
 - **淺色與深色主題**、系統通知、未讀標記、多個對話串與草稿保留。
@@ -156,6 +164,7 @@ make up      # 啟動，並顯示含登入碼的網址
 | `make stop` | 停止服務；Bot 的檔案、對話與登入都會保留 |
 | `make get-access-token` | 顯示其他裝置使用的登入碼 |
 | `make box` | 只重建 Bot 的電腦映像（自動選最快的 Debian 鏡像站），完成後在「設定 → 更新」套用 |
+| `make box-latest` | 同上，但重新下載 Grok CLI 與 Playwright 等工具的最新版，而不是固定的版本 |
 | `make providers` | 從 Bot 映像中的 Hermes 重新匯出內建供應商清單 |
 | `make clean` | 清除用不到的 Docker 建置快取與無名映像，不影響 Bot 的資料 |
 | `make build` | Docker 執行方式：確認建置平台（linux/amd64 或 linux/arm64）後，建置 LazyBoy 與 Bot 電腦的映像 |
@@ -189,7 +198,7 @@ make stop && make start
 
 用 Docker 執行時，改為 `git pull && make build && make up`。
 
-更新後，到「設定 → 更新」或 Bot 電腦選單的「更新電腦環境」，讓既有的 Bot 改用新的映像。
+更新後，到「設定 → 更新」或 Bot 電腦選單的「更新電腦環境」，讓既有的 Bot 改用新的映像；只想更新 Grok CLI 這類工具時用 `make box-latest`。
 
 ## 資料與安全
 
@@ -221,7 +230,7 @@ flowchart LR
 
 - **LazyBoy 服務**（`server/`）：FastAPI 應用，負責 Bot、對話、工作、事件串流、排程與模型代理，資料存放在 SQLite；網頁前端也由同一個服務提供。
 - **Hermes Agent**（`vendor/hermes-agent`，版本固定在 `HERMES_VERSION`）：在每個 Bot 的容器中執行，負責模型與工具迴圈。LazyBoy 透過 Hermes 原生 TUI gateway 的雙向 JSON-RPC 溝通，不修改它的核心。
-- **Bot 的電腦**（`box/`）：Debian、TigerVNC、XFCE、Chromium 與 LibreOffice，畫面透過 noVNC 顯示在網頁上。`box/desktop_mcp.py` 與 `box/product_mcp.py` 提供桌面與產品工具；模型請求與產品工具都經由本機 Unix socket 回到服務，容器不需要連線到主機的網路。
+- **Bot 的電腦**（`box/`）：Debian 13、TigerVNC、XFCE（Orchis 深色主題）、繁體中文介面的 Chromium 與 LibreOffice，映像約 3.7 GB，畫面透過 noVNC 顯示在網頁上。`box/desktop_mcp.py` 與 `box/product_mcp.py` 提供桌面與產品工具；模型請求與產品工具都經由本機 Unix socket 回到服務，容器不需要連線到主機的網路。
 - **網頁前端**（`web/`）：以 React 19、TypeScript 與 Vite 建置的單頁應用，可以安裝成 PWA。
 
 ## 設定參數
@@ -243,7 +252,7 @@ flowchart LR
 
 ```bash
 ./scripts/check.sh            # 後端測試與前端建置（含型別檢查）
-./scripts/check.sh --native   # 另外用可丟棄的真實 Hermes 容器做整合測試，不呼叫付費模型
+./scripts/check.sh --native   # 另外用可丟棄的真實 Hermes 容器做整合測試，不呼叫付費模型；NATIVE_FIXTURE_IMAGE 可指定要測的映像
 npm run test:e2e --prefix web # Playwright 端對端測試（桌面與手機）
 npm run dev --prefix web      # 前端開發伺服器 http://localhost:5174，API 連到 8790
 ```
