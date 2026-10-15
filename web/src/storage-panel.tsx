@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type StorageUsage } from "./api";
 import { toast } from "./ui/overlay";
 import { bytes } from "./workspace/format";
+import { tokens } from "./format-tokens";
 
 const ROWS: { key: keyof Omit<StorageUsage, "total">; label: string; note?: string }[] = [
   { key: "workspace", label: "工作成果", note: "不會自動刪除" },
@@ -11,8 +12,6 @@ const ROWS: { key: keyof Omit<StorageUsage, "total">; label: string; note?: stri
   { key: "tools", label: "Bot 安裝的工具" },
   { key: "other", label: "其他" },
 ];
-
-const tokens = (n: number) => n >= 1e8 ? `${(n / 1e8).toFixed(1)} 億` : n >= 1e4 ? `${(n / 1e4).toFixed(1)} 萬` : n.toLocaleString();
 
 /** Tokens the bot used in the last week, from what the model reported for each turn. */
 function UsageLine({ agentId }: { agentId: string }) {

@@ -3,8 +3,8 @@ import {useDialogFocus} from "./dialog-focus";
 import {api,type AgentGroup,type AgentRow,type AgentTemplate} from "./api";
 import {McpSettings} from "./mcp-settings";
 import {X} from "./ui/icons";
+import {randomUUID} from "./uuid";
 
-function uuid(){const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;const h=[...b].map(v=>v.toString(16).padStart(2,'0')).join('');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;}
 function validateTemplate(data:unknown): AgentTemplate {
   if (!data || typeof data!=='object') throw Error('請選取有效的 Bot 範本（.lazyboy.json）');
   const d=data as AgentTemplate;
@@ -50,7 +50,7 @@ export function AgentShareDialog({agent,onClose}:{agent:AgentRow;onClose:()=>voi
 }
 
 export function TemplateImportDialog({onClose,onImported,onCreated}:{onClose:()=>void;onImported:(row:AgentRow)=>void;onCreated?:()=>void}) {
-  const input=useRef<HTMLInputElement>(null),id=useRef(uuid()),readVersion=useRef(0),inFlight=useRef(false),alive=useRef(true);
+  const input=useRef<HTMLInputElement>(null),id=useRef(randomUUID()),readVersion=useRef(0),inFlight=useRef(false),alive=useRef(true);
   const [template,setTemplate]=useState<AgentTemplate|null>(null),[name,setName]=useState(""),[group,setGroup]=useState(""),[groups,setGroups]=useState<AgentGroup[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(""),[created,setCreated]=useState<AgentRow|null>(null),[configure,setConfigure]=useState(false),[dragging,setDragging]=useState(false),[reading,setReading]=useState(false);
   const names=useRef(new Set<string>()),roster=useRef<Promise<void>|null>(null);
   useEffect(()=>{alive.current=true;roster.current=api.agents().then(v=>{if(alive.current){setGroups(v.groups || []);names.current=new Set(v.agents.map(a=>a.name));}}).catch(()=>{});return()=>{alive.current=false;readVersion.current++;};},[]);
@@ -67,7 +67,7 @@ export function TemplateImportDialog({onClose,onImported,onCreated}:{onClose:()=
       if(version!==readVersion.current||!alive.current)return;
       let chosen=data.profile.name.slice(0,80),n=1;
       while(names.current.has(chosen)){n++;const suffix=` (${n})`;chosen=data.profile.name.slice(0,80-suffix.length)+suffix;}
-      id.current=uuid();setTemplate(data);setName(chosen);
+      id.current=randomUUID();setTemplate(data);setName(chosen);
     }catch(e){if(version===readVersion.current&&alive.current)setError(e instanceof SyntaxError?"檔案不是有效的 JSON 分享檔案":e instanceof Error?e.message:"無法讀取檔案");}
     finally{if(version===readVersion.current&&alive.current)setReading(false);}
   }

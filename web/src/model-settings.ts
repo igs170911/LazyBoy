@@ -1,19 +1,5 @@
 import type { ModelProtocol, SettingsModel } from "./api";
 
-export function parseModels(text: string): SettingsModel[] {
-  return text.split("\n").map(line => line.trim()).filter(Boolean).map(line => {
-    // Model IDs may themselves contain colons (for example local model tags).
-    const match = line.match(/^(.*):(chat_completions|responses|messages)$/);
-    return { id: match ? match[1].trim() : line,
-      protocol: (match ? match[2] : "chat_completions") as ModelProtocol };
-  }).filter(model => model.id);
-}
-
-export function modelsToText(models: SettingsModel[]): string {
-  return models.map(model => model.protocol && model.protocol !== "chat_completions"
-    ? `${model.id}:${model.protocol}` : model.id).join("\n");
-}
-
 /** Hermes's per-model wire rules for the OpenCode relays (hermes_cli/models.py `_OPENCODE_API_MODE_PREFIXES`). */
 const OPENCODE_RULES: Record<string, [string[], ModelProtocol][]> = {
   "opencode-go": [[["gpt-", "grok-", "muse-spark"], "responses"], [["minimax-", "qwen", "union-alpha"], "messages"]],
@@ -21,7 +7,7 @@ const OPENCODE_RULES: Record<string, [string[], ModelProtocol][]> = {
 };
 
 type PresetHints = { protocol?: ModelProtocol; base_url?: string; model_info?: Record<string, ModelInfo> };
-export type ModelInfo = { protocol: ModelProtocol; vision: boolean; efforts: string[] | null };
+type ModelInfo = { protocol: ModelProtocol; vision: boolean; efforts: string[] | null };
 
 function opencodeFamily(provider: string, baseUrl = "") {
   if (provider === "opencode-go" || /opencode\.ai\/zen\/go/.test(baseUrl)) return "opencode-go";

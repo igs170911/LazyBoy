@@ -11,9 +11,11 @@ export function AuthGate({children}: {children: ReactNode}) {
     // `make up` prints a login link ending in #token=…; the fragment never reaches the server or its logs.
     const linked = new URLSearchParams(location.hash.slice(1)).get("token");
     if (linked) history.replaceState(null, "", location.pathname + location.search);
-    (linked ? fetch("/api/auth/login", {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({token: linked})}) : Promise.resolve())
+    // An expired or rotated link must say so, not just drop to the plain form.
+    let linkFailed = false;
+    (linked ? fetch("/api/auth/login", {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({token: linked})}).then(r => {linkFailed = !r.ok;}) : Promise.resolve())
       .then(() => fetch("/api/auth/status")).then(r => r.json())
-      .then(data => {if (alive) setStatus(data.authenticated ? "ready" : "login");}).catch(() => {if (alive) {setStatus("login"); setError("服務尚未連線，請確認後端已啟動。");}});
+      .then(data => {if (!alive) return; setStatus(data.authenticated ? "ready" : "login"); if (!data.authenticated && linkFailed) setError("登入連結已失效，請重新取得。");}).catch(() => {if (alive) {setStatus("login"); setError("服務尚未連線，請確認後端已啟動。");}});
     return () => {alive = false;};
   }, []);
   useEffect(() => { if (status !== "loading") dismissBoot(); }, [status]);

@@ -28,15 +28,6 @@ const SECTIONS: readonly { id: SettingsSectionId; icon: () => React.ReactElement
 ];
 const CUSTOM_PROVIDER = "__custom__";
 
-export type SettingsComputer = {
-  pending: "start" | "restart" | "update" | null;
-  working: boolean;
-  upToDate: boolean;
-  status?: string;
-  onUpdate: () => void;
-  onRestart: () => void;
-};
-
 function detectOs(): string {
   const ua = navigator.userAgent;
   if (/Mac/i.test(ua)) return "darwin";
@@ -496,6 +487,14 @@ function ModelPanel() {
     info?.efforts?.length ? `推理 ${info.efforts[0]}–${info.efforts[info.efforts.length - 1]}` : info?.efforts ? "不支援推理強度" : ""].filter(Boolean).join(" · ") : "";
   // Base URL is something to fill in only when no preset supplies it.
   const urlUpFront = newProvider || !preset?.base_url || !!preset?.local;
+  // One row, shown either up front or under 進階設定; a preset's own URL stays read-only until 修改.
+  const urlRow = preset && preset.base_url && !preset.local && !editUrl && baseUrl.trim() === preset.base_url ? <div className="lb-settings-row">
+    <span className="lb-settings-copy">{t.baseUrl}<small className="lb-settings-url">{baseUrl}</small></span>
+    <button type="button" className="outline" disabled={writing} onClick={() => setEditUrl(true)}>修改</button>
+  </div> : <label className="lb-settings-row">
+    <span className="lb-settings-copy">{t.baseUrl}</span>
+    <input className="lb-settings-select" aria-label={t.baseUrl} value={baseUrl} disabled={writing} onChange={(e) => { setBaseUrl(e.target.value); dropChecks(); }} placeholder={preset?.base_url || "https://api.example.com/v1"} />
+  </label>;
   const setEffort = (effort: string) =>
     setModels((list) => list.map((item) => item.id === model ? { ...item, reasoning_effort: effort || null } : item));
 
@@ -538,13 +537,7 @@ function ModelPanel() {
           <span className="lb-settings-copy">供應商名稱</span>
           <input className="lb-settings-select" value={providerLabel} disabled={writing} onChange={e => setProviderLabel(e.target.value)} placeholder="例如：我的本機模型" />
         </label> : null}
-        {urlUpFront ? (preset && preset.base_url && !preset.local && !editUrl && baseUrl.trim() === preset.base_url ? <div className="lb-settings-row">
-          <span className="lb-settings-copy">{t.baseUrl}<small className="lb-settings-url">{baseUrl}</small></span>
-          <button type="button" className="outline" disabled={writing} onClick={() => setEditUrl(true)}>修改</button>
-        </div> : <label className="lb-settings-row">
-          <span className="lb-settings-copy">{t.baseUrl}</span>
-          <input className="lb-settings-select" aria-label={t.baseUrl} value={baseUrl} disabled={writing} onChange={(e) => { setBaseUrl(e.target.value); dropChecks(); }} placeholder={preset?.base_url || "https://api.example.com/v1"} />
-        </label>) : null}
+        {urlUpFront ? urlRow : null}
         <label className="lb-settings-row">
           <span className="lb-settings-copy">
             {t.apiKey}
@@ -583,13 +576,7 @@ function ModelPanel() {
         </label>
         <details className="lb-settings-advanced" open={newProvider || manualModel !== null || undefined}>
           <summary>進階設定</summary>
-          {!urlUpFront ? (preset && preset.base_url && !preset.local && !editUrl && baseUrl.trim() === preset.base_url ? <div className="lb-settings-row">
-          <span className="lb-settings-copy">{t.baseUrl}<small className="lb-settings-url">{baseUrl}</small></span>
-          <button type="button" className="outline" disabled={writing} onClick={() => setEditUrl(true)}>修改</button>
-        </div> : <label className="lb-settings-row">
-          <span className="lb-settings-copy">{t.baseUrl}</span>
-          <input className="lb-settings-select" aria-label={t.baseUrl} value={baseUrl} disabled={writing} onChange={(e) => { setBaseUrl(e.target.value); dropChecks(); }} placeholder={preset?.base_url || "https://api.example.com/v1"} />
-        </label>) : null}
+          {urlUpFront ? null : urlRow}
           <div className="lb-settings-row">
             <span className="lb-settings-copy">模型清單<small>貼上金鑰後會自動載入。</small></span>
             <span className="lb-settings-control">
@@ -667,34 +654,8 @@ function ModelPanel() {
   );
 }
 
-function ComputerRow({
-  label,
-  description,
-  extra,
-  control,
-}: {
-  label: string;
-  description: string;
-  extra: string | null;
-  control: React.ReactNode;
-}) {
-  return (
-    <div className="lb-settings-row">
-      <span className="lb-settings-copy">
-        <strong>{label}</strong>
-        <small>{description}</small>
-        {extra ? <small>{extra}</small> : null}
-      </span>
-      <span className="lb-settings-control">{control}</span>
-    </div>
-  );
-}
-
-function UpdatesPanel({ computer }: { computer?: SettingsComputer }) {
+function UpdatesPanel() {
   const { t } = useI18n();
-  const pending = computer?.pending ?? null;
-  const disabled = Boolean(pending);
-  const busyCopy = computer?.working ? t.computerBusyCopy : null;
   return (
     <div className="lb-settings-stack">
       <SettingsGroup title="版本">
@@ -705,42 +666,6 @@ function UpdatesPanel({ computer }: { computer?: SettingsComputer }) {
           </span>
         </div>
       </SettingsGroup>
-      {computer?.status ? <p className="computer-settings-status" role="status">{computer.status}</p> : null}
-      {computer ? (
-        <SettingsGroup title={t.appComputer}>
-          {computer.upToDate ? (
-            <div className="lb-settings-banner" role="status">
-              <strong>{t.computerUpToDate}</strong>
-              <span>{t.computerUpdateCopy}</span>
-              {busyCopy ? <span>{busyCopy}</span> : null}
-              <button type="button" className="outline" disabled={disabled} onClick={computer.onUpdate}>
-                {pending === "update" ? t.computerUpdating : t.update}
-              </button>
-            </div>
-          ) : (
-            <ComputerRow
-              label={t.updateComputer}
-              description={t.computerUpdateCopy}
-              extra={busyCopy}
-              control={
-                <button type="button" className="outline" disabled={disabled} onClick={computer.onUpdate}>
-                  {pending === "update" ? t.computerUpdating : t.update}
-                </button>
-              }
-            />
-          )}
-          <ComputerRow
-            label={t.restartComputer}
-            description={t.restartComputerCopy}
-            extra={busyCopy}
-            control={
-              <button type="button" className="danger" disabled={disabled} onClick={computer.onRestart}>
-                {pending === "restart" ? t.computerRestarting : t.restart}
-              </button>
-            }
-          />
-        </SettingsGroup>
-      ) : null}
     </div>
   );
 }
@@ -752,13 +677,8 @@ function MobilePageHeader({ title, backLabel, onBack, close = false }: { title: 
   </header>;
 }
 
-function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = "general" }: { agentId?: string | null; onClose: () => void; onAbout?: () => void; computer?: SettingsComputer; initialSection?: SettingsSectionId }) {
+function MobileSettings({ onClose, onAbout, agentId, initialSection = "general" }: { agentId?: string | null; onClose: () => void; onAbout?: () => void; initialSection?: SettingsSectionId }) {
   const { t } = useI18n();
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [onClose]);
   useEffect(() => {
     if (initialSection === "mcp" || initialSection === "devices") document.getElementById(`settings-${initialSection}`)?.scrollIntoView({ block: "start" });
   }, [initialSection]);
@@ -784,7 +704,7 @@ function MobileSettings({ onClose, onAbout, computer, agentId, initialSection = 
       <section id="settings-devices" aria-label="其他裝置與 App">
         <DevicesPanel />
       </section>
-      <UpdatesPanel computer={computer} />
+      <UpdatesPanel />
       {onAbout ? <button type="button" className="shell-action settings-about" onClick={onAbout}>{t.about}</button> : null}
     </div>
   </OverlayShell>;
@@ -794,13 +714,13 @@ function sectionName(id: SettingsSectionId, t: ReturnType<typeof useI18n>["t"]) 
   return id === "general" ? t.general : id === "model" ? t.modelSection : id === "usage" ? "模型用量" : id === "mcp" ? "連接應用程式" : id === "devices" ? "其他裝置與 App" : t.updates;
 }
 
-export function SettingsDialog({ onClose, computer, mobile = false, onAbout, agentId, initialSection = "general" }: { agentId?: string | null; onClose: () => void; computer?: SettingsComputer; mobile?: boolean; onAbout?: () => void; initialSection?: SettingsSectionId }) {
+export function SettingsDialog({ onClose, mobile = false, onAbout, agentId, initialSection = "general" }: { agentId?: string | null; onClose: () => void; mobile?: boolean; onAbout?: () => void; initialSection?: SettingsSectionId }) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSectionId>(initialSection);
   const headingId = `lb-settings-heading-${section}`;
   const panelId = `lb-settings-panel-${section}`;
   const sectionLabel = sectionName(section, t);
-  if (mobile) return <MobileSettings agentId={agentId} onClose={onClose} onAbout={onAbout} computer={computer} initialSection={initialSection} />;
+  if (mobile) return <MobileSettings agentId={agentId} onClose={onClose} onAbout={onAbout} initialSection={initialSection} />;
 
   return (
     <OverlayShell label={t.settingsLabel} className="lb-settings-dialog" onClose={onClose}>
@@ -836,7 +756,7 @@ export function SettingsDialog({ onClose, computer, mobile = false, onAbout, age
           </button>
           <h2 id={headingId}>{sectionLabel}</h2>
           <div className="lb-settings-body">
-            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "usage" ? <UsagePanel /> : section === "mcp" ? <ConnectApps agentId={agentId} /> : section === "devices" ? <DevicesPanel /> : <UpdatesPanel computer={computer} />}
+            {section === "general" ? <GeneralPanel /> : section === "model" ? <ModelPanel /> : section === "usage" ? <UsagePanel /> : section === "mcp" ? <ConnectApps agentId={agentId} /> : section === "devices" ? <DevicesPanel /> : <UpdatesPanel />}
           </div>
         </section>
       </div>

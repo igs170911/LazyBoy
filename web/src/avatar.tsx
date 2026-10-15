@@ -1,4 +1,4 @@
-import { readStorage, writeStorage } from "./storage";
+import { readStorage } from "./storage";
 import { Blobatar } from "@blobatar/react";
 import { useGaze } from "@blobatar/react/gaze";
 import {
@@ -20,7 +20,7 @@ import {
 } from "blobatar/expression";
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { EyeMotion } from "./eye-motion";
-import type { AvatarShape, RoomMember } from "./types";
+import type { AvatarShape } from "./types";
 
 export const BLOBATAR_SHAPES = [
   "round",
@@ -117,15 +117,16 @@ export const BLOBATAR_EXPRESSIONS = [
 
 export type AvatarExpression = (typeof BLOBATAR_EXPRESSIONS)[number];
 
-export const BLOBATAR_BACKGROUNDS = ["none", "circle", "squircle", "square"] as const;
-export type AvatarBackground = (typeof BLOBATAR_BACKGROUNDS)[number];
+const BLOBATAR_BACKGROUNDS = ["none", "circle", "squircle", "square"] as const;
+type AvatarBackground = (typeof BLOBATAR_BACKGROUNDS)[number];
 
+/** Per-browser face overrides from an older build; still read so those faces don't change, never written now. */
 export interface AvatarLook {
   expression: AvatarExpression;
   background: AvatarBackground;
 }
 
-export const DEFAULT_LOOK: AvatarLook = { expression: "idle", background: "none" };
+const DEFAULT_LOOK: AvatarLook = { expression: "idle", background: "none" };
 
 const EXPRESSION_POSE: Record<AvatarExpression, Expression> = {
   idle,
@@ -212,20 +213,11 @@ export function readAvatarLooks(): Record<string, AvatarLook> {
   }
 }
 
-export function writeAvatarLook(id: string, look: AvatarLook) {
-  const next = { ...readAvatarLooks(), [id]: look };
-  writeStorage(LOOK_STORE, JSON.stringify(next));
-}
-
 export function resolveBlobatarShape(shape: string | undefined | null): BlobatarShape {
   if (shape && (BLOBATAR_SHAPES as readonly string[]).includes(shape)) return shape as BlobatarShape;
   if (shape && SHAPE_ALIAS[shape]) return SHAPE_ALIAS[shape];
   if (shape?.startsWith("organic-")) return "organic";
   return "organic";
-}
-
-export function persistBlobatarShape(shape: string | undefined | null): AvatarShape {
-  return resolveBlobatarShape(shape);
 }
 
 function isExpression(value: unknown): value is AvatarExpression {
@@ -289,7 +281,6 @@ export const Avatar = memo(function Avatar({
   size = 32,
   lookId,
   expression,
-  background,
   gaze = true,
   src,
   mood = "idle",
@@ -306,7 +297,6 @@ export const Avatar = memo(function Avatar({
   size?: number;
   lookId?: string;
   expression?: AvatarExpression | string;
-  background?: AvatarBackground;
   gaze?: boolean;
   src?: string | null;
   mood?: Mood;
@@ -320,7 +310,7 @@ export const Avatar = memo(function Avatar({
   const silhouette = resolveBlobatarShape(shape);
   const poseName = mood !== "idle" ? MOOD_POSE[mood] : thinking ? "thinking" : isExpression(expression) ? expression : stored.expression;
   const pose = poseName === "idle" ? undefined : EXPRESSION_POSE[poseName];
-  const plate = blobBackground(background || stored.background);
+  const plate = blobBackground(stored.background);
   const travel = Math.max(1.8, Math.min(4, size * 0.045));
   const eyeKey = JSON.stringify(eyes || {});
   const traits = useMemo(() => ({ "eye.scale": DEFAULT_EYES, ...cleanTraits(JSON.parse(eyeKey)), shape: SHAPE_TRAIT[silhouette] }), [silhouette, eyeKey]);
@@ -370,66 +360,3 @@ export const Avatar = memo(function Avatar({
   );
 });
 
-export const AvatarStack = memo(function AvatarStack({
-  members,
-  size = 38,
-  online = false,
-  thinkingIds,
-}: {
-  members: RoomMember[];
-  size?: number;
-  online?: boolean;
-  thinkingIds?: string[];
-}) {
-  if (members.length === 1) {
-    const member = members[0];
-    return (
-      <Avatar
-        lookId={member.id}
-        name={member.name}
-        color={member.avatarColor}
-        shape={member.avatarShape}
-        src={member.avatarUrl}
-        size={size}
-        thinking={Boolean(thinkingIds?.includes(member.id))}
-        online={online}
-      />
-    );
-  }
-  const pair = members.length === 2;
-  const miniSize = Math.round(size * (pair ? 0.65 : 0.54));
-  const shown = members.slice(0, members.length > 3 ? 2 : 3);
-  const positions = pair
-    ? [{ left: 0, top: 0 }, { left: size - miniSize, top: size - miniSize }]
-    : [
-        { left: (size - miniSize) / 2, top: 0 },
-        { left: 0, top: size - miniSize },
-        { left: size - miniSize, top: size - miniSize },
-      ];
-  return (
-    <span className="avatar-stack" style={{ width: size, height: size }}>
-      {shown.map((member, index) => (
-        <span className="stack-item" key={member.id} style={{ ...positions[index], zIndex: index + 1 }}>
-          <Avatar
-            lookId={member.id}
-            name={member.name}
-            color={member.avatarColor}
-            shape={member.avatarShape}
-            src={member.avatarUrl}
-            size={miniSize}
-            thinking={Boolean(thinkingIds?.includes(member.id))}
-            online={Boolean(online && index === shown.length - 1)}
-          />
-        </span>
-      ))}
-      {members.length > 3 && (
-        <span
-          className="stack-extra"
-          style={{ left: size - miniSize, top: size - miniSize, zIndex: 3, width: miniSize, height: miniSize }}
-        >
-          +{members.length - 2}
-        </span>
-      )}
-    </span>
-  );
-});

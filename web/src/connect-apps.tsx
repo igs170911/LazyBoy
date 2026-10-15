@@ -78,10 +78,19 @@ export function SignInPanel({ title, signin, onPoll, onRelay, onCancel }: {
   const [error, setError] = useState("");
   const poll = useRef(onPoll);
   poll.current = onPoll;
+  const [pollError, setPollError] = useState("");
+  // A failed check backs off but keeps going: the sign-in may still finish on the bot's computer.
   useEffect(() => {
-    let stop = false;
-    const timer = setInterval(() => { if (!stop && !document.hidden) poll.current().catch(err => { stop = true; setError(message(err)); }); }, 2500);
-    return () => { stop = true; clearInterval(timer); };
+    let stop = false, delay = 2500, timer = 0;
+    const tick = async () => {
+      if (!document.hidden) {
+        try { await poll.current(); delay = 2500; setPollError(""); }
+        catch (err) { delay = Math.min(delay * 2, 30000); setPollError(message(err)); }
+      }
+      if (!stop) timer = window.setTimeout(tick, delay);
+    };
+    timer = window.setTimeout(tick, delay);
+    return () => { stop = true; clearTimeout(timer); };
   }, []);
   async function relay() {
     setBusy(true); setError("");
@@ -114,7 +123,7 @@ export function SignInPanel({ title, signin, onPoll, onRelay, onCancel }: {
           </div>
         </>
       )}
-      {error ? <p className="pane-error" role="alert">{error}</p> : null}
+      {error || pollError ? <p className="pane-error" role="alert">{error || pollError}</p> : null}
     </div>
   );
 }

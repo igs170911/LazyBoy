@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, type ProviderUsage, type ProviderUsageSummary } from "./api";
+import { tokens } from "./format-tokens";
 
 const PERIODS = [7, 30, 90] as const;
-const tokens = (n: number) => n >= 1e8 ? `${(n / 1e8).toFixed(1)} 億` : n >= 1e4 ? `${(n / 1e4).toFixed(1)} 萬` : n.toLocaleString();
 const percent = (part: number, whole: number) => whole ? Math.round(part / whole * 100) : 0;
 
 /** Each day's tokens in the period as thin bars; days without use stay empty. */

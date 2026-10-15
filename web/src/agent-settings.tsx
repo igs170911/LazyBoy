@@ -9,13 +9,13 @@ import {
   Avatar,
   AVATAR_COLORS,
   BLOBATAR_EXPRESSIONS,
+  botColor,
   CHARACTER_SHAPES,
   cleanTraits,
   EXPRESSION_LABELS,
   EYE_TRAITS,
   type AvatarTraits,
   type Mood,
-  persistBlobatarShape,
   resolveBlobatarShape,
   type BlobatarShape,
 } from "./avatar";
@@ -41,11 +41,6 @@ function parseTags(text: string): string[] {
 
 function joinTags(tags: string[] | undefined): string {
   return (tags || []).join("、");
-}
-
-function defaultColor(value?: string) {
-  const found = AVATAR_COLORS.find((item) => item.value.toLowerCase() === (value || "").toLowerCase());
-  return found?.value || AVATAR_COLORS[6].value;
 }
 
 function randomLook(previousColor?: string, previousShape?: string) {
@@ -160,7 +155,7 @@ export function AgentSettingsDialog({
     return () => { alive = false; setModelChecking(false); };
   }, [chatProvider, chatModel, !!chosenRow?.check, !!chosenRow]);
   const [title, setTitle] = useState(seed?.title || "");
-  const [color, setColor] = useState(seed?.avatar_color ? defaultColor(seed.avatar_color) : initialLook.color);
+  const [color, setColor] = useState(seed?.avatar_color ? botColor(seed.name || "", seed.avatar_color) : initialLook.color);
   const [eyes, setEyes] = useState<AvatarTraits>(() => cleanTraits(seed?.avatar_traits));
   const [expression, setExpression] = useState(seed?.avatar_expression || "idle");
   const [previewMood, setPreviewMood] = useState<Mood>("idle");
@@ -185,7 +180,8 @@ export function AgentSettingsDialog({
     setGroupId(agent.group_id || "");
     setTitle(agent.title || "");
     setPersona(agent.persona?.trim() ? agent.persona : agent.description || "");
-    setColor(defaultColor(agent.avatar_color));
+    // Its own color as the sidebar draws it, custom hexes included; snapping to a swatch would recolor it on save.
+    setColor(botColor(agent.name, agent.avatar_color));
     setShape(resolveBlobatarShape(agent.avatar_shape));
     setEyes(cleanTraits(agent.avatar_traits));
     setExpression(agent.avatar_expression || "idle");
@@ -214,7 +210,7 @@ export function AgentSettingsDialog({
       group_id: state.groupId,
       persona: state.persona,
       avatar_color: state.color,
-      avatar_shape: persistBlobatarShape(state.shape),
+      avatar_shape: resolveBlobatarShape(state.shape),
       provider: state.chatProvider,
       model: state.chatModel,
       reply_style: state.replyStyle,
@@ -237,8 +233,8 @@ export function AgentSettingsDialog({
       if (state.source && state.crop) return;
       if (state.creating || !state.agent) return;
       const lookChanged =
-        persistBlobatarShape(state.shape) !== resolveBlobatarShape(state.agent.avatar_shape) ||
-        state.color.toLowerCase() !== defaultColor(state.agent.avatar_color).toLowerCase() ||
+        resolveBlobatarShape(state.shape) !== resolveBlobatarShape(state.agent.avatar_shape) ||
+        state.color.toLowerCase() !== botColor(state.agent.name, state.agent.avatar_color).toLowerCase() ||
         state.clearedPhoto ||
         JSON.stringify(state.eyes) !== JSON.stringify(cleanTraits(state.agent.avatar_traits)) ||
         state.expression !== (state.agent.avatar_expression || "idle");
@@ -305,13 +301,13 @@ export function AgentSettingsDialog({
       if (!(target instanceof Node)) return;
       if (pickerRef.current?.contains(target) || avatarHitRef.current?.contains(target)) return;
       if (target instanceof Element && target.closest(".dialog-title button")) return;
-      ateOutside.current = true;
+      // Only a press on the backdrop itself ends in a backdrop click to swallow; one inside the form ends in none.
+      ateOutside.current = target === dialogRoot.current?.parentElement;
       void persistAvatarRef.current();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
-      ateOutside.current = true;
       void persistAvatarRef.current();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
