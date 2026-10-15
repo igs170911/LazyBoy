@@ -173,6 +173,11 @@
 .agent-settings { grid-auto-rows: max-content; }
 .avatar-hit { justify-self: center; width: auto !important; min-height: 0 !important; padding: 6px !important; border: 0 !important; border-radius: 50% !important; background: none !important; transition: transform .15s; }
 .avatar-hit:hover { transform: scale(1.04); }
+/* The Bot tab is the tallest (about 910px of dialog at desktop width). Holding the dialog at that height while the picker
+   is open keeps it from shrinking and re-centring under the pointer when switching to 上傳 or AI 產生. */
+@media (min-width: 861px) {
+  .agent-settings:has(.avatar-picker) { height: min(calc(var(--app-height, 100dvh) - 48px), 920px); }
+}
 .avatar-picker { display: grid; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .avatar-picker-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .avatar-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--bg); }

@@ -85,8 +85,9 @@ body.is-resizing iframe { pointer-events: none; }
 .chat-identity:hover { background: var(--hover); }
 .chat-identity > span { display: grid; min-width: 0; }
 .chat-title { overflow: hidden; font-size: 15px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.chat-status { display: flex; align-items: center; gap: 6px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.chat-status i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+/* Block, not flex: ellipsis only reaches a bare text node that sits in a block's own line box. */
+.chat-status { display: block; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.chat-status i { display: inline-block; width: 7px; height: 7px; margin: -2px 6px 0 0; border-radius: 50%; background: var(--faint); vertical-align: middle; }
 .chat-status.busy { color: var(--accent-strong); }
 .chat-status.busy i { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .chat-status.attention { color: var(--warn); }
@@ -407,12 +408,22 @@ body.is-resizing iframe { pointer-events: none; }
 .md-table-wrap { max-width: 100%; margin: 0 0 .9em; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-s); }
 .message-body table { min-width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 1.55; }
 /* Chinese can break after any character: without a floor, a narrow screen squeezes columns to one character wide. The wrapper scrolls sideways instead. */
-.message-body th, .message-body td { min-width: 6em; padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.message-body th, .message-body td { min-width: 8em; padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .message-body th { background: var(--elev); color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .message-body tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--surface) 60%, transparent); }
 .message-body tbody tr:hover td { background: var(--hover); }
 .message-body tr:last-child td { border-bottom: 0; }
-.message-body td { font-variant-numeric: tabular-nums; }
+/* .message-body breaks anywhere, which lets a cell's min-content shrink to one letter and squeezes its column. In a
+   table, words and code stay whole and the wrapper scrolls sideways; links still break so one long URL cannot run on. */
+.message-body td { font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
+.message-body td a { overflow-wrap: anywhere; }
+/* On a phone even 8em columns leave long notes ten lines tall: let each column take its content width up to 16em and
+   scroll the table sideways, so short columns stay narrow and prose columns stay readable. */
+@media (max-width: 640px) {
+  .message-body table { width: max-content; }
+  .message-body :is(th, td) { min-width: 3em; }
+  .message-body td { max-width: 16em; }
+}
 .md-link { color: var(--link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--link) 35%, transparent); text-underline-offset: 3px; }
 .md-link:hover { text-decoration-color: currentColor; }
 .md-unsafe-link { color: var(--muted); }
@@ -428,8 +439,8 @@ body.is-resizing iframe { pointer-events: none; }
 .md-image-fallback { color: var(--muted); font-size: 13px; }
 .markdown-loading { color: var(--muted); white-space: pre-wrap; }
 .chat-file { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin: 4px 0; padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-.chat-file-name { min-width: 0; color: var(--text); overflow: hidden; font-size: 13.5px; text-overflow: ellipsis; white-space: nowrap; }
-.file-open, .file-download { padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--text); font-size: 12.5px; text-decoration: none; }
+.chat-file-name { flex: 0 1 auto; min-width: 0; color: var(--text); overflow: hidden; font-size: 13.5px; text-overflow: ellipsis; white-space: nowrap; }
+.file-open, .file-download { flex: none; padding: 3px 9px; white-space: nowrap; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--text); font-size: 12.5px; text-decoration: none; }
 .file-open:hover, .file-download:hover { background: var(--hover); }
 /* Inside the user's bubble the card takes the bubble's own color, so the name stays readable on any bot color. */
 .msg.user .bubble:not(.routine) .chat-file { border-color: color-mix(in srgb, currentColor 28%, transparent); background: color-mix(in srgb, currentColor 12%, transparent); }

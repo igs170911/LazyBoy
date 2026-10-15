@@ -128,7 +128,13 @@ input:where(:not([type=checkbox], [type=radio], [type=range], [type=file])), sel
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
 textarea { resize: vertical; line-height: 1.55; }
-input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* One ring: text fields show the accent border and glow, so the global :focus-visible outline stays off them.
+   Checkboxes, radios, sliders and file inputs keep that outline. */
+:is(input:where(:not([type=checkbox], [type=radio], [type=range], [type=file])), select, textarea):focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-soft);
+  outline: none;
+}
 input::placeholder, textarea::placeholder { color: var(--faint); }
 input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; accent-color: var(--accent); flex: none; }
 select { appearance: none; padding-right: 34px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
@@ -214,6 +220,9 @@ details > summary:hover { color: var(--text); }
 .avatar.blobatar { position: relative; display: inline-grid; place-items: center; flex: 0 0 var(--avatar-size); width: var(--avatar-size); height: var(--avatar-size); min-width: var(--avatar-size); line-height: 0; vertical-align: middle; }
 .avatar.blobatar > svg, .avatar.blobatar > img { display: block; width: 100%; height: 100%; max-width: none; }
 .avatar.blobatar.photo > img { border-radius: 50%; object-fit: cover; }
+/* A faint edge that follows the blob's own outline: lost on saturated colors, enough to keep a white or near-black bot
+   from melting into the page. */
+.avatar.blobatar:not(.photo) > :is(svg, img) { filter: drop-shadow(0 0 .6px color-mix(in srgb, var(--text) 38%, transparent)); }
 .avatar.blobatar.thinking::before { content: ""; position: absolute; z-index: 4; inset: -5px; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0 10%, var(--accent) 22%, transparent 34% 52%, #34d9ff 64%, transparent 76%); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); pointer-events: none; animation: magic-orbit 1.4s linear infinite; }
 .avatar .presence { position: absolute; z-index: 6; right: -1px; bottom: -1px; width: 10px; height: 10px; border: 2px solid var(--surface); border-radius: 50%; background: var(--ok); }
 

@@ -155,14 +155,63 @@ function linkifyText(text: string, known: readonly string[]): string {
   return out + text.slice(cursor);
 }
 
+const INDENTED = /^(?: {4}|\t)/;
+const BLANK = /^[ \t]*$/;
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+
+/**
+ * Split prose into [text, indentedCode, text, …]. An indented code block is a run of lines indented by four
+ * spaces or a tab that starts the text or follows a blank line — unless it continues a list item, where the
+ * indent only nests the content under the item.
+ */
+function splitIndentedCode(part: string): string[] {
+  const lines = part.split(/(?<=\n)/);
+  const out: string[] = [];
+  let text = "";
+  let code = "";
+  let inList = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const bare = line.replace(/\n$/, "");
+    if (code) {
+      if (INDENTED.test(bare) || BLANK.test(bare)) {
+        code += line;
+        continue;
+      }
+      // Trailing blank lines belong to the prose that follows.
+      const tail = code.match(/(?:\n[ \t]*)*$/)?.[0] ?? "";
+      const keep = tail.length > 1 ? tail.slice(1) : "";
+      out.push(text, code.slice(0, code.length - keep.length));
+      text = keep;
+      code = "";
+    }
+    const afterBlank = i === 0 || BLANK.test(lines[i - 1].replace(/\n$/, ""));
+    if (INDENTED.test(bare) && !BLANK.test(bare) && afterBlank && !inList) {
+      code = line;
+      continue;
+    }
+    text += line;
+    if (LIST_ITEM.test(bare)) inList = true;
+    else if (!BLANK.test(bare) && !/^[ \t]/.test(bare) && afterBlank) inList = false;
+  }
+  if (code) out.push(text, code);
+  else out.push(text);
+  return out;
+}
+
 /** Turn bare box and known file paths into links. Leave code, images, and existing links alone. */
 export function linkifyChatFiles(content: string, known: readonly string[]): string {
   const fences = content.split(/(```[\s\S]*?```)/g);
   return fences
     .map((part, index) => {
       if (index % 2 === 1) return part;
-      const codes = part.split(/(`[^`]*`)/g);
-      return codes.map((chunk, codeIndex) => (codeIndex % 2 === 1 ? chunk : linkifyText(chunk, known))).join("");
+      return splitIndentedCode(part)
+        .map((prose, blockIndex) => {
+          if (blockIndex % 2 === 1) return prose;
+          const codes = prose.split(/(`[^`]*`)/g);
+          return codes.map((chunk, codeIndex) => (codeIndex % 2 === 1 ? chunk : linkifyText(chunk, known))).join("");
+        })
+        .join("");
     })
     .join("");
 }
