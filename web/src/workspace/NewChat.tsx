@@ -13,7 +13,7 @@ import { ROOM_MAX } from "./Team";
 export function TemplateCard({ template, onPick }: { template: BotTemplate; onPick: (template: BotTemplate) => void }) {
   return (
     <button type="button" className="template-card" onClick={() => onPick(template)}>
-      <Avatar lookId={`template-${template.id}`} name={template.name} color={template.avatar_color} shape={template.avatar_shape as never} size={40} gaze={false} />
+      <Avatar name={template.name} color={template.avatar_color} shape={template.avatar_shape as never} size={40} gaze={false} />
       <span>
         <strong>{template.name}</strong>
         <small>{template.blurb}</small>
@@ -155,7 +155,7 @@ export function NewChatDialog({ agents, onClose, onCreate, onOpenBot, onRoomCrea
                 {saved.filter(t => !needle || [t.name, t.title, t.blurb].some(v => v?.toLowerCase().includes(needle))).map(template => (
                   <div key={template.id} className="saved-template">
                     <button type="button" className="template-card" disabled={!!making} onClick={() => void fromSaved(template)}>
-                      {making === template.id ? <LoaderCircle className="spin" /> : <Avatar lookId={`saved-${template.id}`} name={template.name} color={template.avatar_color} shape={template.avatar_shape as never} size={40} gaze={false} />}
+                      {making === template.id ? <LoaderCircle className="spin" /> : <Avatar name={template.name} color={template.avatar_color} shape={template.avatar_shape as never} size={40} gaze={false} />}
                       <span><strong>{template.name}</strong><small>{[template.title, template.skill_count ? `${template.skill_count} 個技能` : ""].filter(Boolean).join(" · ") || template.blurb}</small></span>
                     </button>
                     <button type="button" className="icon-btn small saved-template-remove" aria-label={`刪除範本 ${template.name}`} title="刪除這個範本" onClick={() => void forget(template)}><Trash2 /></button>

@@ -50,7 +50,7 @@ function HookAddress({ path, busy, onRotate }: { path: string; busy: boolean; on
   </div>;
 }
 
-export function RoutinesDialog({agentId,onClose,onOpen,returnFocus}:{agentId:string;onClose:()=>void;onOpen:(file:PreviewFile)=>void;returnFocus:RefObject<HTMLButtonElement|null>}) {
+export function RoutinesDialog({agentId,onClose,onOpen,returnFocus}:{agentId:string;onClose:()=>void;onOpen:(file:PreviewFile)=>void;returnFocus?:RefObject<HTMLButtonElement|null>}) {
   const root = useRef<HTMLElement>(null);
   const [items,setItems] = useState<Routine[]>([]);
   const [loading,setLoading] = useState(true);
@@ -87,7 +87,7 @@ export function RoutinesDialog({agentId,onClose,onOpen,returnFocus}:{agentId:str
       }
     };
     document.addEventListener('keydown',onKey);
-    return () => { mounted.current=false; window.clearInterval(refresh); document.removeEventListener('keydown',onKey); (returnFocus.current || previous)?.focus(); };
+    return () => { mounted.current=false; window.clearInterval(refresh); document.removeEventListener('keydown',onKey); (returnFocus?.current || previous)?.focus(); };
   },[agentId]);
   const action = async (body: Record<string,unknown>) => {
     setBusy(true);setError("");setNotice("");

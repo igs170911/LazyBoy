@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api, type AgentGroup, type AgentRow } from "../api";
-import { Avatar, AvatarLookProvider, readAvatarLooks } from "../avatar";
+import { Avatar } from "../avatar";
 import { deferDialog } from "../deferred-dialog";
 import type { PreviewFile } from "../markdown";
 import type { SettingsSectionId } from "../settings";
@@ -46,7 +46,6 @@ const WelcomeTemplates = lazy(() => import("./NewChat").then(m => ({ default: m.
 const AboutDialog = deferDialog<Parameters<typeof import("../settings").AboutDialog>[0]>(() => import("../settings").then(m => ({ default: m.AboutDialog })), "AboutDialog");
 
 // Nothing to hand focus back to: the routines dialog falls back to whatever was focused before it opened.
-const NO_RETURN_FOCUS = { current: null };
 const ACTIVE_KEY = "lazyhermes.active";
 const ROOM_KEY = "lazyhermes.room";
 const PANEL_KEY = "lazyhermes.panel";
@@ -111,7 +110,6 @@ export function Workspace() {
   const [panel, setPanelState] = useState<Panel>(readPanel);
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
-  const [looks, setLooks] = useState(readAvatarLooks);
   const [compact, setCompact] = useState(() => readStorage(COMPACT_KEY) === "1");
   const [finding, setFinding] = useState(false);
   const [focus, setFocus] = useState<(FocusTarget & { owner: string }) | null>(null);
@@ -418,7 +416,7 @@ export function Workspace() {
   const panelStyle = useMemo(() => (mobile ? undefined : { width: panel.width }), [mobile, panel.width]);
 
   return (
-    <AvatarLookProvider value={looks}>
+    <>
       <div ref={appRef} className={`app${mobile ? " is-mobile" : ""}${panelVisible ? " has-panel" : ""}${compact && !mobile ? " sidebar-compact" : ""}`} data-view={view}>
         <Sidebar agents={agents} groups={groups} activeId={mobile || roomId ? null : activeId} loaded={loaded} onSelect={select}
           rooms={rooms} activeRoomId={mobile ? null : roomId} onSelectRoom={selectRoom} onCreateRoom={() => setDialog({ kind: "room" })} unread={unread}
@@ -474,7 +472,7 @@ export function Workspace() {
             <aside className="side-panel" style={panelStyle} aria-label={panel.tab === "computer" ? "電腦" : "檔案"}>
               <header className="side-panel-head">
                 {mobile ? <button type="button" className="icon-btn" aria-label="返回對話" onClick={back}><ChevronLeft /></button> : null}
-                {mobile ? <Avatar {...{ lookId: active.id, name: active.name, color: active.avatar_color || undefined, src: active.avatar_url || undefined }} size={24} gaze={false} /> : null}
+                {mobile ? <Avatar {...{ name: active.name, color: active.avatar_color || undefined, src: active.avatar_url || undefined }} size={24} gaze={false} /> : null}
                 <div className="segmented" role="tablist" aria-label="面板">
                   <button type="button" role="tab" aria-selected={panel.tab === "computer"} onClick={() => setPanel({ tab: "computer" })}><Monitor />電腦</button>
                   <button type="button" role="tab" aria-selected={panel.tab === "files"} onClick={() => setPanel({ tab: "files" })}><FolderOpen />檔案{session.files.length ? <small>{session.files.length}</small> : null}</button>
@@ -505,10 +503,10 @@ export function Workspace() {
       ) : null}
       {dialog?.kind === "agent" && dialogAgent ? (
         <AgentSettingsDialog key={dialogAgent.id} agent={dialogAgent} initialSection={dialog.section}
-          onShare={row => setDialog({ kind: "share", agent: row })} onClose={() => { setDialog(null); setLooks(readAvatarLooks()); }}
-          onSaved={row => { upsert(row); setLooks(readAvatarLooks()); void refresh(); }} />
+          onShare={row => setDialog({ kind: "share", agent: row })} onClose={() => setDialog(null)}
+          onSaved={row => { upsert(row); void refresh(); }} />
       ) : null}
-      {dialog?.kind === "routines" ? <RoutinesDialog key={dialog.id} agentId={dialog.id} onClose={() => setDialog(null)} onOpen={file => { setDialog(null); if (dialog.id !== activeId) select(dialog.id); openFile(file); }} returnFocus={NO_RETURN_FOCUS} /> : null}
+      {dialog?.kind === "routines" ? <RoutinesDialog key={dialog.id} agentId={dialog.id} onClose={() => setDialog(null)} onOpen={file => { setDialog(null); if (dialog.id !== activeId) select(dialog.id); openFile(file); }} /> : null}
       {dialog?.kind === "share" ? <AgentShareDialog agent={dialog.agent} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "import" ? (
         <TemplateImportDialog onCreated={() => void refresh()} onClose={() => setDialog(null)} onImported={row => { setDialog(null); upsert(row); void refresh(); select(row.id); }} />
@@ -561,6 +559,6 @@ export function Workspace() {
           onCreated={row => { upsert(row); void refresh(); select(row.id); toast(`已用範本建立「${row.name}」`, "ok"); }} />
       ) : null}
       <Toaster />
-    </AvatarLookProvider>
+    </>
   );
 }

@@ -374,7 +374,7 @@ test("threads split one bot into separate conversations that share its computer"
   await expect(page.getByRole("tablist", { name: "對話串" })).toHaveCount(0);
   if ((page.viewportSize()?.width || 1280) <= 860) {
     // A phone header keeps three actions; 新對話 is in its menu.
-    await page.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("main").getByRole("button", { name: "更多" }).click();
     await page.getByRole("menuitem", { name: "新對話" }).click();
   } else await page.getByRole("button", { name: "新對話" }).click();
   const tabs = page.getByRole("tablist", { name: "對話串" });

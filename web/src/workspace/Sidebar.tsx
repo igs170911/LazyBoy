@@ -14,7 +14,7 @@ import { moveGroup } from "./order";
 const COLLAPSED_KEY = "lazyhermes.collapsedGroups";
 
 export function avatarProps(agent: Pick<AgentRow, "id" | "name" | "avatar_color" | "avatar_shape" | "avatar_url" | "avatar_traits" | "avatar_expression">) {
-  return { lookId: agent.id, name: agent.name, color: agent.avatar_color || undefined, shape: (agent.avatar_shape as AvatarShape | undefined) || "organic", src: agent.avatar_url || undefined,
+  return { name: agent.name, color: agent.avatar_color || undefined, shape: (agent.avatar_shape as AvatarShape | undefined) || "organic", src: agent.avatar_url || undefined,
     eyes: agent.avatar_traits, expression: agent.avatar_expression || undefined };
 }
 

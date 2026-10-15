@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { api, type ContextUsage } from "../api";
 import { LoaderCircle } from "../ui/icons";
 import { Modal, ModalHeader, toast } from "../ui/overlay";
+import { tokens } from "../format-tokens";
 
-const tokens = (n: number) => n >= 10000 ? `${(n / 10000).toFixed(1)} 萬` : n.toLocaleString();
 
 /**
  * What the model has to read on every request in this conversation, by part, and a way to shrink it: the older

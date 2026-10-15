@@ -625,6 +625,8 @@ async def compress_context(id: str, thread: str | None = None):
     return {k: result.get(k) for k in ("status", "removed", "before_messages", "after_messages", "before_tokens", "after_tokens")}
 
 
+@app.get("/api/agents/{id}/computer")
+async def computer_status(id: str): runtime.agent(id); return await computers.status(id)
 @app.post("/api/agents/{id}/computer")
 async def computer_start(id: str, request: Request):
     runtime.agent(id); action = (await request.json()).get("action", "start")

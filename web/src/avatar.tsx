@@ -1,4 +1,3 @@
-import { readStorage } from "./storage";
 import { Blobatar } from "@blobatar/react";
 import { useGaze } from "@blobatar/react/gaze";
 import {
@@ -18,7 +17,7 @@ import {
   wink,
   type Expression,
 } from "blobatar/expression";
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { EyeMotion } from "./eye-motion";
 import type { AvatarShape } from "./types";
 
@@ -117,17 +116,6 @@ export const BLOBATAR_EXPRESSIONS = [
 
 export type AvatarExpression = (typeof BLOBATAR_EXPRESSIONS)[number];
 
-const BLOBATAR_BACKGROUNDS = ["none", "circle", "squircle", "square"] as const;
-type AvatarBackground = (typeof BLOBATAR_BACKGROUNDS)[number];
-
-/** Per-browser face overrides from an older build; still read so those faces don't change, never written now. */
-export interface AvatarLook {
-  expression: AvatarExpression;
-  background: AvatarBackground;
-}
-
-const DEFAULT_LOOK: AvatarLook = { expression: "idle", background: "none" };
-
 const EXPRESSION_POSE: Record<AvatarExpression, Expression> = {
   idle,
   happy,
@@ -182,37 +170,6 @@ const SHAPE_ALIAS: Record<string, BlobatarShape> = {
 };
 
 const FALLBACK_COLORS = ["#3ec5a8", "#f5a03c", "#6a6bf5", "#9b5cf6", "#3b82f6", "#d9508a"];
-const LOOK_STORE = "lazyhermes.avatarLook";
-const AvatarLookContext = createContext<Record<string, AvatarLook>>({});
-
-export function AvatarLookProvider({
-  value,
-  children,
-}: {
-  value: Record<string, AvatarLook>;
-  children: ReactNode;
-}) {
-  return <AvatarLookContext.Provider value={value}>{children}</AvatarLookContext.Provider>;
-}
-
-export function readAvatarLooks(): Record<string, AvatarLook> {
-  try {
-    const raw = readStorage(LOOK_STORE);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, Partial<AvatarLook>>;
-    const out: Record<string, AvatarLook> = {};
-    for (const [id, look] of Object.entries(parsed || {})) {
-      out[id] = {
-        expression: isExpression(look.expression) ? look.expression : "idle",
-        background: isBackground(look.background) ? look.background : "none",
-      };
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 export function resolveBlobatarShape(shape: string | undefined | null): BlobatarShape {
   if (shape && (BLOBATAR_SHAPES as readonly string[]).includes(shape)) return shape as BlobatarShape;
   if (shape && SHAPE_ALIAS[shape]) return SHAPE_ALIAS[shape];
@@ -222,10 +179,6 @@ export function resolveBlobatarShape(shape: string | undefined | null): Blobatar
 
 function isExpression(value: unknown): value is AvatarExpression {
   return typeof value === "string" && (BLOBATAR_EXPRESSIONS as readonly string[]).includes(value);
-}
-
-function isBackground(value: unknown): value is AvatarBackground {
-  return typeof value === "string" && (BLOBATAR_BACKGROUNDS as readonly string[]).includes(value);
 }
 
 function fallbackColor(name: string): string {
@@ -267,10 +220,6 @@ export function bubbleTone(hex: string): { fill: string; ink: string } {
   return { fill: `#${rgb.map(v => v.toString(16).padStart(2, "0")).join("")}`, ink: "#ffffff" };
 }
 
-function blobBackground(value: AvatarBackground | undefined): false | "circle" | "squircle" | "square" {
-  return !value || value === "none" ? false : value;
-}
-
 export const Avatar = memo(function Avatar({
   name,
   color,
@@ -279,7 +228,6 @@ export const Avatar = memo(function Avatar({
   thinking = false,
   online = false,
   size = 32,
-  lookId,
   expression,
   gaze = true,
   src,
@@ -295,7 +243,6 @@ export const Avatar = memo(function Avatar({
   thinking?: boolean;
   online?: boolean;
   size?: number;
-  lookId?: string;
   expression?: AvatarExpression | string;
   gaze?: boolean;
   src?: string | null;
@@ -305,12 +252,10 @@ export const Avatar = memo(function Avatar({
   /** Eyes that move on their own (rolling while thinking, reading, typing…); they take over from following the pointer. */
   motion?: EyeMotion | null;
 }) {
-  const stored = useContext(AvatarLookContext)[lookId || ""] || DEFAULT_LOOK;
   const resolved = color || fallbackColor(name);
   const silhouette = resolveBlobatarShape(shape);
-  const poseName = mood !== "idle" ? MOOD_POSE[mood] : thinking ? "thinking" : isExpression(expression) ? expression : stored.expression;
+  const poseName = mood !== "idle" ? MOOD_POSE[mood] : thinking ? "thinking" : isExpression(expression) ? expression : "idle";
   const pose = poseName === "idle" ? undefined : EXPRESSION_POSE[poseName];
-  const plate = blobBackground(stored.background);
   const travel = Math.max(1.8, Math.min(4, size * 0.045));
   const eyeKey = JSON.stringify(eyes || {});
   const traits = useMemo(() => ({ "eye.scale": DEFAULT_EYES, ...cleanTraits(JSON.parse(eyeKey)), shape: SHAPE_TRAIT[silhouette] }), [silhouette, eyeKey]);
@@ -349,7 +294,7 @@ export const Avatar = memo(function Avatar({
           {...(animate ? { ref: moving ? undefined : ref, animate } : { animate: undefined })}
           name={name}
           expression={pose}
-          background={plate}
+          background={false}
           traits={traits}
           palette={palette}
           title={name}
