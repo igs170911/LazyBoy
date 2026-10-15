@@ -1,7 +1,7 @@
 # LazyBoy's own service, for running LazyBoy in Docker (compose.yaml). Bot computers are separate images
 # (box/Dockerfile, Dockerfile); this one only serves the web app and starts those computers through the host's
 # Docker socket. Build it with `make build`, which builds the bot images first.
-FROM node:24-bookworm-slim AS web
+FROM node:24-trixie-slim AS web
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -9,7 +9,7 @@ COPY web/ ./
 COPY tools/frontend-assets.test.mjs /app/tools/
 RUN npm run build
 
-FROM python:3.14.8-slim-bookworm
+FROM python:3.14.8-slim-trixie
 COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/
 COPY --from=docker:29.7.2-cli /usr/local/bin/docker /usr/local/bin/docker
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv UV_PYTHON_DOWNLOADS=never UV_COMPILE_BYTECODE=1 PYTHONUNBUFFERED=1 \

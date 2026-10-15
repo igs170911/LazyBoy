@@ -43,7 +43,7 @@ fi
 if command -v python3 >/dev/null 2>&1; then
   mirror=$(python3 scripts/debian-mirror.py)
 else
-  mirror=$(docker run --rm -i -e DEBIAN_MIRROR python:3.14.8-slim-bookworm python - < scripts/debian-mirror.py)
+  mirror=$(docker run --rm -i -e DEBIAN_MIRROR python:3.14.8-slim-trixie python - < scripts/debian-mirror.py)
 fi
 secret=$(mktemp)
 trap 'rm -f "$secret"' EXIT

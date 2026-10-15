@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Print the fastest Debian mirror for building the bot computer images.
 
-DEBIAN_MIRROR in the environment is used as is. Otherwise every candidate is asked for the bookworm package
+DEBIAN_MIRROR in the environment is used as is. Otherwise every candidate is asked for the trixie package
 index at once, the quickest to answer get a speed test one at a time, and the fastest wins. Measurements go to
 stderr. stdout gets the main archive URL, then the same host's debian-security archive when it carries one
 (Debian's Chromium ships through security updates, so that one matters too).
@@ -22,7 +22,8 @@ CANDIDATES = [
     "http://mirrors.tuna.tsinghua.edu.cn/debian", "http://ftp.sg.debian.org/debian", "http://ftp.au.debian.org/debian",
     "http://ftp.us.debian.org/debian", "http://ftp.de.debian.org/debian", "http://ftp.uk.debian.org/debian",
 ]
-PROBE = "/dists/bookworm/main/binary-amd64/Packages.xz"
+SUITE = "trixie"  # box/Dockerfile's Debian release
+PROBE = f"/dists/{SUITE}/main/binary-amd64/Packages.xz"
 FINALISTS = 4
 SAMPLE_BYTES = 4 << 20
 SAMPLE_SECONDS = 3.0
@@ -59,7 +60,7 @@ def security_archive(mirror):
     if mirror == OFFICIAL or not mirror.endswith("/debian"):
         return None
     try:
-        with urllib.request.urlopen(mirror + "-security/dists/bookworm-security/Release", timeout=3) as response:
+        with urllib.request.urlopen(mirror + f"-security/dists/{SUITE}-security/Release", timeout=3) as response:
             response.read(1)
         return mirror + "-security"
     except OSError:

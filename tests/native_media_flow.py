@@ -90,7 +90,7 @@ def main():
         socket_.bind(("127.0.0.1",0)); port=socket_.getsockname()[1]
     model=ThreadingHTTPServer(("127.0.0.1",0),Model)
     threading.Thread(target=model.serve_forever,daemon=True).start()
-    image=subprocess.check_output(["docker","image","inspect","lazyhermes-bot:local","--format","{{.Id}}"],text=True).strip()
+    image=subprocess.check_output(["docker","image","inspect",os.environ.get("NATIVE_FIXTURE_IMAGE","lazyhermes-bot:local"),"--format","{{.Id}}"],text=True).strip()
     tag="lazyhermes-media:"+directory.name
     subprocess.run(["docker","tag",image,tag],check=True)
     env={**os.environ,"LAZYHERMES_DATA_DIR":str(directory/"data"),"LAZYHERMES_PORT":str(port),"LAZYHERMES_BIND":"127.0.0.1","LAZYHERMES_IMAGE":tag}
